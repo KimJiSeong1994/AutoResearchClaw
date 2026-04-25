@@ -1,0 +1,19 @@
+[project]
+name = "paper-recommender"
+version = "0.1.0"
+description = "Daily paper recommender: 집현전 bookmarks + OpenClaw rerank → Obsidian note"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+paper-recommender = "paper_recommender.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

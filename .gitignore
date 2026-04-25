@@ -1,0 +1,44 @@
+# --- secrets (NEVER commit) ---
+.env
+.env.*
+*.env
+*.pem
+*.key
+.openclaw_gateway_token
+**/.openclaw_gateway_token
+
+# --- personal / nested workspaces ---
+.openclaw-local-paperedit/
+.codex/
+.omx/
+.claude/settings.local.json
+.claude/.session*
+
+# --- runtime artifacts ---
+.omc/
+outputs/
+**/artifacts/
+**/state/
+**/logs/
+**/feedback_inbox/
+**/souls/
+
+# --- python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+
+# --- editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- backups ---
+*.bak
+*.bak.*

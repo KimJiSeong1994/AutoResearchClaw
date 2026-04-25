@@ -1,0 +1,84 @@
+jiphyeonjeon:
+  base_url: https://jiphyeonjeon.kr
+  token_env: JIPHYEONJEON_TOKEN
+  timeout_sec: 60
+
+openclaw:
+  base_url: http://127.0.0.1:18789/v1
+  token_env: OPENCLAW_GATEWAY_TOKEN
+  primary_model: openclaw/clawbridge
+  fallback_model: openclaw/default
+  timeout_sec: 120
+
+profile:
+  cache_ttl_days: 7
+  # When bookmarks exist, seed_topics are used as fallback only.
+  # A future management page will overwrite this list.
+  seed_topics:
+    - dynamic word embedding
+    - dynamic graph embedding
+    - diachronic semantic change
+  max_bookmarks_for_profile: 40
+  # Also build a narrative Markdown profile for the A/B experiment.
+  # Disable to skip the extra LLM call and stay on keyword rerank.
+  narrative_enabled: true
+
+candidates:
+  per_keyword: 20
+  related_per_bookmark: 15
+  related_from_top_n_bookmarks: 3
+  year_start: 2018
+  year_end: null
+  total_cap: 200
+
+rerank:
+  batch_size: 10
+  top_k: 10
+  min_score: 3.0
+  temperature: 0.2
+  # A/B modes for evaluating whether narrative profile beats keyword profile.
+  # "keywords" = current baseline; "narrative" = rerank with profile.md;
+  # "ab"       = run both each day and log overlap for offline comparison.
+  # After ~2 weeks of data in state/ab_log.jsonl, decide whether to keep narrative.
+  mode: ab
+
+seen:
+  cooldown_days: 30
+
+soul:
+  # Per-user evolving Markdown profile at state/souls/{user_id}.md.
+  # user_id is derived from the JWT 'sub' claim (sanitized, allowlisted).
+  # Evolves daily: old content preserved, new bookmarks + recent picks folded in,
+  # one dated Changelog line appended per update. Compacts when over
+  # compact_at_bytes; refuses update if still oversized after compact.
+  enabled: true
+  update_cadence_days: 1
+  max_bytes: 3072
+  compact_at_bytes: 2560
+  include_recent_picks_days: 5
+
+decay:
+  # Exponential time-decay weighting on bookmarks. Older bookmarks still
+  # contribute, just less. Set half_life_days: 0 to disable.
+  enabled: true
+  half_life_days: 60
+
+feedback:
+  # Read/dislike markers parsed from sync-back of recommendations.md.
+  # User adds [read] or [dislike: reason] inside a paper section in the daily
+  # note; sync-results.sh ships the last lookback_days of notes back to
+  # state/feedback_inbox/. Defenses against feedback-loop drift:
+  #   - frontmatter date check (no notes older than lookback_days)
+  #   - file size cap (max_file_kb)
+  #   - regex allowlist (only [read] / [dislike: ...] tokens extracted)
+  #   - feedback_log.jsonl idempotency (each marker processed at most once)
+  enabled: true
+  lookback_days: 7
+  max_file_kb: 512
+  inbox_subdir: feedback_inbox
+
+output:
+  artifacts_dir: artifacts
+  daily_subdir_fmt: "%Y-%m-%d"
+  note_filename: recommendations.md
+  raw_filename: raw.json
