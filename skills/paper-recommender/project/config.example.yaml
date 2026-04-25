@@ -38,9 +38,19 @@ rerank:
   temperature: 0.2
   # A/B modes for evaluating whether narrative profile beats keyword profile.
   # "keywords" = current baseline; "narrative" = rerank with profile.md;
+  # "soul"     = rerank with evolving SOUL.md (preferred when soul enabled);
   # "ab"       = run both each day and log overlap for offline comparison.
   # After ~2 weeks of data in state/ab_log.jsonl, decide whether to keep narrative.
   mode: ab
+  # Listwise forced-rank prompting (default): the LLM returns a strict 1..N ranking
+  # per batch, normalized linearly to scores 1..5. Prevents the "all 5/5" collapse
+  # that pointwise scoring produces on pre-filtered candidate batches.
+  # Set to "pointwise" to roll back to the legacy per-item score prompt.
+  scoring_mode: listwise
+  # Inject the search backend's cross-encoder relevance score (0..1) as an anchor
+  # in each candidate line. Strongly improves intra-batch differentiation when the
+  # backend reports it. Disable to drop the dependency.
+  use_relevance_anchor: true
 
 seen:
   cooldown_days: 30

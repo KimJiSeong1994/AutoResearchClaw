@@ -12,7 +12,10 @@ log = logging.getLogger(__name__)
 
 
 def paper_key(p: dict[str, Any]) -> str:
-    for k in ("paper_id", "id", "arxiv_id", "doi"):
+    # Keep the historical priority first so existing seen.json entries remain
+    # effective after adding newer artifact identifiers. doc_id is last because
+    # it was introduced after paper_id/id/arxiv_id/doi in persisted state.
+    for k in ("paper_id", "id", "arxiv_id", "doi", "doc_id"):
         v = p.get(k)
         if v:
             return str(v)

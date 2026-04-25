@@ -60,6 +60,14 @@ class RerankSettings:
     min_score: float
     temperature: float
     mode: str = "ab"  # "keywords" | "narrative" | "ab"
+    # Scoring mode: "listwise" (forced rank 1..N per batch, prevents 5/5 collapse)
+    # or "pointwise" (legacy: per-item 1-5 score, prone to collapse on pre-filtered
+    # candidates). Listwise is the default after observing collapse on first run.
+    scoring_mode: str = "listwise"
+    # When the search backend returns a cross-encoder relevance score per candidate
+    # (e.g. jiphyeonjeon's `_cross_encoder_score` in 0..1), expose it inline as an
+    # anchor in the rerank prompt. Helps the LLM differentiate within tight batches.
+    use_relevance_anchor: bool = True
 
 
 @dataclass

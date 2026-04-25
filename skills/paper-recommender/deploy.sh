@@ -19,6 +19,7 @@ rsync -az --delete \
   --exclude "*.egg-info" \
   --exclude ".omc" \
   --exclude ".env" \
+  --exclude "config.yaml" \
   -e "ssh -i $KEY_FILE" \
   "$LOCAL_PROJECT/" \
   "${REMOTE_HOST}:${REMOTE_PROJECT}/"

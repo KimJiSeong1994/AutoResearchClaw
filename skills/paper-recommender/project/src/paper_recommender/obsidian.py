@@ -5,8 +5,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import re
+
 from paper_recommender.candidates import paper_key
 from paper_recommender.config import Settings
+from paper_recommender.rerank import score_stats
+
+
+def _safe_md(s: str | None) -> str:
+    """Defang LLM-generated text against Markdown/HTML injection.
+
+    The reason field flows from the LLM directly into Obsidian. A malicious or
+    sloppy LLM output containing pipes, brackets, or angle tags could break
+    table rendering or inject links. Strip the smallest set that breaks
+    Markdown structure while keeping Korean text intact.
+    """
+    if not s:
+        return ""
+    out = str(s).replace("\n", " ").replace("\r", " ").replace("|", "\\|")
+    out = re.sub(r"[<>\[\]]", "", out)
+    return out.strip()
 
 
 def _arxiv_url(p: dict[str, Any]) -> str | None:
@@ -28,18 +46,18 @@ def _jh_url(p: dict[str, Any]) -> str | None:
 
 def _format_authors(authors: Any) -> str:
     if isinstance(authors, list):
-        top = [str(a) for a in authors[:4]]
+        top = [_safe_md(str(a)) for a in authors[:4]]
         tail = " et al." if len(authors) > 4 else ""
-        return ", ".join(top) + tail
-    return str(authors or "")
+        return ", ".join(a for a in top if a) + tail
+    return _safe_md(str(authors or ""))
 
 
 def _render_pick(i: int, p: dict[str, Any]) -> list[str]:
-    title = p.get("title") or "(no title)"
+    title = _safe_md(p.get("title")) or "(no title)"
     score = p.get("score")
-    reason = p.get("reason") or ""
-    year = p.get("year") or "?"
-    venue = p.get("venue") or p.get("source") or "-"
+    reason = _safe_md(p.get("reason"))
+    year = _safe_md(str(p.get("year") or "?"))
+    venue = _safe_md(str(p.get("venue") or p.get("source") or "-"))
     authors = _format_authors(p.get("authors"))
     arxiv = _arxiv_url(p)
     jh = _jh_url(p)
@@ -64,7 +82,7 @@ def _render_pick(i: int, p: dict[str, Any]) -> list[str]:
         if len(abs_short) > 600:
             abs_short = abs_short[:599] + "…"
         lines.append("")
-        lines.append(f"> {abs_short}")
+        lines.append(f"> {_safe_md(abs_short)}")
     lines.append("")
     return lines
 
@@ -126,6 +144,26 @@ def render_note(
             f"- **Shared**: {overlap['shared']} · "
             f"**Jaccard**: {overlap['jaccard']:.2f}"
         )
+        lines.append("")
+
+    # Score-distribution sanity row: collapse manifests as std≈0 and spread≈0;
+    # a healthy listwise rerank with cross-batch modulation shows std > 0.
+    has_score_stats = any(
+        any(p.get("score") is not None for p in picks) for picks in variants_picks.values()
+    )
+    if has_score_stats:
+        lines.append("## Score distribution (collapse check)")
+        lines.append("")
+        lines.append("| variant | n | mean | std | min–max | spread |")
+        lines.append("|---|---:|---:|---:|---:|---:|")
+        for v, picks in variants_picks.items():
+            if not picks:
+                continue
+            stats = score_stats(picks)
+            lines.append(
+                f"| {v} | {stats['n']} | {stats['mean']:.2f} | {stats['std']:.2f} "
+                f"| {stats['min']:.2f}–{stats['max']:.2f} | {stats['spread']:.2f} |"
+            )
         lines.append("")
 
     lines.append("## Profile snapshot")
@@ -203,13 +241,24 @@ def write_artifacts(
         "narrative_present": bool(narrative_md),
         "soul_present": bool(soul_md),
         "soul_bytes": len(soul_md.encode("utf-8")) if soul_md else 0,
+        "scoring_mode": settings.rerank.scoring_mode,
+        "score_stats": {v: score_stats(picks) for v, picks in variants_picks.items()},
         "variants": {
             v: [
                 {
                     "paper_id": paper_key(p),
                     "title": p.get("title"),
+                    "authors": p.get("authors"),
                     "year": p.get("year"),
+                    "venue": p.get("venue") or p.get("source"),
+                    "source": p.get("source"),
+                    "url": p.get("url"),
+                    "pdf_url": p.get("pdf_url"),
+                    "doi": p.get("doi"),
+                    "arxiv_id": p.get("arxiv_id"),
                     "score": p.get("score"),
+                    "rank": p.get("_rank"),
+                    "anchor": p.get("_anchor"),
                     "reason": p.get("reason"),
                 }
                 for p in picks

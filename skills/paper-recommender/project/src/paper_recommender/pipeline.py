@@ -12,7 +12,7 @@ from paper_recommender.config import Settings, load_settings
 from paper_recommender.jiphyeonjeon import JiphyClient
 from paper_recommender.obsidian import write_artifacts
 from paper_recommender.profile import build_profiles
-from paper_recommender.rerank import rerank_candidates
+from paper_recommender.rerank import rerank_candidates, score_stats
 from paper_recommender.signals import apply_decay, collect_feedback
 from paper_recommender.soul import (
     diff_new_bookmarks,
@@ -314,6 +314,7 @@ async def run_pipeline(config_path: Path, force_profile: bool = False) -> Path:
     log.info("rerank variants: %s", variants)
 
     variants_picks: dict[str, list[dict[str, Any]]] = {}
+    variants_score_stats: dict[str, dict[str, float]] = {}
     for variant in variants:
         picks = await rerank_candidates(
             settings,
@@ -324,11 +325,16 @@ async def run_pipeline(config_path: Path, force_profile: bool = False) -> Path:
             soul_md=soul_md,
         )
         variants_picks[variant] = picks
+        stats = score_stats(picks)
+        variants_score_stats[variant] = stats
         log.info(
-            "rerank[%s]: selected %d picks (threshold=%.1f, top_k=%d)",
+            "rerank[%s,%s]: %d picks · score mean=%.2f std=%.2f spread=%.2f (top_k=%d)",
             variant,
+            settings.rerank.scoring_mode,
             len(picks),
-            settings.rerank.min_score,
+            stats["mean"],
+            stats["std"],
+            stats["spread"],
             settings.rerank.top_k,
         )
 
@@ -364,12 +370,15 @@ async def run_pipeline(config_path: Path, force_profile: bool = False) -> Path:
         {
             "run_at": started_at,
             "user_id": user_id,
+            "scoring_mode": settings.rerank.scoring_mode,
+            "score_stats": variants_score_stats,
             "variants": {
                 v: [
                     {
                         "paper_id": paper_key(p),
                         "title": p.get("title"),
                         "score": p.get("score"),
+                        "rank": p.get("_rank"),
                     }
                     for p in picks
                 ]
@@ -388,8 +397,10 @@ async def run_pipeline(config_path: Path, force_profile: bool = False) -> Path:
             "started_at": started_at,
             "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "user_id": user_id,
+            "scoring_mode": settings.rerank.scoring_mode,
             "candidate_count": len(candidates),
             "variants": {v: len(picks) for v, picks in variants_picks.items()},
+            "score_stats": variants_score_stats,
             "jaccard": jaccard,
             "soul_bytes": len(soul_md.encode("utf-8")) if soul_md else 0,
             "feedback": {"read": n_feedback_read, "dislike": n_feedback_dislike},
