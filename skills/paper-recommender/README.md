@@ -100,9 +100,17 @@ bash skills/paper-recommender/deploy.sh             # rsync code-only updates (n
 
 ## Obsidian output
 
+Daily recommendations sync to:
+
 `/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw/recommendations/YYYY-MM-DD/`
 
+Weekly trend reports sync cumulatively to:
+
+`/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/PaperReview/`
+
 Each daily directory contains the daily note + `souls/{user_id}.md` snapshot + raw artifacts. Tags `paper-recommender` / `daily` are set in frontmatter for indexing or dataview queries.
+
+Weekly trend reports are copied separately and cumulatively to the PaperReview vault, preserving the remote `YYYY-Www/` weekly subdirectories without deleting older local reports.
 
 The Obsidian copy of `souls/{user_id}.md` is **read-only by convention** today — sync is one-way (EC2 → vault). If you want hand-edits in Obsidian to flow back as authoritative signals, that's a separate bidirectional-sync feature (with conflict resolution and prompt-injection sanitization) tracked as future work.
 

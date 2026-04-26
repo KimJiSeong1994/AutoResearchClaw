@@ -45,6 +45,12 @@ Run these helpers from the skill directory:
 
 ## Obsidian target
 
+Daily recommendations sync to:
+
 `/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw/recommendations/`
+
+Weekly trend reports sync cumulatively to:
+
+`/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/PaperReview/`
 
 Each daily subdir holds `recommendations.md` (the Obsidian note) and `raw.json` (debug dump).

@@ -4,27 +4,48 @@ set -euo pipefail
 KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
 REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
 REMOTE_ARTIFACTS="${REMOTE_ARTIFACTS:-~/.openclaw/workspace/projects/paper-recommender/artifacts/}"
+REMOTE_WEEKLY_ARTIFACTS="${REMOTE_WEEKLY_ARTIFACTS:-${REMOTE_ARTIFACTS%/}/weekly/}"
 REMOTE_FEEDBACK_INBOX="${REMOTE_FEEDBACK_INBOX:-~/.openclaw/workspace/projects/paper-recommender/state/feedback_inbox/}"
+# Backwards-compatible daily target. LOCAL_ROOT is retained for existing callers.
 LOCAL_ROOT="${LOCAL_ROOT:-/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw/recommendations}"
+# Weekly reports are accumulated directly in the PaperReview vault root for now.
+LOCAL_WEEKLY_ROOT="${LOCAL_WEEKLY_ROOT:-/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/PaperReview}"
 FEEDBACK_LOOKBACK_DAYS="${FEEDBACK_LOOKBACK_DAYS:-7}"
 FEEDBACK_MAX_BYTES="${FEEDBACK_MAX_BYTES:-524288}"   # 512 KB
 
-mkdir -p "$LOCAL_ROOT"
+mkdir -p "$LOCAL_ROOT" "$LOCAL_WEEKLY_ROOT"
 # Use double quotes only around the whole command so ~ expands on the remote
 # shell. (Inner single quotes would freeze the tilde literal — same bug class
 # as the SCP path.)
 ssh -i "$KEY_FILE" "$REMOTE_HOST" "mkdir -p $REMOTE_ARTIFACTS $REMOTE_FEEDBACK_INBOX"
 
-# 1. Pull artifacts EC2 -> Obsidian (forward sync, with safety flags).
-rsync -az --safe-links --max-size=10M \
+# 1. Pull daily artifacts EC2 -> Obsidian (forward sync, with safety flags).
+# Weekly artifacts are intentionally excluded here and copied to LOCAL_WEEKLY_ROOT
+# below so the weekly research trend log accumulates in the PaperReview vault.
+rsync -az --safe-links --max-size=10M --exclude '/weekly/' \
   -e "ssh -i $KEY_FILE" \
   "${REMOTE_HOST}:${REMOTE_ARTIFACTS}" \
   "$LOCAL_ROOT/"
 
-echo "synced recommendations to:"
+echo "synced daily recommendations to:"
 echo "  $LOCAL_ROOT"
 
-# 2. Push the last N days of recommendations.md back to EC2 feedback_inbox.
+# 2. Pull weekly trend reports EC2 -> Obsidian PaperReview vault.
+# No --delete: local weekly reports are cumulative by design.
+if ssh -i "$KEY_FILE" "$REMOTE_HOST" "test -d ${REMOTE_WEEKLY_ARTIFACTS}"; then
+  rsync -az --safe-links --max-size=10M \
+    -e "ssh -i $KEY_FILE" \
+    "${REMOTE_HOST}:${REMOTE_WEEKLY_ARTIFACTS}" \
+    "$LOCAL_WEEKLY_ROOT/"
+  echo "synced weekly reports to:"
+  echo "  $LOCAL_WEEKLY_ROOT"
+else
+  echo "no weekly reports on remote yet: ${REMOTE_WEEKLY_ARTIFACTS}"
+  echo "weekly reports will sync to:"
+  echo "  $LOCAL_WEEKLY_ROOT"
+fi
+
+# 3. Push the last N days of recommendations.md back to EC2 feedback_inbox.
 #    Defenses: filename allowlist (single basename), size cap, symlink rejection,
 #    realpath containment check, iCloud placeholder skip.
 date_at_offset() {
