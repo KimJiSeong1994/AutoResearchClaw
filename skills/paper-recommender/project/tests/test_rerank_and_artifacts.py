@@ -317,3 +317,124 @@ def test_openclaw_error_reports_model_and_status(monkeypatch) -> None:
     assert "primary: http 503" in msg
     assert "fallback: http 503" in msg
     assert "gateway unavailable" in msg
+
+
+def test_weekly_settings_default_keeps_existing_settings_constructor(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    assert settings.weekly_report.enabled is True
+    assert settings.weekly_report.output_subdir_fmt == "weekly/%G-W%V"
+    assert settings.weekly_report.raw_filename == "raw.json"
+
+
+def test_weekly_query_validation_caps_and_defangs(tmp_path: Path) -> None:
+    from paper_recommender.trend_queries import _dedupe_queries, fallback_trend_queries
+
+    settings = _settings(tmp_path)
+    settings.weekly_report.max_queries = 2
+    queries = _dedupe_queries([
+        {"query": " dynamic embedding <bad> [x] ", "axis": "A", "rationale": "R"},
+        {"query": "dynamic embedding bad x", "axis": "dup", "rationale": "dup"},
+        {"query": "graph semantics", "axis": "B", "rationale": "R"},
+        {"query": "extra", "axis": "C", "rationale": "R"},
+    ], settings.weekly_report.max_queries)
+    assert [q["query"] for q in queries] == ["dynamic embedding bad x", "graph semantics"]
+    assert "<" not in queries[0]["query"]
+
+    fallback = fallback_trend_queries(settings, "# Soul\n- diachronic semantics", {"keywords": []})
+    assert 1 <= len(fallback) <= 2
+
+
+def test_trend_report_validation_drops_unknown_paper_ids() -> None:
+    from paper_recommender.trend_report import validate_trend_report
+
+    report = validate_trend_report(
+        {
+            "at_a_glance": "ok",
+            "clusters": [
+                {"title": "A", "summary": "S", "why_it_matters": "W", "paper_ids": ["p1", "ghost"]},
+                {"title": "B", "summary": "S", "why_it_matters": "W", "paper_ids": ["ghost"]},
+            ],
+            "weak_signals": ["<unsafe>"],
+        },
+        {"p1"},
+        1,
+    )
+    assert report["clusters"] == [{"title": "A", "summary": "S", "why_it_matters": "W", "paper_ids": ["p1"]}]
+    assert report["weak_signals"] == ["&lt;unsafe&gt;"]
+
+
+def test_weekly_markdown_defangs_labels_and_links(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md="# Soul <script>",
+        user_id="alice",
+        queries=[{"axis": "A|B <x>", "query": "q [bad]", "rationale": "r <x>"}],
+        candidates=[
+            {
+                "paper_id": "bad) [evil](https://evil.test",
+                "title": "T <x> | y",
+                "year": 2026,
+                "source": "jh",
+                "_trend_query": "q <x>",
+            }
+        ],
+        report={
+            "at_a_glance": "hello <x>",
+            "coverage_caveat": "limited <x>",
+            "clusters": [{"title": "C <x>", "summary": "S", "why_it_matters": "W", "paper_ids": ["bad) [evil](https://evil.test"]}],
+            "weak_signals": ["W <x>"],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+    assert "evil.test" not in md
+    assert "<script>" not in md
+    assert "A\\|B x" in md
+    assert "T x \\| y" in md
+
+
+def test_weekly_state_is_separate_from_daily_seen(tmp_path: Path) -> None:
+    from paper_recommender.state import StateStore
+
+    store = StateStore(tmp_path / "state")
+    store.record_seen(["daily"])
+    store.record_weekly_seen(["weekly"])
+    assert store.is_recently_seen("daily", 30)
+    assert not store.is_recently_seen("weekly", 30)
+    assert store.is_recently_weekly_seen("weekly", 60)
+    assert not store.is_recently_weekly_seen("daily", 60)
+    store.append_weekly_report({"run_at": "2026-04-26T11:00:00+00:00", "dry_run": False})
+    assert store.last_weekly_report_at() == "2026-04-26T11:00:00+00:00"
+
+
+def test_weekly_dry_run_does_not_write_artifacts_or_weekly_state(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    from paper_recommender import weekly
+
+    settings = _settings(tmp_path)
+    settings.profile.seed_topics = ["dynamic embedding"]
+
+    async def fake_generate(_settings, _soul_md, _profile):
+        return [{"query": "dynamic embedding", "axis": "methods", "rationale": "seed"}]
+
+    async def fake_gather(_settings, _store, _queries, *, force):
+        return [{"paper_id": "p1", "title": "Paper 1", "_trend_query": "dynamic embedding", "_trend_axis": "methods"}]
+
+    async def fake_synthesize(_settings, _soul_md, _profile, _queries, _candidates):
+        return {"at_a_glance": "ok", "coverage_caveat": "limited", "clusters": [], "weak_signals": []}
+
+    monkeypatch.setattr(weekly, "load_settings", lambda _path: settings)
+    monkeypatch.setattr(weekly, "generate_trend_queries", fake_generate)
+    monkeypatch.setattr(weekly, "_gather_weekly_candidates", fake_gather)
+    monkeypatch.setattr(weekly, "synthesize_trend_report", fake_synthesize)
+
+    result = asyncio.run(weekly.run_weekly_report(tmp_path / "config.yaml", force=True, dry_run=True))
+    assert result.candidate_count == 1
+    assert not result.wrote_artifacts
+    assert not (tmp_path / "artifacts").exists()
+    assert not (tmp_path / "state" / "weekly_seen.json").exists()
+    assert not (tmp_path / "state" / "weekly_reports.jsonl").exists()

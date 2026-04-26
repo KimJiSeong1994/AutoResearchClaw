@@ -69,6 +69,14 @@ class StateStore:
     def feedback_log_path(self) -> Path:
         return self.root / "feedback_log.jsonl"
 
+    @property
+    def weekly_seen_path(self) -> Path:
+        return self.root / "weekly_seen.json"
+
+    @property
+    def weekly_report_log_path(self) -> Path:
+        return self.root / "weekly_reports.jsonl"
+
     def feedback_inbox_dir(self, subdir: str) -> Path:
         return self.root / subdir
 
@@ -232,6 +240,60 @@ class StateStore:
     def append_ab_log(self, entry: dict[str, Any]) -> None:
         with self.ab_log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def load_weekly_seen(self) -> dict[str, str]:
+        if not self.weekly_seen_path.exists():
+            return {}
+        try:
+            return json.loads(self.weekly_seen_path.read_text(encoding="utf-8") or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    def is_recently_weekly_seen(self, paper_id: str, cooldown_days: int) -> bool:
+        ts = self.load_weekly_seen().get(paper_id)
+        if not ts:
+            return False
+        seen_day = _parse_day(ts)
+        return bool(seen_day and (date.today() - seen_day) < timedelta(days=cooldown_days))
+
+    def record_weekly_seen(self, paper_ids: list[str]) -> None:
+        seen = self.load_weekly_seen()
+        today = date.today().isoformat()
+        for pid in paper_ids:
+            seen[pid] = today
+        _atomic_write(self.weekly_seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
+
+    def gc_weekly_seen(self, cooldown_days: int) -> None:
+        seen = self.load_weekly_seen()
+        cutoff = date.today() - timedelta(days=cooldown_days * 2)
+        pruned = {k: v for k, v in seen.items() if _parse_day(v) and _parse_day(v) >= cutoff}
+        _atomic_write(self.weekly_seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
+
+    def append_weekly_report(self, entry: dict[str, Any]) -> None:
+        with self.weekly_report_log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def last_weekly_report_at(self) -> str | None:
+        if not self.weekly_report_log_path.exists():
+            return None
+        last: str | None = None
+        try:
+            for line in self.weekly_report_log_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("dry_run"):
+                    continue
+                run_at = entry.get("run_at")
+                if isinstance(run_at, str):
+                    last = run_at
+        except OSError:
+            return None
+        return last
 
 
 def _parse_day(s: str) -> date | None:

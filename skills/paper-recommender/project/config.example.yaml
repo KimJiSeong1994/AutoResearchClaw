@@ -92,3 +92,22 @@ output:
   daily_subdir_fmt: "%Y-%m-%d"
   note_filename: recommendations.md
   raw_filename: raw.json
+
+weekly_report:
+  # Weekly SOUL-anchored trend report. This is separate from daily picks and
+  # writes artifacts/weekly/YYYY-Www/research-trends.md plus raw.json.
+  enabled: true
+  cadence_days: 7
+  max_queries: 10
+  per_query: 20
+  candidate_cap: 120
+  top_papers: 20
+  weekly_seen_cooldown_days: 60
+  output_subdir_fmt: "weekly/%G-W%V"
+  note_filename: research-trends.md
+  raw_filename: raw.json
+  min_evidence_per_cluster: 2
+  # Optional year filters forwarded to Jiphyeonjeon search. Keep null unless
+  # the backend/source corpus needs explicit recency narrowing.
+  year_start: null
+  year_end: null

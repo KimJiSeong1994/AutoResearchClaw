@@ -107,6 +107,23 @@ class OutputSettings:
 
 
 @dataclass
+class WeeklyReportSettings:
+    enabled: bool = True
+    cadence_days: int = 7
+    max_queries: int = 10
+    per_query: int = 20
+    candidate_cap: int = 120
+    top_papers: int = 20
+    weekly_seen_cooldown_days: int = 60
+    output_subdir_fmt: str = "weekly/%G-W%V"
+    note_filename: str = "research-trends.md"
+    raw_filename: str = "raw.json"
+    min_evidence_per_cluster: int = 2
+    year_start: int | None = None
+    year_end: int | None = None
+
+
+@dataclass
 class Settings:
     project_dir: Path
     jiphyeonjeon: JiphySettings
@@ -119,6 +136,7 @@ class Settings:
     decay: DecaySettings
     feedback: FeedbackSettings
     output: OutputSettings
+    weekly_report: WeeklyReportSettings = field(default_factory=WeeklyReportSettings)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -137,6 +155,7 @@ def load_settings(config_path: Path) -> Settings:
     soul_raw = data.get("soul") or {}
     decay_raw = data.get("decay") or {}
     feedback_raw = data.get("feedback") or {}
+    weekly_raw = data.get("weekly_report") or {}
     return Settings(
         project_dir=project_dir,
         jiphyeonjeon=JiphySettings(**data["jiphyeonjeon"]),
@@ -149,5 +168,6 @@ def load_settings(config_path: Path) -> Settings:
         decay=DecaySettings(**decay_raw),
         feedback=FeedbackSettings(**feedback_raw),
         output=OutputSettings(**data["output"]),
+        weekly_report=WeeklyReportSettings(**weekly_raw),
         raw=data,
     )
