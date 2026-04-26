@@ -120,15 +120,18 @@ def _candidate_line(i: int, p: dict[str, Any], *, with_anchor: bool) -> str:
     )
 
 
+def _safe_join(values: Any, sep: str) -> str:
+    if not isinstance(values, list):
+        return ""
+    return sep.join(_safe_text(v) for v in values)
+
+
 def _keyword_profile_block(profile: dict[str, Any]) -> str:
-    interests = profile.get("interests") or []
-    keywords = profile.get("keywords") or []
-    methods = profile.get("methodology_focus") or []
     return (
         "Reader profile:\n"
-        f"- Interests: {'; '.join(interests)}\n"
-        f"- Keywords: {', '.join(keywords)}\n"
-        f"- Methods: {', '.join(methods)}"
+        f"- Interests: {_safe_join(profile.get('interests'), '; ')}\n"
+        f"- Keywords: {_safe_join(profile.get('keywords'), ', ')}\n"
+        f"- Methods: {_safe_join(profile.get('methodology_focus'), ', ')}"
     )
 
 

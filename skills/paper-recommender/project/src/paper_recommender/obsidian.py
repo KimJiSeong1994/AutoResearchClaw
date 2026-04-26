@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import re
+from urllib.parse import quote
 
 from paper_recommender.candidates import paper_key
 from paper_recommender.config import Settings
@@ -27,20 +28,24 @@ def _safe_md(s: str | None) -> str:
     return out.strip()
 
 
+_ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")
+_SAFE_PATH_ID_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+
 def _arxiv_url(p: dict[str, Any]) -> str | None:
     aid = p.get("arxiv_id")
-    if aid:
+    if isinstance(aid, str) and _ARXIV_ID_RE.match(aid):
         return f"https://arxiv.org/abs/{aid}"
     pid = p.get("paper_id") or p.get("id")
-    if isinstance(pid, str) and pid[:4].isdigit() and "." in pid[:9]:
+    if isinstance(pid, str) and _ARXIV_ID_RE.match(pid):
         return f"https://arxiv.org/abs/{pid}"
     return None
 
 
 def _jh_url(p: dict[str, Any]) -> str | None:
     pid = p.get("paper_id") or p.get("id")
-    if pid:
-        return f"https://jiphyeonjeon.kr/papers/{pid}"
+    if isinstance(pid, str) and _SAFE_PATH_ID_RE.match(pid):
+        return f"https://jiphyeonjeon.kr/papers/{quote(pid, safe='')}"
     return None
 
 

@@ -24,6 +24,28 @@ from paper_recommender.state import StateStore
 log = logging.getLogger(__name__)
 
 
+def _parse_utc_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _soul_cadence_due(settings: Settings, store: StateStore, user_id: str) -> bool:
+    cadence_days = settings.soul.update_cadence_days
+    if cadence_days <= 0:
+        return True
+    last = _parse_utc_datetime(store.last_soul_update(user_id))
+    if last is None:
+        return True
+    return datetime.now(timezone.utc) - last >= timedelta(days=cadence_days)
+
+
 _ALLOWED_MODES = {"keywords", "narrative", "soul", "ab"}
 
 
@@ -225,14 +247,27 @@ async def _maybe_update_soul(
         store,
         settings.soul.include_recent_picks_days,
     )
+    existing_soul = store.load_soul(user_id)
+    feedback_count = len(feedback_records or [])
+    immediate_signals = bool(new_bookmarks or feedback_records)
+    cadence_due = _soul_cadence_due(settings, store, user_id)
 
     log.info(
-        "soul[%s]: %d new bookmarks, %d recent picks, %d feedback records since last update",
+        "soul[%s]: %d new bookmarks, %d recent picks, %d feedback records, cadence_due=%s",
         user_id,
         len(new_bookmarks),
         len(recent_picks),
-        len(feedback_records or []),
+        feedback_count,
+        cadence_due,
     )
+
+    if existing_soul is not None and not immediate_signals and not cadence_due:
+        log.info(
+            "soul[%s]: skipping evolution until cadence (%d day[s]) or immediate signals",
+            user_id,
+            settings.soul.update_cadence_days,
+        )
+        return existing_soul, user_id
 
     soul_md = await update_soul(
         settings,

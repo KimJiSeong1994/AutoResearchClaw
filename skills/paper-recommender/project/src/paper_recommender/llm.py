@@ -1,11 +1,31 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
 
 from paper_recommender.config import OpenClawSettings
+
+log = logging.getLogger(__name__)
+
+
+def _short_error_text(text: str, limit: int = 240) -> str:
+    return " ".join(text.split())[:limit]
+
+
+def _failure_reason(model: str, exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        body = _short_error_text(response.text or "")
+        suffix = f": {body}" if body else ""
+        return f"{model}: http {response.status_code}{suffix}"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"{model}: timeout"
+    if isinstance(exc, httpx.HTTPError):
+        return f"{model}: transport {exc.__class__.__name__}"
+    return f"{model}: invalid response {exc.__class__.__name__}: {_short_error_text(str(exc))}"
 
 
 class OpenClawLLM:
@@ -40,6 +60,7 @@ class OpenClawLLM:
         temperature: float = 0.2,
         response_format_json: bool = False,
     ) -> str:
+        failures: list[str] = []
         for model in (self._settings.primary_model, self._settings.fallback_model):
             if not model:
                 continue
@@ -53,11 +74,15 @@ class OpenClawLLM:
             try:
                 r = await self._client.post(self._chat_url, json=payload)
                 r.raise_for_status()
-            except httpx.HTTPError:
+                data = r.json()
+                return data["choices"][0]["message"]["content"]
+            except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
+                reason = _failure_reason(model, e)
+                failures.append(reason)
+                log.warning("OpenClaw model failed: %s", reason)
                 continue
-            data = r.json()
-            return data["choices"][0]["message"]["content"]
-        raise RuntimeError("all OpenClaw models failed")
+        detail = "; ".join(failures) if failures else "no models configured"
+        raise RuntimeError(f"all OpenClaw models failed ({detail})")
 
     async def chat_json(
         self,

@@ -33,15 +33,19 @@ NARRATIVE_SYSTEM = (
 )
 
 
+def _safe_text(s: Any) -> str:
+    return str(s).replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _bookmark_digest(bm: dict[str, Any]) -> str:
     parts = [
-        bm.get("title") or "",
-        " / ".join((bm.get("authors") or [])[:3])
+        _safe_text(bm.get("title") or ""),
+        " / ".join(_safe_text(a) for a in (bm.get("authors") or [])[:3])
         if isinstance(bm.get("authors"), list)
         else "",
-        str(bm.get("year") or ""),
-        bm.get("topic") or "",
-        ", ".join(bm.get("tags") or []) if isinstance(bm.get("tags"), list) else "",
+        _safe_text(bm.get("year") or ""),
+        _safe_text(bm.get("topic") or ""),
+        ", ".join(_safe_text(t) for t in (bm.get("tags") or [])) if isinstance(bm.get("tags"), list) else "",
     ]
     base = " | ".join(p for p in parts if p)
     weight = bm.get("_weight")

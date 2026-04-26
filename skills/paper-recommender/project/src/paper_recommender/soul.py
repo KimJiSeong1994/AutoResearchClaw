@@ -75,12 +75,12 @@ def initial_soul(narrative_md: str | None) -> str:
 
 def _bookmark_digest(bm: dict[str, Any]) -> str:
     parts = [
-        bm.get("title") or "",
-        " / ".join((bm.get("authors") or [])[:3])
+        _safe_text(bm.get("title") or ""),
+        " / ".join(_safe_text(a) for a in (bm.get("authors") or [])[:3])
         if isinstance(bm.get("authors"), list)
         else "",
-        str(bm.get("year") or ""),
-        bm.get("topic") or "",
+        _safe_text(bm.get("year") or ""),
+        _safe_text(bm.get("topic") or ""),
     ]
     base = " | ".join(p for p in parts if p)
     weight = bm.get("_weight")
@@ -91,16 +91,16 @@ def _bookmark_digest(bm: dict[str, Any]) -> str:
 
 def _pick_digest(p: dict[str, Any]) -> str:
     return (
-        f"[score={p.get('score','?')}] "
-        f"{p.get('title','(no title)')} "
-        f"— {p.get('reason','')}"
+        f"[score={_safe_text(p.get('score','?'))}] "
+        f"{_safe_text(p.get('title','(no title)'))} "
+        f"— {_safe_text(p.get('reason',''))}"
     )
 
 
-def _safe_text(s: str) -> str:
+def _safe_text(s: Any) -> str:
     """Defang angle brackets so user-supplied text cannot fake closing the
     surrounding XML-like data block in the LLM prompt."""
-    return s.replace("<", "&lt;").replace(">", "&gt;")
+    return str(s).replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _feedback_digest(rec: dict[str, Any]) -> str:
@@ -125,7 +125,7 @@ def _build_evolve_msg(
         fb_block = "\n".join(_feedback_digest(r) for r in user_feedback)
 
     parts = [
-        "<prior_soul>\n" + prior + "\n</prior_soul>\n",
+        "<prior_soul>\n" + _safe_text(prior) + "\n</prior_soul>\n",
     ]
     if fb_block:
         parts.append("<user_feedback>\n" + fb_block + "\n</user_feedback>\n")
