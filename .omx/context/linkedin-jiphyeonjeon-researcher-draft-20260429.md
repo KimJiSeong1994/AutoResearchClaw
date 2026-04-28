@@ -22,7 +22,7 @@
 
 아직 “완성된 연구 자동화”라기보다, 연구 맥락이 끊기지 않게 만드는 기반에 가깝습니다. 그래서 더 설득력 있습니다. 좋은 에이전트는 연구자를 대신하는 모델이 아니라, 이미 쌓인 검색·북마크·리뷰·추천의 맥락을 안전하게 이어받는 도구라고 생각합니다.
 
-## Alternative hooks
+## Alternative hooks (Korean)
 
 1. 연구에서 정말 어려운 질문은 “무엇을 검색할까”가 아니라 “오늘은 어디서 다시 시작할까”일 때가 많습니다.
 2. 좋은 논문 도구는 더 많은 논문을 보여주는 데서 끝나지 않고, 다음 읽기 결정을 더 작고 검증 가능하게 만들어야 합니다.
@@ -30,11 +30,11 @@
 
 ## Evidence bullets tied to source posts
 
-- Search agent: saved post describes 5 academic databases, multi-turn search, gap analysis, rubric evaluation, and fallback behavior; this supports the draft's “one query is not enough” claim.
-- Network graph: saved post explains citation gaps for new papers and uses title plus keyword/category similarity for edges; this supports the “connect papers even before citations exist” claim.
-- Auto-highlight: saved post frames the feature around structured peer-review-style comments, not simple summarization; this supports the “evaluation-evidence-suggestion” claim.
-- Curriculum generator: saved post documents a four-step pipeline where LLMs design structure but verified OpenAlex/Semantic Scholar results constrain paper selection; this supports the “no plausible fake list” claim.
-- Agent and daily recommendations: Agent post documents Agent Key, `/api/version` capability flags, and `paper_id` lookup; daily recommendations post frames SOUL/OpenClaw/local baseline as a daily research-session entry point rather than a perfect recommender.
+- 검색 에이전트 글: 5개 학술 데이터베이스, 멀티턴 검색, 갭 분석, Rubric 평가, fallback 경로를 설명하므로 “한 번의 쿼리로 끝내지 않는다”는 문장을 뒷받침한다.
+- 네트워크 그래프 글: 최신 논문의 인용 공백과 제목·키워드/카테고리 유사도 기반 엣지를 설명하므로 “인용 전에도 주변 문헌과 연결한다”는 문장을 뒷받침한다.
+- 오토하이라이트 글: 단순 요약이 아니라 학술 피어리뷰식 구조화 코멘트를 지향하므로 “평가-근거-제안 구조”라는 표현을 뒷받침한다.
+- 커리큘럼 생성기 글: LLM은 구조를 설계하되 OpenAlex/Semantic Scholar로 검증된 논문 안에서만 선택하는 4단계 파이프라인을 설명하므로 “가짜 목록 대신 검증된 논문”이라는 문장을 뒷받침한다.
+- Agent 및 매일 추천 글: Agent Key, `/api/version` capability, `paper_id` 조회를 설명하고, SOUL/OpenClaw/로컬 baseline을 완벽한 추천기가 아니라 매일 연구 세션의 시작점으로 다루므로 최종 단락의 guardrail을 뒷받침한다.
 
 ## Guardrails applied
 
