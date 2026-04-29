@@ -33,6 +33,8 @@ If the user explicitly asks for a controlled restart, use:
 - Do not print the secret token value unless the human explicitly asks for it.
 - Do not delete sessions, auth files, or agent state without explicit approval.
 - Report evidence, not just conclusions.
+- For non-trivial recovery, state the working assumption first, choose the smallest reversible operation, and verify before escalating.
+- Do not "clean up" unrelated services, configs, or logs while fixing the requested gateway issue.
 
 ## Reporting checklist
 

@@ -14,6 +14,7 @@ Local, version-controlled workspace for the OpenClaw agent running on the EC2 ga
   - `workspace/HEARTBEAT.md`
 - Custom workspace skill:
   - `skills/openclaw-ec2-ops/`
+  - `skills/karpathy-guidelines/`
   - `skills/researchclaw/`
 - Local helper scripts:
   - `scripts/deploy-openclaw-workspace.sh`
@@ -27,6 +28,13 @@ Local, version-controlled workspace for the OpenClaw agent running on the EC2 ga
 - SSH user: `ubuntu`
 - Remote OpenClaw workspace: `~/.openclaw/workspace`
 - Gateway bind: `127.0.0.1:18789`
+
+## Agent discipline
+
+The workspace and skills apply Karpathy-inspired agent behavior from
+`forrestchang/andrej-karpathy-skills`: surface assumptions, prefer simple
+solutions, edit surgically, and define verifiable success criteria before
+claiming completion.
 
 ## Deploy workspace changes
 

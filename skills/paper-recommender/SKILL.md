@@ -42,6 +42,10 @@ Run these helpers from the skill directory:
 - Before the first real run after config changes, run `doctor.sh`.
 - A future "profile management page" will overwrite `profile.seed_topics` and short-circuit the LLM profile builder. Until then the profile is derived from 집현전 bookmarks.
 - The daily cron runs the pipeline on EC2. Syncing to Obsidian is a separate step (`sync-results.sh`), intentionally decoupled from the cron.
+- For non-trivial pipeline changes, state assumptions and success criteria before editing.
+- Keep implementation minimal: do not add ranking strategies, profile signals, caches, or output formats beyond the requested goal.
+- Make surgical changes and clean up only unused code introduced by the current change.
+- Verify with the narrowest relevant check first (`doctor.sh`, targeted tests, or one-off run), then broaden only if needed.
 
 ## Obsidian target
 

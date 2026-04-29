@@ -35,6 +35,9 @@ Run these helpers from the skill directory:
 - Keep ResearchClaw pointed at the loopback OpenClaw gateway, not the public network.
 - Prefer `researchclaw validate` before the first real run after config changes.
 - Do not start a full paper run unless the user clearly asked for research execution.
+- Before changing setup or pipeline code, make assumptions explicit and define the verification target.
+- Keep changes surgical: avoid dependency swaps, config rewrites, or broad refactors unless the user asked for them.
+- Prefer the simplest command or patch that proves the current ResearchClaw goal.
 
 ## Default setup contract
 
