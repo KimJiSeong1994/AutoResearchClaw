@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from paper_recommender.config import load_settings
+from paper_recommender.daily_research import run_daily_research
 from paper_recommender.jiphyeonjeon import JiphyClient
 from paper_recommender.llm import OpenClawLLM
 from paper_recommender.pipeline import run_pipeline
@@ -55,6 +56,28 @@ async def _cmd_run(config_path: Path, force_profile: bool) -> int:
     return 0
 
 
+async def _cmd_daily_research(config_path: Path, dry_run: bool) -> int:
+    result = await run_daily_research(config_path, dry_run=dry_run)
+    if dry_run:
+        print(
+            "daily-research dry-run: "
+            f"sources={result.source_stats} "
+            f"candidates={result.candidate_count} "
+            f"clusters={result.cluster_count} "
+            f"used_fallback={result.used_fallback}"
+        )
+    else:
+        for p in result.paths_written:
+            print(f"wrote: {p}")
+        print(
+            f"summary: candidates={result.candidate_count} "
+            f"clusters={result.cluster_count} "
+            f"deep={result.deep_success_count} "
+            f"wall={result.wall_clock_sec:.0f}s"
+        )
+    return 0
+
+
 async def _cmd_weekly_report(config_path: Path, force: bool, dry_run: bool) -> int:
     result = await run_weekly_report(config_path, force=force, dry_run=dry_run)
     if result.skipped:
@@ -84,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     weekly_p.add_argument("--force", action="store_true", help="ignore weekly cadence and seen cooldown")
     weekly_p.add_argument("--dry-run", action="store_true", help="collect and synthesize without writing artifacts/state")
 
+    dr_p = sub.add_parser("daily-research", help="multi-source daily research with deep bridge")
+    dr_p.add_argument("--dry-run", action="store_true", help="skip deep bridge + file writes; report what would happen")
+
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
 
@@ -93,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_cmd_run(args.config, args.force_profile))
     if args.command == "weekly-report":
         return asyncio.run(_cmd_weekly_report(args.config, args.force, args.dry_run))
+    if args.command == "daily-research":
+        return asyncio.run(_cmd_daily_research(args.config, args.dry_run))
     parser.print_help()
     return 2
 

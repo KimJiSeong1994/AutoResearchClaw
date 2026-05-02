@@ -83,4 +83,33 @@ echo "phase-2: .env written ($(wc -c < "$env_file") bytes)"
 '
 printf '%s' "$JIPHY_TOKEN" | ssh -i "$KEY_FILE" "$REMOTE_HOST" "$PHASE2_SCRIPT"
 
+# Phase 3 (optional): deliver JIPHYEONJEON_USERNAME / JIPHYEONJEON_PASSWORD
+# for the daily-research pipeline's LoginTokenProvider. Skipped silently if
+# the env vars aren't set — the legacy daily/weekly modes don't need them.
+JIPHY_USERNAME="${JIPHYEONJEON_USERNAME:-}"
+JIPHY_PASSWORD="${JIPHYEONJEON_PASSWORD:-}"
+if [ -n "$JIPHY_USERNAME" ] && [ -n "$JIPHY_PASSWORD" ]; then
+  PHASE3_SCRIPT='set -euo pipefail
+PROJECT_DIR="$HOME/.openclaw/workspace/projects/paper-recommender"
+env_file="$PROJECT_DIR/.env"
+umask 077
+read -r username
+read -r password
+# Idempotent: strip existing lines, append fresh ones.
+[ -f "$env_file" ] && {
+  grep -v "^JIPHYEONJEON_USERNAME=" "$env_file" | \
+    grep -v "^JIPHYEONJEON_PASSWORD=" > "$env_file.tmp"
+  mv "$env_file.tmp" "$env_file"
+}
+printf "JIPHYEONJEON_USERNAME=%s\nJIPHYEONJEON_PASSWORD=%s\n" "$username" "$password" >> "$env_file"
+chmod 600 "$env_file"
+echo "phase-3: credentials appended ($(wc -l < "$env_file") lines total)"
+'
+  printf '%s\n%s\n' "$JIPHY_USERNAME" "$JIPHY_PASSWORD" | \
+    ssh -i "$KEY_FILE" "$REMOTE_HOST" "$PHASE3_SCRIPT"
+else
+  echo "phase-3 skipped: set JIPHYEONJEON_USERNAME and JIPHYEONJEON_PASSWORD env"
+  echo "  to enable login-based auth (required for daily-research mode)."
+fi
+
 echo "Done. Try: bash $SKILL_DIR/doctor.sh"

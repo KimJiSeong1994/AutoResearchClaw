@@ -273,6 +273,45 @@ class StateStore:
         with self.weekly_report_log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    # ───── Deep-seen (cluster-level) tracking ──────────────────────────
+    # Separate from paper-level ``seen.json``. Used by the daily-research
+    # pipeline so the same topic isn't deep-researched two days in a row.
+
+    @property
+    def deep_seen_path(self) -> Path:
+        return self.root / "deep_seen.json"
+
+    def load_deep_seen(self) -> dict[str, str]:
+        if not self.deep_seen_path.exists():
+            return {}
+        try:
+            return json.loads(self.deep_seen_path.read_text(encoding="utf-8") or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    def is_recently_deep_seen(self, cluster_key: str, cooldown_days: int) -> bool:
+        ts = self.load_deep_seen().get(cluster_key)
+        if not ts:
+            return False
+        seen_day = _parse_day(ts)
+        return bool(seen_day and (date.today() - seen_day) < timedelta(days=cooldown_days))
+
+    def record_deep_seen(self, cluster_keys: list[str]) -> None:
+        if not cluster_keys:
+            return
+        seen = self.load_deep_seen()
+        today = date.today().isoformat()
+        for k in cluster_keys:
+            if k:
+                seen[k] = today
+        _atomic_write(self.deep_seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
+
+    def gc_deep_seen(self, cooldown_days: int) -> None:
+        seen = self.load_deep_seen()
+        cutoff = date.today() - timedelta(days=cooldown_days * 2)
+        pruned = {k: v for k, v in seen.items() if _parse_day(v) and _parse_day(v) >= cutoff}
+        _atomic_write(self.deep_seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
+
     def last_weekly_report_at(self) -> str | None:
         if not self.weekly_report_log_path.exists():
             return None

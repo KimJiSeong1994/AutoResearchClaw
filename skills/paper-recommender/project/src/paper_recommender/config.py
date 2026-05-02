@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from paper_recommender.sources import SourceLimits
+
 
 @dataclass
 class JiphySettings:
@@ -124,6 +126,133 @@ class WeeklyReportSettings:
 
 
 @dataclass
+class JiphyAuthSettings:
+    """Login-based jiphyeonjeon auth.
+
+    Source-of-truth env vars are ``JIPHYEONJEON_USERNAME`` /
+    ``JIPHYEONJEON_PASSWORD``. The dataclass itself stores only the env-var
+    names so it never holds secrets.
+    """
+
+    base_url: str = "https://jiphyeonjeon.kr"
+    username_env: str = "JIPHYEONJEON_USERNAME"
+    password_env: str = "JIPHYEONJEON_PASSWORD"
+    timeout_sec: float = 30.0
+
+    @property
+    def username(self) -> str:
+        val = os.environ.get(self.username_env)
+        if not val:
+            raise RuntimeError(f"missing env {self.username_env}")
+        return val.strip()
+
+    @property
+    def password(self) -> str:
+        val = os.environ.get(self.password_env)
+        if not val:
+            raise RuntimeError(f"missing env {self.password_env}")
+        return val
+
+
+@dataclass
+class SourceSettings:
+    enabled: list[str] = field(default_factory=list)
+    limits: SourceLimits = field(default_factory=SourceLimits)
+    rss_feeds: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ClusterSettings:
+    max_clusters: int = 3
+    embedding_model: str = "openclaw/clawbridge"
+    embedding_endpoint: str = "/v1/embeddings"
+
+
+@dataclass
+class DeepBridgeSettings:
+    enabled: bool = True
+    concurrency: int = 1
+    # Empirical: a single run-topic.sh deep run is 25-35 min. The previous
+    # 480s default was a guaranteed kill before any topic finished. 2400
+    # gives a 40-min hard cap (a comfortable margin over 35).
+    timeout_sec: int = 2400
+    # `researchclaw run --mode` knob. `full-auto` = current default behavior.
+    # `express` is faster but shallower (untested in this project as of Phase C).
+    mode: str = "full-auto"
+    run_topic_script: str = (
+        "~/.openclaw/workspace/projects/AutoResearchClaw/skills/researchclaw/run-topic.sh"
+    )
+    artifacts_root: str = (
+        "~/.openclaw/workspace/projects/AutoResearchClaw/artifacts"
+    )
+
+
+@dataclass
+class DailyResearchSettings:
+    """Top-level container for the multi-source daily-research pipeline.
+
+    Optional in YAML. When the section is absent the legacy daily/weekly
+    pipelines run unchanged.
+    """
+
+    sources: SourceSettings = field(default_factory=SourceSettings)
+    cluster: ClusterSettings = field(default_factory=ClusterSettings)
+    deep: DeepBridgeSettings = field(default_factory=DeepBridgeSettings)
+    auth: JiphyAuthSettings = field(default_factory=JiphyAuthSettings)
+    # Days a cluster is suppressed from a deep-run after it last got one.
+    # Prevents the same dominant topic eating a deep slot every day.
+    deep_seen_cooldown_days: int = 7
+
+
+def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings | None:
+    if not raw:
+        return None
+
+    sources_raw = raw.get("sources") or {}
+    cluster_raw = raw.get("cluster") or {}
+    deep_raw = raw.get("deep") or {}
+    auth_raw = raw.get("auth") or {}
+
+    sources = SourceSettings(
+        enabled=list(sources_raw.get("enabled", [])),
+        limits=SourceLimits(
+            max_per_source=int(sources_raw.get("max_per_source", 50)),
+            year_from=sources_raw.get("year_from"),
+            timeout_sec=float(sources_raw.get("timeout_sec", 30.0)),
+        ),
+        rss_feeds=list(sources_raw.get("rss_feeds", [])),
+    )
+    cluster = ClusterSettings(
+        max_clusters=int(cluster_raw.get("max_clusters", 3)),
+        embedding_model=str(cluster_raw.get("embedding_model", "openclaw/clawbridge")),
+        embedding_endpoint=str(cluster_raw.get("embedding_endpoint", "/v1/embeddings")),
+    )
+    deep_default = DeepBridgeSettings()
+    deep = DeepBridgeSettings(
+        enabled=bool(deep_raw.get("enabled", deep_default.enabled)),
+        concurrency=int(deep_raw.get("concurrency", deep_default.concurrency)),
+        timeout_sec=int(deep_raw.get("timeout_sec", deep_default.timeout_sec)),
+        mode=str(deep_raw.get("mode", deep_default.mode)),
+        run_topic_script=str(deep_raw.get("run_topic_script", deep_default.run_topic_script)),
+        artifacts_root=str(deep_raw.get("artifacts_root", deep_default.artifacts_root)),
+    )
+    auth_default = JiphyAuthSettings()
+    auth = JiphyAuthSettings(
+        base_url=str(auth_raw.get("base_url", auth_default.base_url)),
+        username_env=str(auth_raw.get("username_env", auth_default.username_env)),
+        password_env=str(auth_raw.get("password_env", auth_default.password_env)),
+        timeout_sec=float(auth_raw.get("timeout_sec", auth_default.timeout_sec)),
+    )
+    return DailyResearchSettings(
+        sources=sources,
+        cluster=cluster,
+        deep=deep,
+        auth=auth,
+        deep_seen_cooldown_days=int(raw.get("deep_seen_cooldown_days", 7)),
+    )
+
+
+@dataclass
 class Settings:
     project_dir: Path
     jiphyeonjeon: JiphySettings
@@ -137,6 +266,7 @@ class Settings:
     feedback: FeedbackSettings
     output: OutputSettings
     weekly_report: WeeklyReportSettings = field(default_factory=WeeklyReportSettings)
+    daily_research: DailyResearchSettings | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -169,5 +299,6 @@ def load_settings(config_path: Path) -> Settings:
         feedback=FeedbackSettings(**feedback_raw),
         output=OutputSettings(**data["output"]),
         weekly_report=WeeklyReportSettings(**weekly_raw),
+        daily_research=_parse_daily_research(data.get("daily_research")),
         raw=data,
     )

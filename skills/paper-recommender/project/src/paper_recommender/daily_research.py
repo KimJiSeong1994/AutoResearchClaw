@@ -1,0 +1,430 @@
+"""Top-level daily-research pipeline.
+
+Wires source adapters → clustering → cluster-select → deep_bridge → daily
+note. Designed for invocation from cron via ``paper-recommender
+daily-research``.
+
+Wall-clock budget per design (option d, top-3 serial): up to 90+ minutes
+for a 3-cluster deep run. The outer ``asyncio.wait_for`` caps the whole
+pipeline at 2 hours so a stuck subprocess can't run forever.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from paper_recommender.cluster_select import select_top_clusters
+from paper_recommender.clustering import (
+    Cluster,
+    EmbeddingClient,
+    cluster_candidates,
+)
+from paper_recommender.config import Settings, load_settings
+from paper_recommender.daily_note import SkippedCluster, compose_daily_note
+from paper_recommender.deep_bridge import (
+    DeepReport,
+    cluster_dedup_key,
+    run_deep_for_clusters,
+)
+from paper_recommender.jiphyeonjeon import JiphyClient
+from paper_recommender.jiphyeonjeon_auth import LoginTokenProvider, TokenProvider
+from paper_recommender.llm import OpenClawLLM
+from paper_recommender.sources import CandidateItem, SourceAdapter, fetch_all_sources
+from paper_recommender.sources._util import normalize_title_for_dedup
+from paper_recommender.sources.arxiv import ArxivAdapter
+from paper_recommender.sources.hackernews import HackerNewsAdapter
+from paper_recommender.sources.huggingface_papers import HuggingFacePapersAdapter
+from paper_recommender.sources.jiphyeonjeon import JiphyeonjeonSourceAdapter
+from paper_recommender.state import StateStore
+
+log = logging.getLogger(__name__)
+
+_OUTER_TIMEOUT_SEC = 2 * 60 * 60  # 2-hour cron-level hard cap
+_MAX_SEED_TOPICS = 12
+
+
+# ─────────────── output dataclass ───────────────
+
+
+@dataclass
+class RunResult:
+    paths_written: list[Path] = field(default_factory=list)
+    wall_clock_sec: float = 0.0
+    source_stats: dict[str, int] = field(default_factory=dict)
+    candidate_count: int = 0
+    cluster_count: int = 0
+    deep_success_count: int = 0
+    used_fallback: bool = False
+    note_markdown: str = ""
+
+
+# ─────────────── public entry ───────────────
+
+
+async def run_daily_research(
+    config_path: Path,
+    *,
+    dry_run: bool = False,
+    _token_provider_factory=None,
+    _client_factory=None,
+    _adapter_factory=None,
+    _embed_client_factory=None,
+    _llm_factory=None,
+    _now=None,
+) -> RunResult:
+    """Run the daily-research pipeline once.
+
+    The leading ``_*_factory`` keyword arguments are test seams; production
+    callers pass none of them.
+    """
+
+    return await asyncio.wait_for(
+        _run_impl(
+            config_path,
+            dry_run=dry_run,
+            token_provider_factory=_token_provider_factory,
+            client_factory=_client_factory,
+            adapter_factory=_adapter_factory,
+            embed_client_factory=_embed_client_factory,
+            llm_factory=_llm_factory,
+            now_fn=_now,
+        ),
+        timeout=_OUTER_TIMEOUT_SEC,
+    )
+
+
+# ─────────────── orchestration ───────────────
+
+
+async def _run_impl(
+    config_path: Path,
+    *,
+    dry_run: bool,
+    token_provider_factory,
+    client_factory,
+    adapter_factory,
+    embed_client_factory,
+    llm_factory,
+    now_fn,
+) -> RunResult:
+    t0 = time.monotonic()
+    settings = load_settings(config_path)
+    dr = settings.daily_research
+    if dr is None:
+        raise RuntimeError("daily_research section missing from config")
+
+    store = StateStore(settings.state_dir)
+    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+
+    # Build token provider + jiphy client (with test seam)
+    if token_provider_factory is None:
+        provider: TokenProvider = LoginTokenProvider(
+            base_url=dr.auth.base_url,
+            username=dr.auth.username,
+            password=dr.auth.password,
+            timeout_sec=dr.auth.timeout_sec,
+        )
+    else:
+        provider = token_provider_factory(dr.auth)
+
+    if client_factory is None:
+        jiphy_client = JiphyClient(settings.jiphyeonjeon, token_provider=provider)
+    else:
+        jiphy_client = client_factory(settings.jiphyeonjeon, provider)
+
+    async with jiphy_client:
+        return await _run_with_deps(
+            settings=settings,
+            store=store,
+            jiphy_client=jiphy_client,
+            t0=t0,
+            dry_run=dry_run,
+            adapter_factory=adapter_factory,
+            embed_client_factory=embed_client_factory,
+            llm_factory=llm_factory,
+            now_fn=now_fn,
+        )
+
+
+async def _run_with_deps(
+    *,
+    settings: Settings,
+    store: StateStore,
+    jiphy_client: JiphyClient,
+    t0: float,
+    dry_run: bool,
+    adapter_factory,
+    embed_client_factory,
+    llm_factory,
+    now_fn,
+) -> RunResult:
+    dr = settings.daily_research
+    assert dr is not None
+    result = RunResult()
+
+    # ── 1. seed topics ──
+    seed_topics = await _build_seed_topics(jiphy_client, settings)
+    log.info("daily-research seeds (%d): %s", len(seed_topics), seed_topics)
+    if not seed_topics:
+        log.warning("no seed topics; will write empty note")
+
+    # ── 2. adapters ──
+    if adapter_factory is None:
+        adapters = _build_adapters(dr.sources.enabled, jiphy_client)
+    else:
+        adapters = adapter_factory(dr.sources.enabled, jiphy_client)
+    if not adapters:
+        log.warning("no source adapters enabled; writing empty note")
+
+    # ── 3. fetch ──
+    source_results = await fetch_all_sources(adapters, seed_topics, dr.sources.limits) if adapters else {}
+    result.source_stats = {name: len(items) for name, items in source_results.items()}
+    flat = _merge_and_dedupe(source_results)
+    result.candidate_count = len(flat)
+
+    # ── 4. cluster ──
+    clusters_obj = []
+    used_fallback = False
+    if flat:
+        if embed_client_factory is None:
+            embed_client = _build_embed_client(settings)
+        else:
+            embed_client = embed_client_factory(settings)
+        cluster_result = await cluster_candidates(
+            flat,
+            embed_fn=embed_client.embed_batch,
+            cluster_settings=dr.cluster,
+        )
+        clusters_obj = cluster_result.clusters
+        used_fallback = cluster_result.used_fallback
+    result.used_fallback = used_fallback
+    result.cluster_count = len(clusters_obj)
+
+    # ── 5. select top + filter deep-seen ──
+    picked: list[Cluster] = []
+    skipped: list[SkippedCluster] = []
+    deep_clusters: list[Cluster] = []
+    if clusters_obj and not used_fallback:
+        if llm_factory is None:
+            llm = OpenClawLLM(settings.openclaw)
+        else:
+            llm = llm_factory(settings.openclaw)
+        try:
+            async with llm:
+                picked = await select_top_clusters(
+                    clusters_obj,
+                    chat_json=llm.chat_json,
+                    max_clusters=dr.cluster.max_clusters,
+                    soul_md=_load_default_soul(store),
+                )
+        except Exception as e:
+            log.warning("select_top_clusters failed; using size-fallback: %s", e)
+            picked = sorted(clusters_obj, key=lambda c: -len(c.items))[: dr.cluster.max_clusters]
+
+        cooldown = dr.deep_seen_cooldown_days
+        for c in picked:
+            key = cluster_dedup_key(c)
+            if store.is_recently_deep_seen(key, cooldown):
+                skipped.append(SkippedCluster(c, f"deep-seen within {cooldown} days"))
+            else:
+                deep_clusters.append(c)
+
+    # ── 6. deep bridge ──
+    deep_reports: list[DeepReport] = []
+    if not dry_run and deep_clusters:
+        deep_reports = await run_deep_for_clusters(deep_clusters, dr.deep)
+        store.record_deep_seen([cluster_dedup_key(c) for c in deep_clusters])
+        store.gc_deep_seen(dr.deep_seen_cooldown_days)
+    result.deep_success_count = sum(1 for r in deep_reports if r.success)
+
+    # ── 7. compose note ──
+    run_iso = now_fn().isoformat(timespec="seconds")
+    wall = time.monotonic() - t0
+    note_md = compose_daily_note(
+        run_iso=run_iso,
+        source_stats=result.source_stats,
+        candidate_count=result.candidate_count,
+        clusters=picked or clusters_obj,
+        deep_reports=deep_reports,
+        skipped=skipped,
+        used_fallback=result.used_fallback,
+        wall_clock_sec=wall,
+    )
+    result.note_markdown = note_md
+
+    if not dry_run:
+        target_dir = settings.artifacts_root / run_iso[:10]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        note_path = target_dir / "daily-research.md"
+        note_path.write_text(note_md, encoding="utf-8")
+        result.paths_written.append(note_path)
+
+        raw_path = target_dir / "daily-research-raw.json"
+        raw_path.write_text(
+            json.dumps(_raw_payload(result, deep_reports, skipped), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        result.paths_written.append(raw_path)
+
+    result.wall_clock_sec = time.monotonic() - t0
+    return result
+
+
+# ─────────────── helpers ───────────────
+
+
+async def _build_seed_topics(jiphy_client: JiphyClient, settings: Settings) -> list[str]:
+    """Union of bookmark-derived topics + explicit seed_topics, capped + deduped."""
+    explicit = list(settings.profile.seed_topics or [])
+    bookmark_topics: list[str] = []
+    try:
+        bookmarks = await jiphy_client.list_bookmarks()
+    except Exception as e:
+        log.warning("list_bookmarks failed (using explicit only): %s", e)
+        bookmarks = []
+    for bm in bookmarks:
+        t = (bm.get("topic") or bm.get("title") or "").strip()
+        if t:
+            bookmark_topics.append(t)
+
+    combined: list[str] = []
+    seen_keys: set[str] = set()
+    for t in bookmark_topics + explicit:
+        key = normalize_title_for_dedup(t)
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        combined.append(t)
+        if len(combined) >= _MAX_SEED_TOPICS:
+            break
+    return combined
+
+
+def _build_adapters(enabled: list[str], jiphy_client: JiphyClient) -> list[SourceAdapter]:
+    out: list[SourceAdapter] = []
+    for name in enabled:
+        if name == "arxiv":
+            out.append(ArxivAdapter())
+        elif name == "hackernews":
+            out.append(HackerNewsAdapter())
+        elif name == "jiphyeonjeon":
+            out.append(JiphyeonjeonSourceAdapter(jiphy_client))
+        elif name == "huggingface_papers":
+            out.append(HuggingFacePapersAdapter())
+        else:
+            log.warning("unknown source %r — skipping (Phase B.5 candidate)", name)
+    return out
+
+
+def _merge_and_dedupe(
+    source_results: dict[str, list[CandidateItem]],
+) -> list[CandidateItem]:
+    """Round-robin merge across sources with academic + non-academic dedup."""
+
+    seen_ids: set[str] = set()
+    seen_titles: set[str] = set()
+    out: list[CandidateItem] = []
+
+    iters = {name: iter(items) for name, items in source_results.items()}
+    while iters:
+        exhausted: list[str] = []
+        for name, it in list(iters.items()):
+            try:
+                item = next(it)
+            except StopIteration:
+                exhausted.append(name)
+                continue
+
+            if item.arxiv_id:
+                token = f"arxiv:{item.arxiv_id.lower()}"
+                if token in seen_ids:
+                    continue
+                seen_ids.add(token)
+            elif item.doi:
+                token = f"doi:{item.doi.lower()}"
+                if token in seen_ids:
+                    continue
+                seen_ids.add(token)
+            else:
+                t = normalize_title_for_dedup(item.title)
+                if t and t in seen_titles:
+                    continue
+                if t:
+                    seen_titles.add(t)
+            out.append(item)
+        for name in exhausted:
+            iters.pop(name, None)
+    return out
+
+
+def _build_embed_client(settings: Settings) -> EmbeddingClient:
+    dr = settings.daily_research
+    assert dr is not None
+    base = settings.openclaw.base_url.rstrip("/")
+    endpoint = dr.cluster.embedding_endpoint
+    # Avoid /v1/v1/embeddings if base already ends in /v1
+    if endpoint.startswith("/v1/") and base.endswith("/v1"):
+        endpoint = endpoint[3:]
+    url = base + endpoint
+    return EmbeddingClient(
+        url=url,
+        token=settings.openclaw.token,
+        model=dr.cluster.embedding_model,
+        timeout_sec=settings.openclaw.timeout_sec,
+    )
+
+
+def _load_default_soul(store: StateStore) -> str | None:
+    if not store.souls_dir.exists():
+        return None
+    candidates = sorted(store.souls_dir.glob("*.md"))
+    if not candidates:
+        return None
+    try:
+        return candidates[0].read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _raw_payload(
+    result: RunResult,
+    deep_reports: list[DeepReport],
+    skipped: list[SkippedCluster],
+) -> dict[str, Any]:
+    return {
+        "wall_clock_sec": result.wall_clock_sec,
+        "source_stats": result.source_stats,
+        "candidate_count": result.candidate_count,
+        "cluster_count": result.cluster_count,
+        "deep_success_count": result.deep_success_count,
+        "used_fallback": result.used_fallback,
+        "deep_reports": [
+            {
+                "cluster_id": r.cluster_id,
+                "topic": r.topic,
+                "success": r.success,
+                "exit_code": r.exit_code,
+                "artifact_path": str(r.artifact_path) if r.artifact_path else None,
+                "main_report_path": str(r.main_report_path) if r.main_report_path else None,
+                "last_completed_stage": r.last_completed_stage,
+                "last_completed_name": r.last_completed_name,
+                "wall_clock_sec": r.wall_clock_sec,
+                "error": r.error,
+            }
+            for r in deep_reports
+        ],
+        "skipped": [
+            {"cluster_id": s.cluster.id, "label": s.cluster.label, "reason": s.reason}
+            for s in skipped
+        ],
+    }
+
+
+__all__ = ["RunResult", "run_daily_research"]
