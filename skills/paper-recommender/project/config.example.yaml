@@ -112,48 +112,49 @@ weekly_report:
   year_start: null
   year_end: null
 
-# daily_research:
-#   # Multi-source daily research pipeline (academic + tech web). Optional —
-#   # when this section is absent the legacy daily/weekly modes run as before.
-#   #
-#   # Phase B v1 ships 4 adapters: arxiv, hackernews, jiphyeonjeon,
-#   # huggingface_papers (HF Daily Papers — replaces the dead Papers With Code
-#   # API). Phase B.5 will add semantic_scholar, github_trending, rss.
-#   sources:
-#     enabled:
-#       - arxiv
-#       - hackernews
-#       - jiphyeonjeon
-#       - huggingface_papers
-#     max_per_source: 50
-#     year_from: 2024
-#     timeout_sec: 30.0
-#     rss_feeds: []  # for the (future) rss adapter
-#   cluster:
-#     # Clusters candidate items via OpenClaw gateway embeddings. The gateway
-#     # exposes an OpenAI-compatible /v1/embeddings endpoint, so no extra
-#     # python deps are required.
-#     max_clusters: 3
-#     embedding_model: openclaw/clawbridge
-#     embedding_endpoint: /v1/embeddings
-#   deep:
-#     # Each surviving cluster is handed off to AutoResearchClaw for a
-#     # multi-minute deep run. Empirical 25-35 min per topic. concurrency=1
-#     # keeps the single OpenClaw gateway worker from contending with itself.
-#     enabled: true
-#     concurrency: 1
-#     timeout_sec: 2400        # 40 min hard cap per topic (>= empirical max)
-#     mode: full-auto          # researchclaw HITL mode; "express" is faster but shallower
-#     run_topic_script: ~/.openclaw/workspace/projects/AutoResearchClaw/skills/researchclaw/run-topic.sh
-#     artifacts_root: ~/.openclaw/workspace/projects/AutoResearchClaw/artifacts
-#   auth:
-#     # Login-based auth replaces the static JIPHYEONJEON_TOKEN. Set
-#     # JIPHYEONJEON_USERNAME and JIPHYEONJEON_PASSWORD in the EC2 .env;
-#     # the dataclass stores only env-var names so secrets never enter config.
-#     base_url: https://jiphyeonjeon.kr
-#     username_env: JIPHYEONJEON_USERNAME
-#     password_env: JIPHYEONJEON_PASSWORD
-#     timeout_sec: 30.0
-#   # Days a cluster is suppressed from a deep-run after it last got one,
-#   # so the same dominant topic doesn't eat a deep slot every day.
-#   deep_seen_cooldown_days: 7
+daily_research:
+  # Multi-source daily research pipeline (academic + tech web). Active by
+  # default — when this section is absent the legacy daily/weekly modes run
+  # as before. Activated by `paper-recommender daily-research` subcommand.
+  #
+  # Phase B v1 ships 4 adapters: arxiv, hackernews, jiphyeonjeon,
+  # huggingface_papers (HF Daily Papers — replaces the dead Papers With Code
+  # API). Phase B.5 will add semantic_scholar, github_trending, rss.
+  sources:
+    enabled:
+      - arxiv
+      - hackernews
+      - jiphyeonjeon
+      - huggingface_papers
+    max_per_source: 50
+    year_from: 2024
+    timeout_sec: 30.0
+    rss_feeds: []  # for the (future) rss adapter
+  cluster:
+    # Clusters candidate items via OpenClaw gateway embeddings. The gateway
+    # exposes an OpenAI-compatible /v1/embeddings endpoint, so no extra
+    # python deps are required.
+    max_clusters: 3
+    embedding_model: openclaw/clawbridge
+    embedding_endpoint: /v1/embeddings
+  deep:
+    # Each surviving cluster is handed off to AutoResearchClaw for a
+    # multi-minute deep run. Empirical 25-35 min per topic. concurrency=1
+    # keeps the single OpenClaw gateway worker from contending with itself.
+    enabled: true
+    concurrency: 1
+    timeout_sec: 2400        # 40 min hard cap per topic (>= empirical max)
+    mode: full-auto          # researchclaw HITL mode; "express" is faster but shallower
+    run_topic_script: ~/.openclaw/workspace/skills/researchclaw/run-topic.sh
+    artifacts_root: ~/.openclaw/workspace/projects/AutoResearchClaw/artifacts
+  auth:
+    # Login-based auth replaces the static JIPHYEONJEON_TOKEN. Set
+    # JIPHYEONJEON_USERNAME and JIPHYEONJEON_PASSWORD in the EC2 .env;
+    # the dataclass stores only env-var names so secrets never enter config.
+    base_url: https://jiphyeonjeon.kr
+    username_env: JIPHYEONJEON_USERNAME
+    password_env: JIPHYEONJEON_PASSWORD
+    timeout_sec: 30.0
+  # Days a cluster is suppressed from a deep-run after it last got one,
+  # so the same dominant topic doesn't eat a deep slot every day.
+  deep_seen_cooldown_days: 7

@@ -25,9 +25,17 @@ class JiphyAuthError(RuntimeError):
 
 @runtime_checkable
 class TokenProvider(Protocol):
-    """Anything that can hand out a current access_token on demand."""
+    """Anything that can hand out a current access_token on demand.
+
+    The ``invalidate()`` hook lets callers force a refresh when the cached
+    token is rejected (typically on a 401). Implementations that have no
+    cache (e.g. ``StaticTokenProvider``) implement it as a no-op so the
+    Protocol contract holds.
+    """
 
     async def get_token(self) -> str: ...
+
+    def invalidate(self) -> None: ...
 
 
 class StaticTokenProvider:
@@ -40,6 +48,12 @@ class StaticTokenProvider:
 
     async def get_token(self) -> str:
         return self._token
+
+    def invalidate(self) -> None:
+        # Static tokens cannot be refreshed — the caller will get the same
+        # token on the next get_token() call. We accept the no-op so the
+        # _authed_request 401-retry path doesn't crash on AttributeError.
+        return None
 
 
 class LoginTokenProvider:
@@ -141,13 +155,23 @@ class LoginTokenProvider:
             )
         return token
 
-    @staticmethod
-    def _extract_detail(resp: httpx.Response) -> str:
+    # Defensive redaction of credential-shaped tokens in any backend echo.
+    # The backend SHOULDN'T echo the password, but we defang anyway so a
+    # misbehaving server never plants a credential in our logs.
+    _REDACT_RE = __import__("re").compile(
+        r"(?i)(password|passwd|secret|token|bearer)[\"'\s:=]+\S+"
+    )
+
+    @classmethod
+    def _extract_detail(cls, resp: httpx.Response) -> str:
         try:
             data = resp.json()
             if isinstance(data, dict):
-                return str(data.get("detail") or data)
+                detail = str(data.get("detail") or data)
+                return cls._REDACT_RE.sub("[REDACTED]", detail)[:200]
         except ValueError:
             pass
         text = resp.text or ""
-        return text[:200] if text else "<empty body>"
+        if not text:
+            return "<empty body>"
+        return cls._REDACT_RE.sub("[REDACTED]", text)[:200]

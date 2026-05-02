@@ -76,13 +76,36 @@ SubprocessRunner = Callable[[list[str], float], Awaitable[tuple[int, bytes, byte
 # ─────────────────── helpers shared with caller ───────────────────
 
 
+_TOPIC_MAX_CHARS = 200
+
+
 def cluster_topic_for_deep(cluster: Cluster) -> str:
-    """Build the topic string passed to ``run-topic.sh``."""
+    """Build the topic string passed to ``run-topic.sh``.
+
+    Defense-in-depth sanitization: even though ``asyncio.create_subprocess_exec``
+    + the ``"$*"`` quoting in ``run-topic.sh`` already prevent shell injection,
+    we additionally strip control characters and a leading ``-`` so the topic
+    can never be mistaken for a CLI flag if a future shell-script edit drops
+    the quotes. Inputs include LLM-generated cluster labels and public paper
+    titles — both attacker-influenced.
+    """
+
     if cluster.label and cluster.label.strip():
-        return cluster.label.strip()
-    if cluster.centroid_keywords:
-        return ", ".join(cluster.centroid_keywords[:5])
-    return f"cluster-{cluster.id}"
+        raw = cluster.label.strip()
+    elif cluster.centroid_keywords:
+        raw = ", ".join(cluster.centroid_keywords[:5])
+    else:
+        return f"cluster-{cluster.id}"
+
+    sanitized = (
+        raw.replace("\x00", "")
+            .replace("\n", " ")
+            .replace("\r", " ")
+            .replace("\t", " ")
+    )
+    sanitized = sanitized.lstrip("-").strip()
+    sanitized = sanitized[:_TOPIC_MAX_CHARS]
+    return sanitized or f"cluster-{cluster.id}"
 
 
 def cluster_dedup_key(cluster: Cluster) -> str:
@@ -159,14 +182,20 @@ async def _run_one(
 
     args = ["bash", str(script), topic]
     t0 = time.monotonic()
+    timed_out = False
+    exit_code = -4
+    stdout: bytes = b""
+    stderr: bytes = b""
     try:
         exit_code, stdout, stderr = await runner(args, settings.timeout_sec)
     except asyncio.TimeoutError:
-        wall = time.monotonic() - t0
-        return _fail(
-            cluster, topic, exit_code=-3, wall=wall,
-            error=f"timeout after {settings.timeout_sec}s",
-        )
+        # Don't bail yet — researchclaw is agentic and often reaches stage-7
+        # SYNTHESIS well before our hard cap. The subprocess was killed but
+        # the artifact dir on disk may already contain a usable synthesis.md.
+        # We fall through to the artifact-discovery path below; if the dir
+        # has stage >= _MIN_USABLE_STAGE we treat the run as a soft success.
+        timed_out = True
+        exit_code = -3
     except OSError as e:
         return _fail(
             cluster, topic, exit_code=-2, wall=0.0,
@@ -180,7 +209,12 @@ async def _run_one(
     artifact = max(new_dirs, key=lambda d: d.stat().st_mtime) if new_dirs else None
 
     if artifact is None:
-        # No new dir = the run produced nothing despite possible exit 0.
+        # No new dir = the run produced nothing.
+        if timed_out:
+            return _fail(
+                cluster, topic, exit_code=-3, wall=wall,
+                error=f"timeout after {settings.timeout_sec}s; no artifact dir produced",
+            )
         return _fail(
             cluster, topic, exit_code=exit_code, wall=wall,
             error=(
@@ -196,6 +230,7 @@ async def _run_one(
         last_stage = 0
 
     if last_stage < _MIN_USABLE_STAGE:
+        prefix = f"timeout after {settings.timeout_sec}s; " if timed_out else ""
         return DeepReport(
             cluster_id=cluster.id, topic=topic, success=False, exit_code=exit_code,
             artifact_path=artifact, last_completed_stage=last_stage,
@@ -203,18 +238,27 @@ async def _run_one(
             main_report_path=None, markdown_excerpt="",
             wall_clock_sec=wall,
             error=(
-                f"completed stage {last_stage} below required {_MIN_USABLE_STAGE}; "
+                f"{prefix}completed stage {last_stage} below required {_MIN_USABLE_STAGE}; "
                 f"stderr: {_safe_decode(stderr)[:500]}"
             ),
         )
 
     main_path, excerpt = _extract_excerpt(artifact)
+    # When timed out but the artifact has a usable synthesis on disk, keep
+    # success=True (the user gets the synthesized content) but record a soft
+    # error string so the daily note's footer can flag the timing issue.
+    soft_error = (
+        f"timed out after {settings.timeout_sec}s but stage {last_stage} reached on disk"
+        if timed_out
+        else ""
+    )
     return DeepReport(
         cluster_id=cluster.id, topic=topic, success=True, exit_code=exit_code,
         artifact_path=artifact, last_completed_stage=last_stage,
         last_completed_name=last_name if isinstance(last_name, str) else "",
         main_report_path=main_path, markdown_excerpt=excerpt,
         wall_clock_sec=wall,
+        error=soft_error,
     )
 
 

@@ -6,32 +6,77 @@ REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
 REMOTE_ARTIFACTS="${REMOTE_ARTIFACTS:-~/.openclaw/workspace/projects/paper-recommender/artifacts/}"
 REMOTE_WEEKLY_ARTIFACTS="${REMOTE_WEEKLY_ARTIFACTS:-${REMOTE_ARTIFACTS%/}/weekly/}"
 REMOTE_FEEDBACK_INBOX="${REMOTE_FEEDBACK_INBOX:-~/.openclaw/workspace/projects/paper-recommender/state/feedback_inbox/}"
-# Backwards-compatible daily target. LOCAL_ROOT is retained for existing callers.
-LOCAL_ROOT="${LOCAL_ROOT:-/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw/recommendations}"
-# Weekly reports are accumulated directly in the PaperReview vault root for now.
+
+# Merged into the existing PaperWiki vault — flat-with-prefix style on pages/
+# and date-folder rsync mirror under the top-level raw/.
+#
+#   {WIKI_ROOT}/raw/{date}/daily-research.md           ← rsync from EC2
+#   {WIKI_ROOT}/pages/autoresearch-index.md            ← catalog
+#   {WIKI_ROOT}/pages/autoresearch-{date}.md           ← daily entry
+#   {WIKI_ROOT}/pages/autoresearch-{date}-papers.md    ← paper cards
+#   {WIKI_ROOT}/pages/autoresearch-topic-{slug}.md     ← topic, append-mode
+WIKI_ROOT="${WIKI_ROOT:-/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki}"
+# autoresearch raw lives under its own raw subdir (papers/ and reviews/ are
+# managed by the bookmark pipeline and shouldn't intermix with the date-folder
+# autoresearch outputs).
+LOCAL_ROOT="${LOCAL_ROOT:-${WIKI_ROOT}/raw/autoresearch}"
+# Weekly reports continue to land in the legacy PaperReview vault for now.
 LOCAL_WEEKLY_ROOT="${LOCAL_WEEKLY_ROOT:-/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/PaperReview}"
 FEEDBACK_LOOKBACK_DAYS="${FEEDBACK_LOOKBACK_DAYS:-7}"
-FEEDBACK_MAX_BYTES="${FEEDBACK_MAX_BYTES:-524288}"   # 512 KB
+FEEDBACK_MAX_BYTES="${FEEDBACK_MAX_BYTES:-524288}"
 
-mkdir -p "$LOCAL_ROOT" "$LOCAL_WEEKLY_ROOT"
-# Use double quotes only around the whole command so ~ expands on the remote
-# shell. (Inner single quotes would freeze the tilde literal — same bug class
-# as the SCP path.)
+WIKI_PUBLISH_PY="${WIKI_PUBLISH_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wiki_publish.py}"
+
+mkdir -p "$LOCAL_ROOT" "$LOCAL_WEEKLY_ROOT" "$WIKI_ROOT/pages"
 ssh -i "$KEY_FILE" "$REMOTE_HOST" "mkdir -p $REMOTE_ARTIFACTS $REMOTE_FEEDBACK_INBOX"
 
-# 1. Pull daily artifacts EC2 -> Obsidian (forward sync, with safety flags).
-# Weekly artifacts are intentionally excluded here and copied to LOCAL_WEEKLY_ROOT
-# below so the weekly research trend log accumulates in the PaperReview vault.
-rsync -az --safe-links --max-size=10M --exclude '/weekly/' \
+# 1. Pull daily artifacts EC2 -> autoresearch/raw/ (verbatim mirror).
+# Excludes:
+#   /weekly/    — weekly trend reports go to a separate Obsidian vault (Phase 2)
+#   profile.md  — pipeline-internal user-profile JSON-rendered-to-md, not wiki content
+#   souls/      — pipeline-internal SOUL profile dir, not wiki content
+#   *.icloud    — iCloud not-yet-downloaded placeholders
+rsync -az --safe-links --max-size=10M \
+  --exclude '/weekly/' \
+  --exclude 'profile.md' \
+  --exclude 'souls/' \
+  --exclude '*.icloud' \
   -e "ssh -i $KEY_FILE" \
   "${REMOTE_HOST}:${REMOTE_ARTIFACTS}" \
   "$LOCAL_ROOT/"
 
-echo "synced daily recommendations to:"
+echo "synced raw artifacts to:"
 echo "  $LOCAL_ROOT"
 
-# 2. Pull weekly trend reports EC2 -> Obsidian PaperReview vault.
-# No --delete: local weekly reports are cumulative by design.
+# 1.5 Decompose each newly-synced daily-research.md into wiki pages.
+# wiki_publish.py is idempotent — it overwrites today's daily entry and the
+# corresponding topic-page sections, accumulating other days untouched.
+if [ ! -f "$WIKI_PUBLISH_PY" ]; then
+  echo "warn: wiki_publish.py not found at $WIKI_PUBLISH_PY — skipping wiki step" >&2
+else
+  published=0
+  for note in "$LOCAL_ROOT"/*/daily-research.md; do
+    [ -e "$note" ] || continue
+    if python3 "$WIKI_PUBLISH_PY" "$note" "$WIKI_ROOT" >/dev/null; then
+      published=$((published + 1))
+    else
+      echo "wiki_publish failed for $note" >&2
+    fi
+  done
+  echo "published $published daily-research notes to wiki:"
+  echo "  $WIKI_ROOT/pages/  (autoresearch-index, autoresearch-{date}, autoresearch-topic-*)"
+fi
+
+# 1.7 Fetch PDFs for autoresearch-recommended papers into raw/papers/.
+PDF_FETCH_PY="${PDF_FETCH_PY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/autoresearch_pdf_fetch.py}"
+if [ -f "$PDF_FETCH_PY" ]; then
+  echo "fetching PDFs for autoresearch papers (latest date only)..."
+  python3 "$PDF_FETCH_PY" "$WIKI_ROOT" 2>&1 | tail -8
+else
+  echo "warn: autoresearch_pdf_fetch.py not found at $PDF_FETCH_PY — skipping PDF fetch"
+fi
+
+# 2. Pull weekly trend reports EC2 -> Obsidian PaperReview vault (unchanged).
 if ssh -i "$KEY_FILE" "$REMOTE_HOST" "test -d ${REMOTE_WEEKLY_ARTIFACTS}"; then
   rsync -az --safe-links --max-size=10M \
     -e "ssh -i $KEY_FILE" \
@@ -45,9 +90,9 @@ else
   echo "  $LOCAL_WEEKLY_ROOT"
 fi
 
-# 3. Push the last N days of recommendations.md back to EC2 feedback_inbox.
-#    Defenses: filename allowlist (single basename), size cap, symlink rejection,
-#    realpath containment check, iCloud placeholder skip.
+# 3. Push the last N days' recommendations.md (legacy) AND daily-research.md
+#    (new) back to EC2 feedback_inbox so the existing feedback parser can
+#    consume markers like [read] / [dislike: X].
 date_at_offset() {
   local n="$1"
   if date -v-1d +%Y-%m-%d >/dev/null 2>&1; then
@@ -57,7 +102,6 @@ date_at_offset() {
   fi
 }
 
-# realpath -m exists on Linux; on macOS we need the python fallback.
 canonical_path() {
   local p="$1"
   if command -v realpath >/dev/null 2>&1; then
@@ -72,51 +116,47 @@ LOCAL_ROOT_REAL="$(canonical_path "$LOCAL_ROOT")"
 pushed=0
 for n in $(seq 0 "$FEEDBACK_LOOKBACK_DAYS"); do
   d="$(date_at_offset "$n")"
-  src="$LOCAL_ROOT/$d/recommendations.md"
   dir="$LOCAL_ROOT/$d"
 
-  # Skip iCloud-not-yet-downloaded placeholders.
-  if [ -f "$src.icloud" ] || [ -f "$dir/.${d}.icloud" ]; then
-    echo "skip: $d note still downloading from iCloud"
-    continue
-  fi
+  for fname in recommendations.md daily-research.md; do
+    src="$dir/$fname"
 
-  if [ ! -e "$src" ]; then
-    continue
-  fi
-
-  # Reject symlinks at either the date dir or the file itself.
-  if [ -L "$dir" ] || [ -L "$src" ]; then
-    echo "skip: $d (symlink rejected)" >&2
-    continue
-  fi
-  if [ ! -f "$src" ]; then
-    continue
-  fi
-
-  # Containment check: realpath must stay under LOCAL_ROOT_REAL.
-  src_real="$(canonical_path "$src")"
-  case "$src_real" in
-    "$LOCAL_ROOT_REAL"/*) ;;
-    *)
-      echo "skip: $src resolves outside LOCAL_ROOT" >&2
+    if [ -f "$src.icloud" ] || [ -f "$dir/.${d}.icloud" ]; then
+      echo "skip: $d $fname still downloading from iCloud"
       continue
-      ;;
-  esac
+    fi
 
-  size="$(wc -c < "$src" | tr -d ' ')"
-  if [ "$size" -gt "$FEEDBACK_MAX_BYTES" ]; then
-    echo "skip oversized feedback note: $d.md ($size bytes > $FEEDBACK_MAX_BYTES)"
-    continue
-  fi
+    [ -e "$src" ] || continue
 
-  # Use ssh-tunneled write instead of scp: scp via SFTP does not expand ~ on
-  # the remote, and shell-quoting the remote path freezes the tilde literal.
-  # ssh "cmd" goes through the remote login shell, which does expand ~.
-  if ssh -i "$KEY_FILE" "$REMOTE_HOST" "cat > $REMOTE_FEEDBACK_INBOX${d}.md" < "$src"; then
-    pushed=$((pushed + 1))
-  else
-    echo "scp failed for $d.md" >&2
-  fi
+    if [ -L "$dir" ] || [ -L "$src" ]; then
+      echo "skip: $d $fname (symlink rejected)" >&2
+      continue
+    fi
+    [ -f "$src" ] || continue
+
+    src_real="$(canonical_path "$src")"
+    case "$src_real" in
+      "$LOCAL_ROOT_REAL"/*) ;;
+      *)
+        echo "skip: $src resolves outside LOCAL_ROOT" >&2
+        continue
+        ;;
+    esac
+
+    size="$(wc -c < "$src" | tr -d ' ')"
+    if [ "$size" -gt "$FEEDBACK_MAX_BYTES" ]; then
+      echo "skip oversized feedback note: $d/$fname ($size bytes > $FEEDBACK_MAX_BYTES)"
+      continue
+    fi
+
+    # Filename in the feedback inbox encodes both date and source so the
+    # parser can disambiguate legacy vs daily-research feedback streams.
+    remote_name="${d}-${fname}"
+    if ssh -i "$KEY_FILE" "$REMOTE_HOST" "cat > $REMOTE_FEEDBACK_INBOX${remote_name}" < "$src"; then
+      pushed=$((pushed + 1))
+    else
+      echo "ssh push failed for $d/$fname" >&2
+    fi
+  done
 done
 echo "pushed $pushed note(s) to feedback inbox: ${REMOTE_FEEDBACK_INBOX}"

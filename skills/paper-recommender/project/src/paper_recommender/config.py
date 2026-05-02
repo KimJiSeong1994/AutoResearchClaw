@@ -172,15 +172,20 @@ class ClusterSettings:
 class DeepBridgeSettings:
     enabled: bool = True
     concurrency: int = 1
-    # Empirical: a single run-topic.sh deep run is 25-35 min. The previous
-    # 480s default was a guaranteed kill before any topic finished. 2400
-    # gives a 40-min hard cap (a comfortable margin over 35).
-    timeout_sec: int = 2400
+    # Empirical 2026-05-02: Real runs hit the 2400s (40 min) cap. researchclaw
+    # is agentic and proceeds to stage 9-10 (EXPERIMENT_DESIGN/CODE_RUN) even
+    # after stage-7 SYNTHESIS is on disk. With deep_bridge now harvesting
+    # artifacts after timeout (when stage >= 7), the cap is a soft cutoff,
+    # not a fail point — but raising it lets researchclaw finish more often.
+    timeout_sec: int = 3600
     # `researchclaw run --mode` knob. `full-auto` = current default behavior.
     # `express` is faster but shallower (untested in this project as of Phase C).
     mode: str = "full-auto"
+    # Verified path on EC2 (2026-05-02): script lives directly under workspace/skills,
+    # NOT under projects/AutoResearchClaw/skills. The script itself cd's into the
+    # AutoResearchClaw project dir before invoking researchclaw.
     run_topic_script: str = (
-        "~/.openclaw/workspace/projects/AutoResearchClaw/skills/researchclaw/run-topic.sh"
+        "~/.openclaw/workspace/skills/researchclaw/run-topic.sh"
     )
     artifacts_root: str = (
         "~/.openclaw/workspace/projects/AutoResearchClaw/artifacts"

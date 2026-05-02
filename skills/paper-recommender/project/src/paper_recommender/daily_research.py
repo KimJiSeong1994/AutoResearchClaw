@@ -240,7 +240,17 @@ async def _run_with_deps(
     deep_reports: list[DeepReport] = []
     if not dry_run and deep_clusters:
         deep_reports = await run_deep_for_clusters(deep_clusters, dr.deep)
-        store.record_deep_seen([cluster_dedup_key(c) for c in deep_clusters])
+        # Record only SUCCESSFUL clusters as deep-seen. If a run fails for
+        # infra reasons (script path, gateway down, partial stage), we want
+        # the cluster eligible to retry tomorrow rather than waiting out the
+        # full cooldown on a failure that wasn't the cluster's fault.
+        successful_keys = [
+            cluster_dedup_key(c)
+            for c, r in zip(deep_clusters, deep_reports)
+            if r.success
+        ]
+        if successful_keys:
+            store.record_deep_seen(successful_keys)
         store.gc_deep_seen(dr.deep_seen_cooldown_days)
     result.deep_success_count = sum(1 for r in deep_reports if r.success)
 
@@ -266,22 +276,89 @@ async def _run_with_deps(
         note_path.write_text(note_md, encoding="utf-8")
         result.paths_written.append(note_path)
 
+        # Per-cluster paper listing — exposes the actual recommended papers
+        # so the user can browse/click without reading the synthesis prose.
+        # Use clusters_obj if cluster_select returned a subset (picked) — we
+        # want EVERY cluster's papers visible, not just the picked ones.
+        all_clusters_for_papers = clusters_obj if clusters_obj else (picked or [])
+        papers_md = _render_papers_md(
+            run_iso=run_iso,
+            clusters=all_clusters_for_papers,
+            skipped=skipped,
+        )
+        papers_path = target_dir / "daily-research-papers.md"
+        papers_path.write_text(papers_md, encoding="utf-8")
+        result.paths_written.append(papers_path)
+
         raw_path = target_dir / "daily-research-raw.json"
         raw_path.write_text(
-            json.dumps(_raw_payload(result, deep_reports, skipped), ensure_ascii=False, indent=2),
+            json.dumps(
+                _raw_payload(result, deep_reports, skipped, all_clusters_for_papers),
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
         result.paths_written.append(raw_path)
 
     result.wall_clock_sec = time.monotonic() - t0
+
+    # Always write last_run_status.json (even on dry-run + even on partial
+    # failure) so an external health-check can spot drift. This is the single
+    # most useful drift signal — it captures candidate count, deep success
+    # rate, fallback usage, and seed coverage in one place.
+    _write_last_run_status(
+        store=store,
+        run_iso=run_iso,
+        result=result,
+        deep_attempted=len(deep_reports),
+        seed_topic_count=len(seed_topics),
+        dry_run=dry_run,
+    )
+
     return result
+
+
+def _write_last_run_status(
+    *,
+    store: StateStore,
+    run_iso: str,
+    result: RunResult,
+    deep_attempted: int,
+    seed_topic_count: int,
+    dry_run: bool,
+) -> None:
+    status = {
+        "timestamp": run_iso,
+        "dry_run": dry_run,
+        "candidate_count": result.candidate_count,
+        "cluster_count": result.cluster_count,
+        "deep_attempted": deep_attempted,
+        "deep_success_count": result.deep_success_count,
+        "used_fallback": result.used_fallback,
+        "source_stats": result.source_stats,
+        "wall_clock_sec": result.wall_clock_sec,
+        "seed_topic_count": seed_topic_count,
+    }
+    try:
+        path = store.root / "last_run_status.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(status, ensure_ascii=False, indent=2))
+    except OSError as e:
+        log.warning("failed to write last_run_status.json: %s", e)
 
 
 # ─────────────── helpers ───────────────
 
 
 async def _build_seed_topics(jiphy_client: JiphyClient, settings: Settings) -> list[str]:
-    """Union of bookmark-derived topics + explicit seed_topics, capped + deduped."""
+    """Union of bookmark-derived topics + explicit seed_topics.
+
+    Bookmarks are sorted **newest-first** by ``created_at`` (when present) so
+    recently-added bookmarks dominate the cap. Without this, the oldest
+    bookmarks would permanently occupy seed slots as the bookmark list grows
+    over weeks of use, drowning out current interests.
+    """
     explicit = list(settings.profile.seed_topics or [])
     bookmark_topics: list[str] = []
     try:
@@ -289,7 +366,16 @@ async def _build_seed_topics(jiphy_client: JiphyClient, settings: Settings) -> l
     except Exception as e:
         log.warning("list_bookmarks failed (using explicit only): %s", e)
         bookmarks = []
-    for bm in bookmarks:
+
+    # Newest-first by created_at (ISO format sorts lexicographically). Empty
+    # or missing created_at sinks to the end so untimestamped legacy bookmarks
+    # don't shadow recent ones.
+    bookmarks_sorted = sorted(
+        bookmarks,
+        key=lambda b: b.get("created_at") or "",
+        reverse=True,
+    )
+    for bm in bookmarks_sorted:
         t = (bm.get("topic") or bm.get("title") or "").strip()
         if t:
             bookmark_topics.append(t)
@@ -393,10 +479,38 @@ def _load_default_soul(store: StateStore) -> str | None:
         return None
 
 
+def _serialize_item(it: CandidateItem) -> dict[str, Any]:
+    return {
+        "source": it.source,
+        "title": it.title,
+        "url": it.url,
+        "abstract": (it.abstract or "")[:400] if it.abstract else None,
+        "authors": list(it.authors),
+        "year": it.year,
+        "venue": it.venue,
+        "arxiv_id": it.arxiv_id,
+        "doi": it.doi,
+        "score": it.score,
+    }
+
+
+def _serialize_cluster(c: Cluster) -> dict[str, Any]:
+    return {
+        "id": c.id,
+        "label": c.label,
+        "summary": c.summary,
+        "size": len(c.items),
+        "centroid_keywords": list(c.centroid_keywords),
+        "coherence": c.coherence,
+        "items": [_serialize_item(it) for it in c.items],
+    }
+
+
 def _raw_payload(
     result: RunResult,
     deep_reports: list[DeepReport],
     skipped: list[SkippedCluster],
+    clusters: list[Cluster],
 ) -> dict[str, Any]:
     return {
         "wall_clock_sec": result.wall_clock_sec,
@@ -405,6 +519,7 @@ def _raw_payload(
         "cluster_count": result.cluster_count,
         "deep_success_count": result.deep_success_count,
         "used_fallback": result.used_fallback,
+        "clusters": [_serialize_cluster(c) for c in clusters],
         "deep_reports": [
             {
                 "cluster_id": r.cluster_id,
@@ -425,6 +540,85 @@ def _raw_payload(
             for s in skipped
         ],
     }
+
+
+def _render_papers_md(
+    *,
+    run_iso: str,
+    clusters: list[Cluster],
+    skipped: list[SkippedCluster],
+) -> str:
+    """Per-cluster human-readable paper listing.
+
+    Sits next to daily-research.md in the same artifacts dir. The wiki_publish
+    step picks it up and embeds the per-cluster paper lists into the daily
+    entry and the topic pages.
+    """
+
+    today = run_iso[:10]
+    lines: list[str] = [
+        "---",
+        f'date: "{today}"',
+        "type: daily-papers",
+        "tags:",
+        "  - autoresearch",
+        "  - papers",
+        "---",
+        "",
+        f"# Recommended Papers — {today}",
+        "",
+        f"_{sum(len(c.items) for c in clusters)} candidates across {len(clusters)} clusters._",
+        "",
+    ]
+
+    skipped_ids = {s.cluster.id for s in skipped}
+
+    for c in clusters:
+        label = c.label or f"Cluster {c.id}"
+        marker = " (skipped: deep-seen recently)" if c.id in skipped_ids else ""
+        lines.append(f"## {label} ({len(c.items)} items){marker}")
+        lines.append("")
+        if c.summary:
+            lines.append(f"_{c.summary}_")
+            lines.append("")
+        if not c.items:
+            lines.append("_(no items)_")
+            lines.append("")
+            continue
+        for it in c.items:
+            lines.extend(_render_paper_bullet(it))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_paper_bullet(it: CandidateItem) -> list[str]:
+    title = (it.title or "(untitled)").replace("|", "\\|")
+    meta_bits: list[str] = [it.source]
+    if it.year:
+        meta_bits.append(str(it.year))
+    if it.venue:
+        meta_bits.append(it.venue)
+    meta = " · ".join(meta_bits)
+    head = f"- **{title}**  _({meta})_"
+
+    out = [head]
+    if it.authors:
+        authors = ", ".join(list(it.authors)[:6])
+        if len(it.authors) > 6:
+            authors += f", +{len(it.authors) - 6} more"
+        out.append(f"  - {authors}")
+    if it.url:
+        out.append(f"  - [{it.url}]({it.url})")
+    if it.arxiv_id:
+        out.append(f"  - arxiv: `{it.arxiv_id}`")
+    if it.abstract:
+        # Preserve a substantial snippet so the LLM Wiki has real content.
+        # CandidateItem.abstract is already capped at MAX_ABSTRACT_CHARS=1500
+        # at construction; here we expose up to ~600 chars in the bullet.
+        snippet = it.abstract.strip().replace("\n", " ")[:600]
+        out.append(f"  - _{snippet}_" + ("…" if len(it.abstract or "") > 600 else ""))
+    return out
 
 
 __all__ = ["RunResult", "run_daily_research"]

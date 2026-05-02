@@ -17,10 +17,14 @@ KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
 REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
 REMOTE_PROJECT="${REMOTE_PROJECT:-~/.openclaw/workspace/projects/paper-recommender}"
 
-# Defaults — KST 08:00 = UTC 23:00 (legacy), KST 07:30 = UTC 22:30 (deep-research, earlier
-# so the 75-105 min wall-clock lands by ~09:00-10:00 KST).
+# Defaults:
+# - legacy `daily` at KST 08:00 = UTC 23:00.
+# - `daily-research` at KST 05:00 = UTC 20:00 — starts 3h before legacy so the
+#   75-105 min serial deep run finishes by ~UTC 21:45 (KST 06:45) without
+#   contending with the legacy cron's gateway worker. Lands well before
+#   normal 09:00 KST Obsidian check.
 CRON_SCHEDULE_DAILY="${CRON_SCHEDULE_DAILY:-0 23 * * *}"
-CRON_SCHEDULE_DAILY_RESEARCH="${CRON_SCHEDULE_DAILY_RESEARCH:-30 22 * * *}"
+CRON_SCHEDULE_DAILY_RESEARCH="${CRON_SCHEDULE_DAILY_RESEARCH:-0 20 * * *}"
 
 MODE="daily"
 while [ $# -gt 0 ]; do

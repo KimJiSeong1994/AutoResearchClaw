@@ -186,6 +186,44 @@ def test_provider_401_then_401_raises() -> None:
         asyncio.run(go())
 
 
+def test_static_token_provider_survives_401_retry() -> None:
+    """Regression for HIGH-1: a 401 with StaticTokenProvider must not crash
+    on AttributeError when _authed_request calls provider.invalidate()."""
+    from paper_recommender.jiphyeonjeon_auth import StaticTokenProvider
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("authorization") or "")
+        if len(calls) == 1:
+            return httpx.Response(401, json={"detail": "expired (will retry)"})
+        return httpx.Response(200, json=[])
+
+    settings = JiphySettings(base_url="https://jiphy.test", token_env="UNUSED", timeout_sec=10)
+    provider = StaticTokenProvider("STATIC_TOKEN")
+
+    jc = JiphyClient.__new__(JiphyClient)
+    jc._settings = settings  # type: ignore[attr-defined]
+    jc._provider = provider  # type: ignore[attr-defined]
+    transport = httpx.MockTransport(handler)
+    jc._client = httpx.AsyncClient(  # type: ignore[attr-defined]
+        transport=transport,
+        base_url=settings.base_url,
+        timeout=settings.timeout_sec,
+        headers={"Accept": "application/json", "User-Agent": "paper-recommender/0.1"},
+    )
+
+    async def go():
+        async with jc:
+            return await jc.list_bookmarks()
+
+    # Before the fix this raised AttributeError on provider.invalidate().
+    # After: invalidate() is a no-op, retry succeeds with the same static token.
+    result = asyncio.run(go())
+    assert result == []
+    assert calls == ["Bearer STATIC_TOKEN", "Bearer STATIC_TOKEN"]
+
+
 def test_search_via_provider_path_works() -> None:
     """search() must also flow through _authed_request."""
     bodies: list[dict] = []

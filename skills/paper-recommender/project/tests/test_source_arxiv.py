@@ -138,3 +138,16 @@ def test_arxiv_empty_topics_returns_empty() -> None:
 
     items = asyncio.run(_make_adapter(handler).fetch([], SourceLimits()))
     assert items == []
+
+
+def test_arxiv_uses_https() -> None:
+    """The adapter must hit arxiv via HTTPS, not plaintext HTTP — public data
+    but tampering could pollute downstream cluster labels."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["scheme"] = request.url.scheme
+        return httpx.Response(200, content=_SAMPLE_FEED)
+
+    asyncio.run(_make_adapter(handler).fetch(["x"], SourceLimits()))
+    assert captured["scheme"] == "https"

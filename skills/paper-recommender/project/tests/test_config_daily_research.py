@@ -101,8 +101,10 @@ def test_parse_uses_documented_defaults_when_subsections_missing() -> None:
     # deep defaults
     assert s.deep.enabled is True
     assert s.deep.concurrency == 1
-    # Empirical: a deep run is 25-35 min. Default must accommodate the upper end.
-    assert s.deep.timeout_sec == 2400
+    # Empirical 2026-05-02: real runs frequently exceed 40 min (the 2400s cap),
+    # but our timeout-aware artifact recovery extracts stage-7+ content even on
+    # cap-hit. 3600s gives researchclaw a fighting chance to finish stage 8-9.
+    assert s.deep.timeout_sec == 3600
     assert s.deep.mode == "full-auto"
 
     # auth defaults
@@ -122,7 +124,7 @@ def test_parse_with_only_unrecognized_keys_returns_full_defaults() -> None:
     assert s is not None
     assert s.sources.enabled == []
     assert s.cluster.max_clusters == 3
-    assert s.deep.timeout_sec == 2400
+    assert s.deep.timeout_sec == 3600
     assert s.deep_seen_cooldown_days == 7
 
 

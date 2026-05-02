@@ -241,21 +241,75 @@ def test_full_pipeline_writes_artifacts_when_not_dry_run(tmp_path: Path, monkeyp
         )
     )
 
-    # Two paths written: note + raw json
-    assert len(result.paths_written) == 2
-    note_path = next(p for p in result.paths_written if p.suffix == ".md")
+    # Three paths written: daily-research.md + daily-research-papers.md + raw.json
+    assert len(result.paths_written) == 3
+    md_paths = sorted([p for p in result.paths_written if p.suffix == ".md"])
     raw_path = next(p for p in result.paths_written if p.suffix == ".json")
-    assert note_path.exists()
-    assert raw_path.exists()
+    note_path = next(p for p in md_paths if p.name == "daily-research.md")
+    papers_path = next(p for p in md_paths if p.name == "daily-research-papers.md")
+    assert note_path.exists() and papers_path.exists() and raw_path.exists()
     assert note_path.parent.name == "2026-05-02"
 
     note = note_path.read_text(encoding="utf-8")
     assert "# Daily Research — 2026-05-02" in note
     assert "Synthesis for cluster" in note
 
+    papers = papers_path.read_text(encoding="utf-8")
+    assert "# Recommended Papers — 2026-05-02" in papers
+    # Each candidate item appears with title in the per-cluster bullet list
+    assert "Paper One" in papers
+    assert "Paper Two" in papers
+
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
     assert raw["candidate_count"] == 4
     assert raw["deep_success_count"] == 2
+    # Raw now embeds clusters with item details so downstream tooling
+    # (wiki_publish, dashboards, etc.) doesn't need a second source.
+    assert "clusters" in raw and len(raw["clusters"]) > 0
+    assert all("items" in c for c in raw["clusters"])
+    titles = {it["title"] for c in raw["clusters"] for it in c["items"]}
+    assert "Paper One" in titles
+
+
+def test_pipeline_records_deep_seen_only_for_successful_runs(tmp_path: Path, monkeypatch) -> None:
+    """Failed deep runs (infra bug, gateway down, etc.) must NOT be recorded
+    as deep-seen — otherwise the cluster is locked out for the full cooldown
+    even though the failure had nothing to do with the cluster's content."""
+
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+
+    async def stub_deep(clusters, settings, **kw):
+        # Return mixed: first succeeds, second fails (infra reason).
+        return [
+            DeepReport(
+                cluster_id=clusters[0].id, topic="ok-topic", success=True, exit_code=0,
+                artifact_path=None, last_completed_stage=9,
+                last_completed_name="EXPERIMENT_DESIGN",
+                main_report_path=None, markdown_excerpt="ok", wall_clock_sec=1.0,
+            ),
+            DeepReport(
+                cluster_id=clusters[1].id, topic="fail-topic", success=False, exit_code=-1,
+                artifact_path=None, last_completed_stage=0, last_completed_name="",
+                main_report_path=None, markdown_excerpt="",
+                wall_clock_sec=0.0, error="run_topic_script not found",
+            ),
+        ]
+
+    monkeypatch.setattr(dr_mod, "run_deep_for_clusters", stub_deep)
+
+    asyncio.run(run_daily_research(config, dry_run=False, **_factories()))
+
+    from paper_recommender.state import StateStore
+    from paper_recommender.sources._util import normalize_title_for_dedup
+
+    store = StateStore(tmp_path / "state")
+    seen = store.load_deep_seen()
+    # The successful cluster's key (from "Even cluster" label) should be present.
+    # The failed cluster's key should NOT be present.
+    assert any("even" in k for k in seen.keys()), f"successful key missing: {seen}"
+    assert not any("odd" in k for k in seen.keys()), f"failed key wrongly recorded: {seen}"
 
 
 def test_pipeline_skips_deep_seen_clusters(tmp_path: Path, monkeypatch) -> None:
@@ -361,6 +415,97 @@ def test_missing_daily_research_section_raises(tmp_path: Path, monkeypatch) -> N
 
     with pytest.raises(RuntimeError, match="daily_research"):
         asyncio.run(run_daily_research(config, dry_run=True, **_factories()))
+
+
+def test_last_run_status_json_written_on_success(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+
+    async def stub_deep(clusters, settings, **kw):
+        return [
+            DeepReport(
+                cluster_id=c.id, topic=f"T{c.id}", success=True, exit_code=0,
+                artifact_path=None, last_completed_stage=9,
+                last_completed_name="EXPERIMENT_DESIGN",
+                main_report_path=None, markdown_excerpt="ok", wall_clock_sec=1.0,
+            ) for c in clusters
+        ]
+
+    monkeypatch.setattr(dr_mod, "run_deep_for_clusters", stub_deep)
+
+    asyncio.run(run_daily_research(config, dry_run=False, **_factories()))
+
+    status_path = tmp_path / "state" / "last_run_status.json"
+    assert status_path.exists()
+    status = json.loads(status_path.read_text())
+    assert status["candidate_count"] == 4
+    assert status["cluster_count"] == 2
+    assert status["deep_attempted"] == 2
+    assert status["deep_success_count"] == 2
+    assert status["used_fallback"] is False
+    assert status["dry_run"] is False
+    assert "timestamp" in status
+    assert "wall_clock_sec" in status
+    assert status["seed_topic_count"] >= 1
+    assert status["source_stats"] == {"arxiv": 4}
+
+
+def test_last_run_status_written_on_dry_run_too(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+
+    asyncio.run(run_daily_research(config, dry_run=True, **_factories()))
+
+    status_path = tmp_path / "state" / "last_run_status.json"
+    assert status_path.exists()
+    status = json.loads(status_path.read_text())
+    assert status["dry_run"] is True
+
+
+def test_seed_topics_sorted_newest_bookmark_first(tmp_path: Path, monkeypatch) -> None:
+    """Critic finding I4: bookmarks must be sorted newest-first by created_at
+    so old bookmarks don't permanently crowd out the seed cap."""
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+
+    class _OrderedClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return None
+
+        async def list_bookmarks(self):
+            # Server returns oldest-first; pipeline must reverse.
+            return [
+                {"topic": "OLDEST", "created_at": "2024-01-01T00:00:00"},
+                {"topic": "MIDDLE", "created_at": "2025-06-15T00:00:00"},
+                {"topic": "NEWEST", "created_at": "2026-04-30T00:00:00"},
+            ]
+
+        async def search(self, *a, **kw):
+            return []
+
+    captured: list[list[str]] = []
+
+    class _CapturingAdapter:
+        name = "arxiv"
+
+        async def fetch(self, seed_topics, limits):
+            captured.append(list(seed_topics))
+            return []
+
+    factories = _factories()
+    factories["_client_factory"] = lambda jiphy_settings, p: _OrderedClient()
+    factories["_adapter_factory"] = lambda enabled, jh: [_CapturingAdapter()]
+
+    asyncio.run(run_daily_research(config, dry_run=True, **factories))
+    seeds = captured[0]
+    # NEWEST must come before OLDEST in the seed list.
+    newest_idx = seeds.index("NEWEST")
+    oldest_idx = seeds.index("OLDEST")
+    assert newest_idx < oldest_idx, f"newest should precede oldest, got {seeds}"
 
 
 def test_seed_topics_dedupe_bookmarks_and_explicit(tmp_path: Path, monkeypatch) -> None:

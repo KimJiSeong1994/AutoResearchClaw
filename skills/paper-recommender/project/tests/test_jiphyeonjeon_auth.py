@@ -137,6 +137,37 @@ def test_login_non_json_body_raises() -> None:
         asyncio.run(p.get_token())
 
 
+def test_extract_detail_redacts_credential_shaped_text() -> None:
+    """If the backend echoes a token/password in its error body we must not
+    plant it in our exception messages or logs."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"detail": "rejected: password=hunter2 token=abc.def.ghi"},
+        )
+
+    p = _make_provider(handler)
+    with pytest.raises(JiphyAuthError) as exc_info:
+        asyncio.run(p.get_token())
+    msg = str(exc_info.value)
+    assert "[REDACTED]" in msg
+    assert "hunter2" not in msg
+    assert "abc.def.ghi" not in msg
+
+
+def test_extract_detail_redacts_when_body_is_plain_text() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="error: bearer xxxxx.yyyy.zzz expired")
+
+    p = _make_provider(handler)
+    with pytest.raises(JiphyAuthError) as exc_info:
+        asyncio.run(p.get_token())
+    msg = str(exc_info.value)
+    assert "[REDACTED]" in msg
+    assert "xxxxx.yyyy.zzz" not in msg
+
+
 def test_login_network_error_raises_with_clear_message() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("dns failure")
@@ -173,6 +204,22 @@ def test_login_attempts_capped_at_max() -> None:
         asyncio.run(p.get_token())
     msg = str(exc_info.value).lower()
     assert "exhausted" in msg or "refusing" in msg
+
+
+def test_static_token_provider_invalidate_is_noop() -> None:
+    """``invalidate()`` must exist on the static path so 401-retry doesn't crash."""
+    p = StaticTokenProvider("STATIC")
+    p.invalidate()  # must not raise
+    # Token unchanged — static provider has no cache to invalidate.
+    assert asyncio.run(p.get_token()) == "STATIC"
+
+
+def test_login_token_provider_satisfies_protocol_with_invalidate() -> None:
+    p = LoginTokenProvider(base_url="https://x", username="u", password="p")
+    assert isinstance(p, TokenProvider)
+    # invalidate is part of the Protocol contract now.
+    assert hasattr(p, "invalidate")
+    p.invalidate()  # must not raise
 
 
 def test_login_attempts_counter_does_not_increment_on_cached_hit() -> None:

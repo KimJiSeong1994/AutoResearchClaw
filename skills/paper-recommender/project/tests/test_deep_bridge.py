@@ -99,6 +99,41 @@ def test_cluster_dedup_key_normalizes() -> None:
     assert cluster_dedup_key(a) == cluster_dedup_key(b)
 
 
+def test_cluster_topic_strips_newline() -> None:
+    """Newlines in LLM-generated labels could split arg parsing in some shells."""
+    c = _cluster(label="Topic A\nTopic B")
+    assert "\n" not in cluster_topic_for_deep(c)
+
+
+def test_cluster_topic_strips_leading_dash() -> None:
+    """Leading dashes could be misinterpreted as a CLI flag if quoting is lost."""
+    c = _cluster(label="--config /etc/passwd")
+    topic = cluster_topic_for_deep(c)
+    assert not topic.startswith("-")
+    assert "config" in topic  # rest of content survives
+
+
+def test_cluster_topic_strips_null_byte_and_tab() -> None:
+    c = _cluster(label="topic\x00with\tnulls")
+    topic = cluster_topic_for_deep(c)
+    assert "\x00" not in topic
+    assert "\t" not in topic
+
+
+def test_cluster_topic_caps_length() -> None:
+    """Pathologically long labels are truncated to keep argv predictable."""
+    c = _cluster(label="x" * 5000)
+    topic = cluster_topic_for_deep(c)
+    assert len(topic) <= 200
+
+
+def test_cluster_topic_only_dashes_falls_back_to_id() -> None:
+    """A label that's ENTIRELY dashes leaves no content after lstrip → fallback."""
+    c = _cluster(label="---")
+    topic = cluster_topic_for_deep(c)
+    assert topic == f"cluster-{c.id}"
+
+
 # ─────────────── happy-path ───────────────
 
 
@@ -203,7 +238,8 @@ def test_partial_run_below_min_stage_marks_failed(tmp_path: Path) -> None:
     assert "below required" in r.error
 
 
-def test_timeout_marks_failed(tmp_path: Path) -> None:
+def test_timeout_with_no_artifact_marks_failed(tmp_path: Path) -> None:
+    """Timeout AND no rc-* dir produced → fail (researchclaw never started)."""
     settings = _settings(tmp_path, timeout_sec=1)
 
     async def stub_runner(args, timeout):
@@ -216,6 +252,64 @@ def test_timeout_marks_failed(tmp_path: Path) -> None:
     assert r.success is False
     assert r.exit_code == -3
     assert "timeout" in r.error.lower()
+
+
+def test_timeout_with_stage_9_artifact_marks_success(tmp_path: Path) -> None:
+    """Real-world case (2026-05-02): subprocess timed out but the rc-* dir
+    has stage-9 EXPERIMENT_DESIGN reached AND stage-07/synthesis.md on disk.
+
+    The synthesis IS the deliverable; later stages (8-10) are extra polish.
+    Treat as success with a soft-error footer note.
+    """
+    settings = _settings(tmp_path, timeout_sec=2)
+
+    async def stub_runner(args, timeout):
+        # Simulate researchclaw producing stage-9 artifact, then getting killed
+        # by our wait_for cap mid-stage-10.
+        _make_artifact(
+            Path(settings.artifacts_root),
+            "rc-20260502-090000-timeout1",
+            last_stage=9,
+            last_name="EXPERIMENT_DESIGN",
+            synthesis="Real synthesis content recovered after timeout.",
+        )
+        raise asyncio.TimeoutError()
+
+    reports = asyncio.run(
+        run_deep_for_clusters([_cluster()], settings, runner=stub_runner)
+    )
+    r = reports[0]
+    assert r.success is True, f"expected success, got error={r.error!r}"
+    assert r.last_completed_stage == 9
+    assert "Real synthesis content recovered" in r.markdown_excerpt
+    # Soft error string preserved so daily_note can flag the timing
+    assert "timed out" in r.error.lower()
+    assert "stage 9" in r.error
+
+
+def test_timeout_with_stage_4_artifact_still_fails(tmp_path: Path) -> None:
+    """Timeout AND artifact only at stage-4 (below MIN_USABLE_STAGE=7) → fail."""
+    settings = _settings(tmp_path, timeout_sec=1)
+
+    async def stub_runner(args, timeout):
+        _make_artifact(
+            Path(settings.artifacts_root),
+            "rc-20260502-090000-timeout2",
+            last_stage=4,
+            last_name="LITERATURE_COLLECT",
+            synthesis=None,
+        )
+        raise asyncio.TimeoutError()
+
+    reports = asyncio.run(
+        run_deep_for_clusters([_cluster()], settings, runner=stub_runner)
+    )
+    r = reports[0]
+    assert r.success is False
+    assert r.last_completed_stage == 4
+    # Error mentions both timeout and the stage shortfall
+    assert "timeout" in r.error.lower()
+    assert "stage 4" in r.error or "below required" in r.error
 
 
 def test_continue_on_failure(tmp_path: Path) -> None:

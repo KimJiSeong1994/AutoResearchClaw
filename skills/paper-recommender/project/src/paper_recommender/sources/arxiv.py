@@ -19,7 +19,7 @@ from paper_recommender.sources import CandidateItem, SourceLimits
 
 log = logging.getLogger(__name__)
 
-_ARXIV_API = "http://export.arxiv.org/api/query"
+_ARXIV_API = "https://export.arxiv.org/api/query"
 _ATOM_NS = {
     "a": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",

@@ -19,6 +19,11 @@ def _setup_logging(verbose: bool) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Pin httpx loggers to WARNING regardless of root level. Future httpx
+    # versions may log Authorization headers at DEBUG; we never want those
+    # in our log files.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 async def _cmd_doctor(config_path: Path) -> int:
