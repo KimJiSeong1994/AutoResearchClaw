@@ -115,6 +115,20 @@ accidentally. See
 `skills/paper-recommender/newsletter-config.example.json` for a non-secret
 configuration template.
 
+### Direct Gmail API collection
+
+For direct Gmail collection, create/download an OAuth Desktop client secret as
+`~/Desktop/paper-wiki/google-oauth/credentials.json`, then run once interactively:
+
+```bash
+python3 skills/paper-recommender/gmail_newsletter_fetch.py --auth --publish
+```
+
+This opens Google's consent screen for the official `gmail.readonly` scope and
+stores the refresh token at `~/Desktop/paper-wiki/google-oauth/token.json`
+(outside git, chmod 600). After that, the 07:00 KST daily job will use the
+existing token when no local `.mbox`/`.jsonl` export is present.
+
 ## Configuration knobs
 
 `~/.openclaw/workspace/projects/paper-recommender/config.yaml`:

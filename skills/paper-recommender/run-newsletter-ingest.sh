@@ -34,8 +34,22 @@ resolve_source() {
 
 SOURCE_PATH="$(resolve_source || true)"
 if [ -z "$SOURCE_PATH" ] || [ ! -f "$SOURCE_PATH" ]; then
+  if [ -f "$HOME/Desktop/paper-wiki/google-oauth/token.json" ]; then
+    echo "no local export found; fetching Gmail via existing OAuth token"
+    if python3 "$SKILL_DIR/gmail_newsletter_fetch.py" \
+      --token "$HOME/Desktop/paper-wiki/google-oauth/token.json" \
+      --credentials "$HOME/Desktop/paper-wiki/google-oauth/credentials.json" \
+      --date "$RUN_DATE" \
+      --sender-allowlist "$NEWSLETTER_SENDER_ALLOWLIST" \
+      --max-results "$NEWSLETTER_MAX_MESSAGES" \
+      --publish; then
+      exit 0
+    fi
+    echo "Gmail API fetch failed; no newsletter export published"
+    exit 0
+  fi
   echo "newsletter ingest skipped: no .mbox/.jsonl export found in $NEWSLETTER_SOURCE_DIR"
-  echo "drop exports here: $NEWSLETTER_SOURCE_DIR"
+  echo "drop exports here: $NEWSLETTER_SOURCE_DIR or authorize Gmail API with gmail_newsletter_fetch.py --auth"
   exit 0
 fi
 
