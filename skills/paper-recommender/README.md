@@ -80,6 +80,34 @@ bash skills/paper-recommender/status.sh             # last run + cron entry
 bash skills/paper-recommender/deploy.sh             # rsync code-only updates (no venv touch)
 ```
 
+## Newsletter intake (local export only)
+
+Google-account newsletter ingestion is intentionally a local-export boundary:
+the repo does not authenticate to Gmail, store OAuth credentials, or read a
+private mailbox. Export or sanitize the newsletters yourself (for example Gmail
+Takeout `.mbox` or JSONL with `subject`, `from`, `date`, and `body` fields),
+then publish extracted research/post links into the LLM Wiki:
+
+```bash
+python3 skills/paper-recommender/newsletter_ingest.py \
+  --source ~/Downloads/google-newsletters.mbox \
+  --wiki-root "/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki" \
+  --sender-allowlist "newsletter,research,arxiv"
+```
+
+Outputs are raw-first and idempotent for the selected date:
+
+- `raw/newsletters/YYYY-MM-DD/items.json`
+- `pages/newsletter-ingest-YYYY-MM-DD.md`
+
+Only message metadata and extracted URLs are written; full email bodies and
+credentials are omitted from wiki outputs. The CLI requires either
+`--sender-allowlist` or the explicit `--allow-all-senders` override, and caps
+source size/message count by default so broad Gmail exports are not processed
+accidentally. See
+`skills/paper-recommender/newsletter-config.example.json` for a non-secret
+configuration template.
+
 ## Configuration knobs
 
 `~/.openclaw/workspace/projects/paper-recommender/config.yaml`:

@@ -1,0 +1,13 @@
+{
+  "source": "~/Downloads/google-newsletters.mbox",
+  "wiki_root": "/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki",
+  "sender_allowlist": [
+    "newsletter",
+    "research",
+    "arxiv"
+  ],
+  "notes": [
+    "Example only; do not commit real mailbox exports or credentials.",
+    "newsletter_ingest.py reads local .mbox/.jsonl exports and does not authenticate to Google."
+  ]
+}
