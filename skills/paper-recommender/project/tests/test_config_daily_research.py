@@ -34,6 +34,13 @@ def test_parse_full_block_produces_correct_settings() -> None:
             "year_from": 2024,
             "timeout_sec": 20.0,
             "rss_feeds": ["https://a.test/rss", "https://b.test/atom"],
+            "google_newsletters": {
+                "mbox_paths": ["~/Downloads/takeout.mbox"],
+                "sender_allowlist": ["newsletter.example"],
+                "subject_allowlist": ["research"],
+                "max_messages": 25,
+                "max_mbox_bytes": 12345,
+            },
         },
         "cluster": {
             "max_clusters": 5,
@@ -65,6 +72,11 @@ def test_parse_full_block_produces_correct_settings() -> None:
         max_per_source=30, year_from=2024, timeout_sec=20.0
     )
     assert s.sources.rss_feeds == ["https://a.test/rss", "https://b.test/atom"]
+    assert s.sources.google_newsletters.mbox_paths == ["~/Downloads/takeout.mbox"]
+    assert s.sources.google_newsletters.sender_allowlist == ["newsletter.example"]
+    assert s.sources.google_newsletters.subject_allowlist == ["research"]
+    assert s.sources.google_newsletters.max_messages == 25
+    assert s.sources.google_newsletters.max_mbox_bytes == 12345
 
     # cluster
     assert isinstance(s.cluster, ClusterSettings)
@@ -117,6 +129,11 @@ def test_parse_uses_documented_defaults_when_subsections_missing() -> None:
     assert s.sources.enabled == ["arxiv"]
     assert s.sources.limits == SourceLimits()
     assert s.sources.rss_feeds == []
+    assert s.sources.google_newsletters.mbox_paths == []
+    assert s.sources.google_newsletters.sender_allowlist == []
+    assert s.sources.google_newsletters.subject_allowlist == []
+    assert s.sources.google_newsletters.max_messages == 200
+    assert s.sources.google_newsletters.max_mbox_bytes == 50 * 1024 * 1024
 
 
 def test_parse_with_only_unrecognized_keys_returns_full_defaults() -> None:
@@ -129,13 +146,17 @@ def test_parse_with_only_unrecognized_keys_returns_full_defaults() -> None:
 
 
 def test_parse_deep_seen_cooldown_override() -> None:
-    s = _parse_daily_research({"sources": {"enabled": ["arxiv"]}, "deep_seen_cooldown_days": 14})
+    s = _parse_daily_research(
+        {"sources": {"enabled": ["arxiv"]}, "deep_seen_cooldown_days": 14}
+    )
     assert s is not None
     assert s.deep_seen_cooldown_days == 14
 
 
 def test_jiphy_auth_settings_username_property_reads_env(monkeypatch) -> None:
-    auth = JiphyAuthSettings(base_url="https://x.kr", username_env="JH_TEST_USER", password_env="JH_TEST_PW")
+    auth = JiphyAuthSettings(
+        base_url="https://x.kr", username_env="JH_TEST_USER", password_env="JH_TEST_PW"
+    )
     monkeypatch.setenv("JH_TEST_USER", "alice")
     monkeypatch.setenv("JH_TEST_PW", "hunter2")
     assert auth.username == "alice"
@@ -144,7 +165,12 @@ def test_jiphy_auth_settings_username_property_reads_env(monkeypatch) -> None:
 
 def test_jiphy_auth_settings_missing_env_raises(monkeypatch) -> None:
     monkeypatch.delenv("JH_NOT_SET_USER", raising=False)
-    auth = JiphyAuthSettings(base_url="https://x.kr", username_env="JH_NOT_SET_USER", password_env="JH_NOT_SET_PW")
+    auth = JiphyAuthSettings(
+        base_url="https://x.kr",
+        username_env="JH_NOT_SET_USER",
+        password_env="JH_NOT_SET_PW",
+    )
     import pytest
+
     with pytest.raises(RuntimeError):
         _ = auth.username

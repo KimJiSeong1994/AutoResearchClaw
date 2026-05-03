@@ -42,3 +42,11 @@ venv/
 # --- backups ---
 *.bak
 *.bak.*
+
+# Google/Gmail newsletter local exports and OAuth artifacts
+config.yaml
+*.mbox
+*.eml
+credentials.json
+token.json
+client_secret*.json

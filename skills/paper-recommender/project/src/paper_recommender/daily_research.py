@@ -41,6 +41,7 @@ from paper_recommender.sources._util import normalize_title_for_dedup
 from paper_recommender.sources.arxiv import ArxivAdapter
 from paper_recommender.sources.hackernews import HackerNewsAdapter
 from paper_recommender.sources.huggingface_papers import HuggingFacePapersAdapter
+from paper_recommender.sources.google_newsletters import GoogleNewsletterMboxAdapter
 from paper_recommender.sources.jiphyeonjeon import JiphyeonjeonSourceAdapter
 from paper_recommender.state import StateStore
 
@@ -177,14 +178,18 @@ async def _run_with_deps(
 
     # ── 2. adapters ──
     if adapter_factory is None:
-        adapters = _build_adapters(dr.sources.enabled, jiphy_client)
+        adapters = _build_adapters(dr.sources.enabled, jiphy_client, settings)
     else:
         adapters = adapter_factory(dr.sources.enabled, jiphy_client)
     if not adapters:
         log.warning("no source adapters enabled; writing empty note")
 
     # ── 3. fetch ──
-    source_results = await fetch_all_sources(adapters, seed_topics, dr.sources.limits) if adapters else {}
+    source_results = (
+        await fetch_all_sources(adapters, seed_topics, dr.sources.limits)
+        if adapters
+        else {}
+    )
     result.source_stats = {name: len(items) for name, items in source_results.items()}
     flat = _merge_and_dedupe(source_results)
     result.candidate_count = len(flat)
@@ -226,7 +231,9 @@ async def _run_with_deps(
                 )
         except Exception as e:
             log.warning("select_top_clusters failed; using size-fallback: %s", e)
-            picked = sorted(clusters_obj, key=lambda c: -len(c.items))[: dr.cluster.max_clusters]
+            picked = sorted(clusters_obj, key=lambda c: -len(c.items))[
+                : dr.cluster.max_clusters
+            ]
 
         cooldown = dr.deep_seen_cooldown_days
         for c in picked:
@@ -351,7 +358,9 @@ def _write_last_run_status(
 # ─────────────── helpers ───────────────
 
 
-async def _build_seed_topics(jiphy_client: JiphyClient, settings: Settings) -> list[str]:
+async def _build_seed_topics(
+    jiphy_client: JiphyClient, settings: Settings
+) -> list[str]:
     """Union of bookmark-derived topics + explicit seed_topics.
 
     Bookmarks are sorted **newest-first** by ``created_at`` (when present) so
@@ -393,7 +402,11 @@ async def _build_seed_topics(jiphy_client: JiphyClient, settings: Settings) -> l
     return combined
 
 
-def _build_adapters(enabled: list[str], jiphy_client: JiphyClient) -> list[SourceAdapter]:
+def _build_adapters(
+    enabled: list[str],
+    jiphy_client: JiphyClient,
+    settings: Settings | None = None,
+) -> list[SourceAdapter]:
     out: list[SourceAdapter] = []
     for name in enabled:
         if name == "arxiv":
@@ -404,6 +417,17 @@ def _build_adapters(enabled: list[str], jiphy_client: JiphyClient) -> list[Sourc
             out.append(JiphyeonjeonSourceAdapter(jiphy_client))
         elif name == "huggingface_papers":
             out.append(HuggingFacePapersAdapter())
+        elif name == "google_newsletters":
+            if settings is None or settings.daily_research is None:
+                log.warning(
+                    "google_newsletters requires daily_research settings — skipping"
+                )
+                continue
+            out.append(
+                GoogleNewsletterMboxAdapter(
+                    settings.daily_research.sources.google_newsletters
+                )
+            )
         else:
             log.warning("unknown source %r — skipping (Phase B.5 candidate)", name)
     return out
@@ -527,7 +551,9 @@ def _raw_payload(
                 "success": r.success,
                 "exit_code": r.exit_code,
                 "artifact_path": str(r.artifact_path) if r.artifact_path else None,
-                "main_report_path": str(r.main_report_path) if r.main_report_path else None,
+                "main_report_path": str(r.main_report_path)
+                if r.main_report_path
+                else None,
                 "last_completed_stage": r.last_completed_stage,
                 "last_completed_name": r.last_completed_name,
                 "wall_clock_sec": r.wall_clock_sec,

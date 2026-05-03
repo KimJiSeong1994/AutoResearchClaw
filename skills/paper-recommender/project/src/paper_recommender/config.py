@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from paper_recommender.sources import SourceLimits
+from paper_recommender.sources.google_newsletters import GoogleNewsletterSettings
 
 
 @dataclass
@@ -159,6 +160,9 @@ class SourceSettings:
     enabled: list[str] = field(default_factory=list)
     limits: SourceLimits = field(default_factory=SourceLimits)
     rss_feeds: list[str] = field(default_factory=list)
+    google_newsletters: GoogleNewsletterSettings = field(
+        default_factory=GoogleNewsletterSettings
+    )
 
 
 @dataclass
@@ -184,12 +188,8 @@ class DeepBridgeSettings:
     # Verified path on EC2 (2026-05-02): script lives directly under workspace/skills,
     # NOT under projects/AutoResearchClaw/skills. The script itself cd's into the
     # AutoResearchClaw project dir before invoking researchclaw.
-    run_topic_script: str = (
-        "~/.openclaw/workspace/skills/researchclaw/run-topic.sh"
-    )
-    artifacts_root: str = (
-        "~/.openclaw/workspace/projects/AutoResearchClaw/artifacts"
-    )
+    run_topic_script: str = "~/.openclaw/workspace/skills/researchclaw/run-topic.sh"
+    artifacts_root: str = "~/.openclaw/workspace/projects/AutoResearchClaw/artifacts"
 
 
 @dataclass
@@ -218,6 +218,7 @@ def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings |
     deep_raw = raw.get("deep") or {}
     auth_raw = raw.get("auth") or {}
 
+    google_newsletters_raw = sources_raw.get("google_newsletters") or {}
     sources = SourceSettings(
         enabled=list(sources_raw.get("enabled", [])),
         limits=SourceLimits(
@@ -226,6 +227,15 @@ def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings |
             timeout_sec=float(sources_raw.get("timeout_sec", 30.0)),
         ),
         rss_feeds=list(sources_raw.get("rss_feeds", [])),
+        google_newsletters=GoogleNewsletterSettings(
+            mbox_paths=list(google_newsletters_raw.get("mbox_paths", [])),
+            sender_allowlist=list(google_newsletters_raw.get("sender_allowlist", [])),
+            subject_allowlist=list(google_newsletters_raw.get("subject_allowlist", [])),
+            max_messages=int(google_newsletters_raw.get("max_messages", 200)),
+            max_mbox_bytes=int(
+                google_newsletters_raw.get("max_mbox_bytes", 50 * 1024 * 1024)
+            ),
+        ),
     )
     cluster = ClusterSettings(
         max_clusters=int(cluster_raw.get("max_clusters", 3)),
@@ -238,7 +248,9 @@ def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings |
         concurrency=int(deep_raw.get("concurrency", deep_default.concurrency)),
         timeout_sec=int(deep_raw.get("timeout_sec", deep_default.timeout_sec)),
         mode=str(deep_raw.get("mode", deep_default.mode)),
-        run_topic_script=str(deep_raw.get("run_topic_script", deep_default.run_topic_script)),
+        run_topic_script=str(
+            deep_raw.get("run_topic_script", deep_default.run_topic_script)
+        ),
         artifacts_root=str(deep_raw.get("artifacts_root", deep_default.artifacts_root)),
     )
     auth_default = JiphyAuthSettings()

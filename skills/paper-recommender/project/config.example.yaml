@@ -130,6 +130,17 @@ daily_research:
     year_from: 2024
     timeout_sec: 30.0
     rss_feeds: []  # for the (future) rss adapter
+    # Safe Google-account newsletter intake: no live Gmail access or OAuth.
+    # Export newsletters with Google Takeout (Mail mbox) or another local mbox
+    # flow, then put real paths/allowlists only in the deployed config.yaml.
+    # Keep disabled until explicit local export paths and sender/subject
+    # allowlists are configured.
+    google_newsletters:
+      mbox_paths: []
+      sender_allowlist: []
+      subject_allowlist: []
+      max_messages: 200
+      max_mbox_bytes: 52428800
   cluster:
     # Clusters candidate items via OpenClaw gateway embeddings. The gateway
     # exposes an OpenAI-compatible /v1/embeddings endpoint, so no extra
