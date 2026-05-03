@@ -104,6 +104,14 @@ PAGE
   fi
 
   echo
+  echo "syncing local newsletter exports to LLM Wiki if present"
+  if bash "$SKILL_DIR/run-newsletter-ingest.sh"; then
+    echo "newsletter ingest step completed"
+  else
+    echo "newsletter ingest step failed; continuing after daily research"
+  fi
+
+  echo
   echo "done"
   date
 } >>"$LOG_FILE" 2>&1

@@ -100,6 +100,13 @@ Outputs are raw-first and idempotent for the selected date:
 - `raw/newsletters/YYYY-MM-DD/items.json`
 - `pages/newsletter-ingest-YYYY-MM-DD.md`
 
+Local daily setup is already wired through `run-daily-research-and-sync.sh`:
+place the latest export at `~/Desktop/paper-wiki/newsletter-exports/` (for
+example `google-newsletters.mbox`). The 07:00 KST job will pick the newest
+`.mbox` / `.jsonl` file in that folder after the daily research sync. Override
+`NEWSLETTER_SOURCE`, `NEWSLETTER_SOURCE_DIR`, or `NEWSLETTER_SENDER_ALLOWLIST`
+when running the script manually if needed.
+
 Only message metadata and extracted URLs are written; full email bodies and
 credentials are omitted from wiki outputs. The CLI requires either
 `--sender-allowlist` or the explicit `--allow-all-senders` override, and caps
