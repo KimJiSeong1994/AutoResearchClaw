@@ -14,6 +14,9 @@ class Briefing:
     source_path: Path
 
 
+_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+
+
 def _strip_frontmatter(text: str) -> str:
     if not text.startswith("---\n"):
         return text
@@ -109,6 +112,10 @@ def _shorten(value: object, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip(" ,.;") + "…"
+
+
+def _link_line(label: str, url: str) -> str:
+    return f"↳ [{_shorten(label, 52)}]({url})"
 
 
 def _paper_link_from_raw(paper: dict[str, object]) -> tuple[str, str] | None:
@@ -226,7 +233,8 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
         f"_source: {source_path.name} + raw.json_",
         f"_basis: {basis}_",
         "",
-        f"**{title}**",
+        _DIVIDER,
+        f"## {title}",
     ]
 
     conclusion = _plain_line(_raw_string(report_dict.get("at_a_glance")))
@@ -235,7 +243,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     if conclusion:
         if len(conclusion) > 420:
             conclusion = conclusion[:397].rstrip(" ,.") + "…"
-        lines += ["", f"**한 줄 결론**\n{conclusion}"]
+        lines += ["", f"### 🧭 한 줄 결론\n{conclusion}"]
 
     candidates = raw.get("candidates")
     fallback_candidates = [c for c in candidates if isinstance(c, dict)] if isinstance(candidates, list) else []
@@ -243,7 +251,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     clusters = report_dict.get("clusters")
     rendered_clusters = 0
     if isinstance(clusters, list):
-        lines += ["", "**관련 최신 동향**"]
+        lines += ["", f"{_DIVIDER}", "### 🔬 관련 최신 동향"]
         for cluster in clusters:
             if not isinstance(cluster, dict):
                 continue
@@ -251,19 +259,20 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
             if not title_text:
                 continue
             links = _cluster_source_links(cluster, candidates_by_id, fallback_candidates)
-            source = "; ".join(f"{label}: {url}" for label, url in links) if links else "원문 raw.json 참고"
+            source_lines = [_link_line(label, url) for label, url in links] or ["↳ 원문 raw.json 참고"]
             lines += [
                 f"",
-                f"**{rendered_clusters + 1}. {title_text}**",
-                f"- 핵심 요약: {_shorten(cluster.get('summary'), 170)}",
-                f"- 기술 포인트: {_shorten(cluster.get('why_it_matters'), 170)}",
-                f"- 출처 링크: {source}",
+                f"### {rendered_clusters + 1}. {_shorten(title_text, 72)}",
+                f"- **핵심 요약**: {_shorten(cluster.get('summary'), 155)}",
+                f"- **기술 포인트**: {_shorten(cluster.get('why_it_matters'), 155)}",
+                f"- **출처 링크**: {source_lines[0]}",
             ]
+            lines.extend(source_lines[1:])
             rendered_clusters += 1
             if rendered_clusters >= 3:
                 break
 
-    lines += ["", "자세한 SOUL/Profile 기반 연구 동향 원문은 PaperWiki/weekly report에 보존되어 있습니다."]
+    lines += ["", _DIVIDER, "📚 자세한 원문은 PaperWiki/weekly report에 보존되어 있습니다."]
     body = "\n".join(lines)
     if len(body) > max_chars:
         body = body[: max(0, max_chars - 24)].rstrip() + "\n…(briefing truncated)"
@@ -324,19 +333,13 @@ def render_briefing(source_path: Path, *, max_chars: int = 1800) -> Briefing:
         header = "**집현전-Claw 관심논문·Profile Fallback 연구 동향 브리핑**"
     else:
         header = "**집현전-Claw 업계 동향 브리핑**"
-    lines = [
-        header,
-        f"_source: {source_path.name}_",
-    ]
+    lines = [header, f"_source: {source_path.name}_"]
     if is_weekly_report:
         basis = "EC2 paper-recommender SOUL + 집현전 검색 evidence" if is_weekly_soul else "EC2 paper-recommender profile fallback + 집현전 검색 evidence"
         if soul_fallback:
             basis += " (SOUL fallback)"
         lines.append(f"_basis: {basis}_")
-    lines += [
-        "",
-        f"**{title}**",
-    ]
+    lines += ["", _DIVIDER, f"## {title}"]
     if conclusion:
         if is_weekly_report and len(conclusion) > 420:
             conclusion = conclusion[:397].rstrip(" ,.") + "…"
