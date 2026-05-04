@@ -7,11 +7,12 @@
  * - Requires SENDER_ALLOWLIST before processing mail.
  *
  * Required Script Properties:
- * - DISCORD_CHANNEL_ID: Discord channel snowflake for 아카이브룸/뉴스레타-수집
- * - DISCORD_BOT_TOKEN: Discord bot token with Send Messages permission
+ * - DISCORD_WEBHOOK_URL: Discord channel webhook URL for 아카이브룸/뉴스레타-수집 (recommended)
  * - SENDER_ALLOWLIST: comma-separated sender/domain substrings
  *
  * Optional Script Properties:
+ * - DISCORD_CHANNEL_ID: Discord channel snowflake fallback
+ * - DISCORD_BOT_TOKEN: Discord bot token fallback; Apps Script may hit Discord/Cloudflare 40333
  * - GMAIL_QUERY: Gmail search query, default newer_than:7d
  * - MAX_THREADS: default 50
  */
@@ -50,14 +51,15 @@ const TOPIC_RULES = [
 
 function runNewsletterArchive() {
   const props = PropertiesService.getScriptProperties();
+  const webhookUrl = props.getProperty('DISCORD_WEBHOOK_URL') || '';
   const channelId = props.getProperty('DISCORD_CHANNEL_ID') || DEFAULT_DISCORD_CHANNEL_ID;
-  const token = props.getProperty('DISCORD_BOT_TOKEN');
+  const token = props.getProperty('DISCORD_BOT_TOKEN') || '';
   const senderAllowlist = csv_(props.getProperty('SENDER_ALLOWLIST') || '');
   const query = props.getProperty('GMAIL_QUERY') || DEFAULT_GMAIL_QUERY;
   const maxThreads = Number(props.getProperty('MAX_THREADS') || DEFAULT_MAX_THREADS);
 
-  if (!token) {
-    throw new Error('DISCORD_BOT_TOKEN script property is required.');
+  if (!webhookUrl && !token) {
+    throw new Error('DISCORD_WEBHOOK_URL is recommended; otherwise DISCORD_BOT_TOKEN is required as fallback.');
   }
   if (senderAllowlist.length === 0) {
     throw new Error('SENDER_ALLOWLIST is required; refusing to sweep private mail.');
@@ -65,7 +67,7 @@ function runNewsletterArchive() {
 
   const items = collectNewsletterItems_(query, maxThreads, senderAllowlist);
   const briefing = renderBriefing_(items, query);
-  postDiscord_(channelId, token, briefing);
+  postDiscord_(channelId, token, briefing, webhookUrl);
 }
 
 function collectNewsletterItems_(query, maxThreads, senderAllowlist) {
@@ -149,14 +151,18 @@ function renderBriefing_(items, query) {
   return truncate_(lines.join('\n'), 1900);
 }
 
-function postDiscord_(channelId, token, content) {
-  const response = UrlFetchApp.fetch('https://discord.com/api/v10/channels/' + channelId + '/messages', {
+function postDiscord_(channelId, token, content, webhookUrl) {
+  const url = webhookUrl || ('https://discord.com/api/v10/channels/' + channelId + '/messages');
+  const options = {
     method: 'post',
     contentType: 'application/json',
-    headers: { Authorization: 'Bot ' + token },
     payload: JSON.stringify({ content: content }),
     muteHttpExceptions: true
-  });
+  };
+  if (!webhookUrl) {
+    options.headers = { Authorization: 'Bot ' + token };
+  }
+  const response = UrlFetchApp.fetch(url, options);
   const status = response.getResponseCode();
   if (status < 200 || status >= 300) {
     throw new Error('Discord post failed: HTTP ' + status + ' ' + response.getContentText());
