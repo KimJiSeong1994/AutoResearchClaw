@@ -34,6 +34,8 @@ const MAX_ARTICLE_CHARS = 5000;
 const MAX_ARTICLE_FETCHES = 35;
 const MIN_ARTICLE_TEXT_CHARS = 220;
 const MIN_CONTEXT_SENTENCE_CHARS = 45;
+const URL_CONTEXT_WINDOW = 260;
+const DISCORD_SAFE_CHAR_LIMIT = 1850;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -140,10 +142,11 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
       }
       rankNewsletterUrls_(urls).slice(0, 5).forEach(url => {
         const shouldFetchDetail = fetchArticleDetails && detailFetchCount < MAX_ARTICLE_FETCHES;
-        const articleText = shouldFetchDetail ? fetchArticleText_(url) : '';
+        const articleDetail = shouldFetchDetail ? fetchArticleDetail_(url) : emptyArticleDetail_();
+        const articleText = articleDetail.text || '';
         if (shouldFetchDetail) detailFetchCount += 1;
-        const sourceContext = extractUrlContext_(body, url);
-        const detailBasis = articleText || sourceContext || snippet;
+        const sourceContext = contextByUrl[url] || extractUrlContext_(body, url);
+        const detailBasis = articleText || articleDetail.title || articleDetail.description || sourceContext || snippet;
         const key = subject + '|' + url;
         if (seen[key]) {
           return;
@@ -157,6 +160,8 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
           receivedAt: receivedAt,
           topic: classifyTopic_(subject + ' ' + detailBasis + ' ' + url),
           snippet: snippet,
+          articleTitle: articleDetail.title,
+          articleDescription: articleDetail.description,
           sourceContext: sourceContext,
           articleText: articleText
         });
@@ -192,31 +197,53 @@ function renderBriefing_(items, query) {
   }
 
   const grouped = groupByTopic_(items);
+  let stoppedForLength = false;
   Object.keys(grouped).sort((a, b) => detailedItems_(grouped[b]).length - detailedItems_(grouped[a]).length || a.localeCompare(b)).forEach(topic => {
+    if (stoppedForLength) return;
     const detailed = detailedItems_(grouped[topic]);
     if (detailed.length === 0) return;
-    lines.push('', '### ' + topic);
+    const topicHeader = ['', '### ' + topic];
+    if (!appendWithinLimit_(lines, topicHeader, DISCORD_SAFE_CHAR_LIMIT)) {
+      stoppedForLength = true;
+      return;
+    }
+    let renderedInTopic = 0;
     detailed.slice(0, 3).forEach(item => {
-      const title = truncate_(plain_(item.title), 90);
+      if (stoppedForLength) return;
+      const title = truncate_(plain_(item.articleTitle || item.title), 90);
       const summary = buildSummaryLines_(item);
-      lines.push('- 주요 아티클/논문: ' + title);
-      lines.push('  - 핵심: ' + summary[0]);
-      lines.push('  - 기술 포인트: ' + summary[1]);
-      lines.push('  - 의미/근거: ' + summary[2]);
+      const block = [
+        '- 주요 아티클/논문: ' + title,
+        '  - 핵심: ' + summary[0],
+        '  - 기술 포인트: ' + summary[1],
+        '  - 의미/근거: ' + summary[2]
+      ];
       if (item.url) {
-        lines.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
+        block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
       } else {
-        lines.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
+        block.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
       }
+      if (!appendWithinLimit_(lines, block, DISCORD_SAFE_CHAR_LIMIT)) {
+        stoppedForLength = true;
+        return;
+      }
+      renderedInTopic += 1;
     });
-    const remaining = detailed.length - 3;
+    const remaining = detailed.length - renderedInTopic;
     if (remaining > 0) {
-      lines.push('- 추가 항목: ' + remaining + '개는 다음 실행에서 재검토');
+      appendWithinLimit_(lines, ['- 추가 항목: ' + remaining + '개는 다음 실행에서 재검토'], DISCORD_SAFE_CHAR_LIMIT);
     }
   });
 
-  lines.push('', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.');
-  return truncate_(lines.join('\n'), 1900);
+  appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.'], DISCORD_SAFE_CHAR_LIMIT);
+  return lines.join('\n');
+}
+
+function appendWithinLimit_(lines, block, limit) {
+  const next = lines.concat(block);
+  if (next.join('\n').length > limit) return false;
+  block.forEach(line => lines.push(line));
+  return true;
 }
 
 
@@ -302,7 +329,7 @@ function scoreNewsletterUrl_(url) {
   highValueHosts.forEach(h => { if (lower.indexOf(h) !== -1) score += 12; });
   ['/blog/', '/research/', '/paper', '/papers', '/post', '/posts', '/article', '/articles', '/p/'].forEach(p => { if (lower.indexOf(p) !== -1) score += 5; });
   ['linkedin.com/comm/pulse', 'beehiiv.com/p/', 'medium.com/', 'substack.com/p/'].forEach(p => { if (lower.indexOf(p) !== -1) score += 4; });
-  ['unsubscribe', 'preferences', 'privacy', 'terms', 'login', 'signin', 'signup', 'account', 'settings', 'share', 'facebook.com', 'twitter.com', 'x.com/', 'instagram.com'].forEach(p => { if (lower.indexOf(p) !== -1) score -= 20; });
+  ['unsubscribe', 'preferences', 'privacy', 'terms', 'login', 'signin', 'signup', 'account', 'settings', 'share', 'help', 'support.google.com', 'myaccount.google.com', 'facebook.com', 'twitter.com', 'x.com/', 'instagram.com'].forEach(p => { if (lower.indexOf(p) !== -1) score -= 20; });
   if (/\.(png|jpg|jpeg|gif|webp|svg|css|js)(\?|$)/i.test(lower)) score -= 30;
   return score;
 }
@@ -311,9 +338,17 @@ function sanitizeUrl_(url) {
   return canonicalizeNewsletterUrl_(String(url || '').replace(/[.,;:!?)]}>'"]+$/g, ''));
 }
 
+function emptyArticleDetail_() {
+  return { title: '', description: '', text: '' };
+}
+
 function fetchArticleText_(url) {
+  return fetchArticleDetail_(url).text;
+}
+
+function fetchArticleDetail_(url) {
   const fetchUrl = normalizeArticleFetchUrl_(url);
-  if (!isFetchableArticleUrl_(fetchUrl)) return '';
+  if (!isFetchableArticleUrl_(fetchUrl)) return emptyArticleDetail_();
   try {
     const response = UrlFetchApp.fetch(fetchUrl, {
       method: 'get',
@@ -324,13 +359,13 @@ function fetchArticleText_(url) {
       }
     });
     const status = response.getResponseCode();
-    if (status < 200 || status >= 300) return '';
+    if (status < 200 || status >= 300) return emptyArticleDetail_();
     const headers = response.getAllHeaders ? response.getAllHeaders() : {};
     const contentType = String(headers['Content-Type'] || headers['content-type'] || '').toLowerCase();
-    if (contentType && contentType.indexOf('text/html') === -1 && contentType.indexOf('text/plain') === -1) return '';
-    return extractArticleText_(response.getContentText()).slice(0, MAX_ARTICLE_CHARS);
+    if (contentType && contentType.indexOf('text/html') === -1 && contentType.indexOf('text/plain') === -1) return emptyArticleDetail_();
+    return extractArticleDetail_(response.getContentText());
   } catch (e) {
-    return '';
+    return emptyArticleDetail_();
   }
 }
 
@@ -344,6 +379,8 @@ function isFetchableArticleUrl_(url) {
     'linkedin.com',
     'mail.google.com',
     'accounts.google.com',
+    'support.google.com',
+    'myaccount.google.com',
     'localhost',
     '127.0.0.1',
     '0.0.0.0',
@@ -370,6 +407,10 @@ function isPrivateHost_(host) {
 }
 
 function extractArticleText_(html) {
+  return extractArticleDetail_(html).text;
+}
+
+function extractArticleDetail_(html) {
   const raw = String(html || '');
   const meta = extractMetaDescription_(raw);
   const title = extractMetaTitle_(raw);
@@ -383,10 +424,25 @@ function extractArticleText_(html) {
   ].map(plain_).filter(Boolean);
   const best = candidates.sort((a, b) => b.length - a.length)[0] || '';
   const parts = [];
-  [title, meta, best].forEach(part => {
+  [meta, best].forEach(part => {
     if (part && parts.join(' ').indexOf(part) === -1) parts.push(part);
   });
-  return articleSentences_(parts.join('. ')).join('. ');
+  return {
+    title: truncate_(cleanSummarySentence_(title), 120),
+    description: truncate_(cleanSummarySentence_(meta), 240),
+    text: removeTitleDuplicateSentences_(articleSentences_(parts.join('. ')), title).join('. ').slice(0, MAX_ARTICLE_CHARS)
+  };
+}
+
+function removeTitleDuplicateSentences_(sentences, title) {
+  const titleKey = normalizeSentenceKey_(title || '');
+  if (!titleKey) return sentences;
+  return sentences.filter(sentence => {
+    const key = normalizeSentenceKey_(sentence);
+    if (key === titleKey) return false;
+    if (key === (titleKey + ' ' + titleKey).slice(0, key.length)) return false;
+    return true;
+  });
 }
 
 function extractJsonLdArticleBody_(html) {
@@ -475,16 +531,17 @@ function hasArticleDetail_(item) {
 
 function buildSummaryLines_(item) {
   if (item.summaryLines && item.summaryLines.length === 3) return item.summaryLines;
-  const publicText = item.articleText || '';
+  const publicText = joinUniqueText_([item.articleDescription, item.articleText]);
   const usablePublicText = publicText.length >= MIN_ARTICLE_TEXT_CHARS ? publicText : '';
-  const selected = selectRoleSummaryLines_(usablePublicText, item.topic || '', item.title || '', item.url || '', Boolean(usablePublicText));
+  const displayTitle = item.articleTitle || item.title || '';
+  const selected = selectRoleSummaryLines_(usablePublicText, item.topic || '', displayTitle, item.url || '', Boolean(usablePublicText));
   if (selected.length === 3) return selected.map(s => truncate_(cleanSummarySentence_(s), 145));
-  return buildStructuredFallbackSummary_(item, Boolean(usablePublicText));
+  return [];
 }
 
 function selectRoleSummaryLines_(text, topic, title, url, hasPublicArticleText) {
   const sentences = articleSentences_(text);
-  if (sentences.length < 3) return buildFallbackSummaryLines_(text, topic, title, url, sentences);
+  if (sentences.length < 3) return buildEvidenceFallbackSummaryLines_(text, topic, title, url, sentences);
   const roles = [
     { name: 'core', terms: ['announce', 'announces', 'launch', 'launches', 'release', 'releases', 'introduce', 'introduces', 'propose', 'proposes', 'present', 'presents', 'new', 'first', '핵심', '공개', '출시', '발표', '제안'] },
     { name: 'technical', terms: ['architecture', 'framework', 'model', 'dataset', 'training', 'inference', 'retrieval', 'rag', 'agent', 'benchmark', 'evaluation', 'github', 'open-source', 'method', '방법', '모델', '데이터셋', '프레임워크', '아키텍처', '평가', '벤치마크', '검색', '추론'] },
@@ -502,6 +559,51 @@ function selectRoleSummaryLines_(text, topic, title, url, hasPublicArticleText) 
     });
   }
   return picked.length === 3 ? picked : [];
+}
+
+function buildEvidenceFallbackSummaryLines_(text, topic, title, url, sentences) {
+  const evidence = cleanSummarySentence_(text);
+  if (evidence.length < MIN_ARTICLE_TEXT_CHARS || sentences.length === 0) return [];
+  const first = sentences[0];
+  const technical = bestKeywordSentence_(sentences, ['model', 'dataset', 'training', 'inference', 'retrieval', 'rag', 'agent', 'benchmark', 'evaluation', 'architecture', 'framework', 'github', '모델', '데이터셋', '추론', '검색', '평가', '벤치마크']) || first;
+  const impact = bestKeywordSentence_(sentences, ['improve', 'outperform', 'performance', 'accuracy', 'latency', 'cost', 'result', 'results', 'reduce', 'increase', '성능', '개선', '정확도', '비용', '결과', '한계']) || sentences[Math.min(1, sentences.length - 1)] || first;
+  const host = publicHostLabel_(url);
+  const titleHint = cleanSummarySentence_(title);
+  const lines = [
+    first,
+    technical !== first ? technical : (host + ' 공개 원문에서 ' + summarizeTechnicalTerms_(evidence, topic) + ' 관련 기술 신호가 확인됩니다.'),
+    impact !== first && impact !== technical ? impact : ((titleHint || host) + '의 공개 원문이 위 기술 신호를 후속 검증할 근거를 제공합니다.')
+  ];
+  return lines.length === 3 ? lines : [];
+}
+
+function bestKeywordSentence_(sentences, keywords) {
+  let best = '';
+  let bestScore = 0;
+  sentences.forEach(sentence => {
+    const lower = sentence.toLowerCase();
+    let score = 0;
+    keywords.forEach(keyword => { if (lower.indexOf(keyword.toLowerCase()) !== -1) score += 1; });
+    if (/\d+(\.\d+)?\s*(%|x|×|k|m|b|ms|s|tokens?|parameters?|benchmarks?|datasets?)/i.test(sentence)) score += 1;
+    if (score > bestScore) {
+      best = sentence;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
+function summarizeTechnicalTerms_(text, topic) {
+  const lower = String(text || '').toLowerCase();
+  const terms = ['RAG', 'retrieval', 'agent', 'LLM', 'multimodal', 'benchmark', 'inference', 'dataset', 'model', 'evaluation', 'GitHub'];
+  const hits = terms.filter(term => lower.indexOf(term.toLowerCase()) !== -1).slice(0, 3);
+  if (hits.length > 0) return hits.join('/');
+  return topic || '기술';
+}
+
+function publicHostLabel_(url) {
+  const match = String(url || '').match(/^https?:\/\/([^\/]+)/i);
+  return match ? match[1].replace(/^www\./i, '') : '공개 링크';
 }
 
 function bestSentenceForRole_(sentences, role, picked, topic, title, url, hasPublicArticleText) {
@@ -657,21 +759,6 @@ function extractMetaTitle_(html) {
   return '';
 }
 
-function buildStructuredFallbackSummary_(item, hasPublicArticleText) {
-  const title = truncate_(plain_(item.title || '제목 미상'), 70);
-  const host = extractHost_(item.url || '');
-  const kind = item.kind || classifyUrl_(item.url || '');
-  const topic = item.topic || '기타 테크 리포트';
-  const basisText = item.articleText || title;
-  const hint = extractTechnicalHint_(basisText + ' ' + item.url + ' ' + title);
-  const sourceBasis = hasPublicArticleText ? '공개 원문' : (item.url ? '공개 링크 메타데이터' : '메일 메타데이터');
-  return [
-    topic + ' 범주의 `' + title + '` 항목으로 분류되며, ' + sourceBasis + ' 기준으로 검토 대상입니다.',
-    kind + (host ? ' · ' + host : '') + (hint ? ' · ' + hint : ' · 제목/URL 기반 기술 신호 확인'),
-    '근거: ' + (item.url ? '원문 링크가 보존되어 후속 공개 원문 검증이 가능' : '메일에 외부 출처 링크가 없어 제목/수신 메타데이터만 사용')
-  ].map(s => truncate_(s, 145));
-}
-
 function extractUrlContext_(body, url) {
   const text = plain_(body);
   const cleanUrl = sanitizeUrl_(url);
@@ -686,6 +773,16 @@ function extractUrlContext_(body, url) {
 function extractHost_(url) {
   const match = String(url || '').match(/^https?:\/\/([^\/]+)/i);
   return match ? match[1].toLowerCase() : '';
+}
+
+function joinUniqueText_(parts) {
+  const out = [];
+  parts.forEach(part => {
+    const clean = cleanSummarySentence_(part || '');
+    if (!clean) return;
+    if (out.join(' ').indexOf(clean) === -1) out.push(clean);
+  });
+  return out.join('. ');
 }
 
 function bool_(value, fallback) {
@@ -748,7 +845,8 @@ function isPrivateUtilityUrl_(url) {
     'myaccount.google.com',
     'accounts.google.com',
     'mail.google.com',
-    'support.google.com/accounts',
+    'support.google.com',
+    'google.com/analytics/answer',
     'unsubscribe',
     'preferences',
     'privacy',
