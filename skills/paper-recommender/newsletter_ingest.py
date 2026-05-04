@@ -50,6 +50,16 @@ _RESEARCH_HOST_HINTS = (
 
 _DEFAULT_MAX_MESSAGES = 500
 
+_TOPIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("검색/RAG/지식그래프", ("retrieval", "rag", "search", "graph", "knowledge")),
+    ("LLM/에이전트", ("llm", "language model", "agent", "rag", "tool use", "reasoning")),
+    ("멀티모달/비전", ("multimodal", "vision", "image", "video", "vlm")),
+    ("인프라/배포", ("inference", "serving", "gpu", "cuda", "deploy", "latency", "benchmark")),
+    ("오픈소스/코드", ("github.com", "open source", "repo", "library", "framework")),
+    ("AI 안전/평가", ("safety", "eval", "alignment", "red team", "benchmark")),
+    ("산업/제품 동향", ("product", "launch", "release", "pricing", "market", "enterprise")),
+)
+
 
 @dataclass(frozen=True)
 class NewsletterMessage:
@@ -298,6 +308,76 @@ def publish_items(
     return raw_path, page_path
 
 
+def classify_topic(item: dict[str, str]) -> str:
+    haystack = " ".join(
+        [item.get("title", ""), item.get("kind", ""), item.get("url", "")]
+    ).lower()
+    for topic, needles in _TOPIC_RULES:
+        if any(needle in haystack for needle in needles):
+            return topic
+    if item.get("kind", "").startswith("paper"):
+        return "논문/리서치"
+    return "기타 테크 리포트"
+
+
+def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for item in items:
+        grouped.setdefault(classify_topic(item), []).append(item)
+    return sorted(grouped.items(), key=lambda pair: (-len(pair[1]), pair[0]))
+
+
+def render_topic_briefing(
+    *,
+    run_date: str,
+    items: list[dict[str, str]],
+    source_name: str,
+    max_items_per_topic: int = 3,
+) -> str:
+    lines = [
+        "**집현전-Claw 뉴스레터 수집 브리핑**",
+        f"_date: {run_date}_",
+        f"_source: {source_name}_",
+        "_privacy: 메일 본문/개인정보는 게시하지 않고 메타데이터와 추출 URL만 사용_",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "## 토픽별 기술 리포트/뉴스레터 요약",
+        "",
+        f"- 수집 항목: {len(items)}개",
+        "- 기준: allowlist로 허용한 발신자/도메인의 로컬 Gmail Takeout mbox 또는 sanitized JSONL",
+        "- 운영 메모: Gmail 웹/계정에 직접 접속하지 않으며, export 파일 기반으로만 처리",
+    ]
+    if not items:
+        lines += [
+            "",
+            "### 수집 결과 없음",
+            "- 핵심 요약: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.",
+            "- 기술 포인트: sender_allowlist, export 경로, max_source_bytes, URL host hint를 점검해야 합니다.",
+            "- 출처 링크: 없음",
+        ]
+        return "\n".join(lines) + "\n"
+
+    for topic, topic_items in group_items_by_topic(items):
+        lines += ["", f"### {topic}"]
+        for item in topic_items[:max_items_per_topic]:
+            title = _safe_title(item.get("title") or "(untitled newsletter item)")
+            sender = _safe_title(item.get("sender") or "unknown")
+            kind = item.get("kind") or "post"
+            received = item.get("received_at") or "unknown"
+            url = item.get("url") or ""
+            lines += [
+                f"- 핵심 요약: {title}",
+                f"- 기술 포인트: `{kind}` 유형으로 분류. 발신자 `{sender}`, 수신일 `{received}` 기준으로 추적",
+                f"- 출처 링크: [{title}]({url})",
+            ]
+        remaining = len(topic_items) - max_items_per_topic
+        if remaining > 0:
+            lines.append(f"- 추가 항목: {remaining}개는 raw archive에 보존")
+
+    lines += ["", "━━━━━━━━━━━━━━━━━━━━", "원문 메일 본문은 게시하지 않고 raw archive에는 추출 URL/메타데이터만 보존됩니다."]
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="Local Gmail Takeout .mbox or sanitized .jsonl export")
@@ -330,6 +410,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Include all extracted URLs instead of research/post host hints only",
     )
+    parser.add_argument(
+        "--briefing-path",
+        help="Optional Markdown path for a Discord-ready topic briefing",
+    )
+    parser.add_argument(
+        "--max-items-per-topic",
+        type=int,
+        default=3,
+        help="Maximum items rendered under each topic in --briefing-path output",
+    )
     args = parser.parse_args(argv)
 
     source = Path(args.source).expanduser()
@@ -358,11 +448,25 @@ def main(argv: list[str] | None = None) -> int:
             source_path=source,
             items=items,
         )
+        if args.briefing_path:
+            briefing_path = Path(args.briefing_path).expanduser()
+            briefing_path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write_text(
+                briefing_path,
+                render_topic_briefing(
+                    run_date=args.date,
+                    items=items,
+                    source_name=source.name,
+                    max_items_per_topic=args.max_items_per_topic,
+                ),
+            )
     except Exception as exc:
         print(f"newsletter ingest failed: {exc}", file=sys.stderr)
         return 1
     print(f"wrote {raw_path}")
     print(f"wrote {page_path}")
+    if args.briefing_path:
+        print(f"wrote {Path(args.briefing_path).expanduser()}")
     print(f"items: {len(items)}")
     return 0
 

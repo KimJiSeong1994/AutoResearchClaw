@@ -148,3 +148,46 @@ def test_cli_writes_idempotent_raw_and_page(tmp_path: Path, capsys) -> None:
     payload = json.loads(raw_path.read_text(encoding="utf-8"))
     assert payload["source_file"] == "newsletters.jsonl"
     assert payload["items"][0]["kind"] == "research-post"
+
+
+def test_topic_briefing_groups_items_without_email_body(tmp_path: Path, capsys) -> None:
+    source = tmp_path / "newsletters.jsonl"
+    briefing_path = tmp_path / "reports" / "newsletter-briefing.md"
+    source.write_text(
+        json.dumps(
+            {
+                "subject": "RAG and agents report",
+                "from": "AI Digest <digest@example.com>",
+                "date": "Mon, 04 May 2026 07:00:00 +0900",
+                "body": "Private body. Read https://arxiv.org/abs/2605.00001 about retrieval agents.",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rc = newsletter_ingest.main(
+        [
+            "--source",
+            str(source),
+            "--wiki-root",
+            str(tmp_path / "wiki"),
+            "--date",
+            "2026-05-04",
+            "--sender-allowlist",
+            "digest@example.com",
+            "--briefing-path",
+            str(briefing_path),
+        ]
+    )
+
+    assert rc == 0
+    assert "wrote" in capsys.readouterr().out
+    briefing = briefing_path.read_text(encoding="utf-8")
+    assert "집현전-Claw 뉴스레터 수집 브리핑" in briefing
+    assert "검색/RAG/지식그래프" in briefing
+    assert "- 핵심 요약:" in briefing
+    assert "- 기술 포인트:" in briefing
+    assert "- 출처 링크:" in briefing
+    assert "https://arxiv.org/abs/2605.00001" in briefing
+    assert "Private body" not in briefing
