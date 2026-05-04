@@ -214,9 +214,10 @@ function renderBriefing_(items, query) {
       const summary = buildSummaryLines_(item);
       const block = [
         '- 주요 아티클/논문: ' + title,
-        '  - 핵심: ' + summary[0],
-        '  - 기술 포인트: ' + summary[1],
-        '  - 의미/근거: ' + summary[2]
+        '  - 핵심 내용:',
+        '    - ' + summary[0],
+        '    - ' + summary[1],
+        '    - ' + summary[2]
       ];
       if (item.url) {
         block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
@@ -535,7 +536,7 @@ function buildSummaryLines_(item) {
   const usablePublicText = publicText.length >= MIN_ARTICLE_TEXT_CHARS ? publicText : '';
   const displayTitle = item.articleTitle || item.title || '';
   const selected = selectRoleSummaryLines_(usablePublicText, item.topic || '', displayTitle, item.url || '', Boolean(usablePublicText));
-  if (selected.length === 3) return selected.map(s => truncate_(cleanSummarySentence_(s), 145));
+  if (selected.length === 3) return selected.map(s => truncate_(cleanSummarySentence_(s), 190));
   return [];
 }
 
