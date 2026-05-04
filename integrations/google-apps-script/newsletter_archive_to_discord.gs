@@ -55,14 +55,51 @@ const RESEARCH_HOST_HINTS = [
   'huggingface.co'
 ];
 
+const TOPIC_SCORE_THRESHOLD = 2;
 const TOPIC_RULES = [
-  ['검색/RAG/지식그래프', ['retrieval', 'rag', 'search', 'graph', 'knowledge']],
-  ['LLM/에이전트', ['llm', 'language model', 'agent', 'tool use', 'reasoning']],
-  ['멀티모달/비전', ['multimodal', 'vision', 'image', 'video', 'vlm']],
-  ['인프라/배포', ['inference', 'serving', 'gpu', 'cuda', 'deploy', 'latency', 'benchmark']],
-  ['오픈소스/코드', ['github.com', 'open source', 'repo', 'library', 'framework']],
-  ['AI 안전/평가', ['safety', 'eval', 'alignment', 'red team', 'benchmark']],
-  ['산업/제품 동향', ['product', 'launch', 'release', 'pricing', 'market', 'enterprise']]
+  {
+    label: '검색/RAG/지식그래프',
+    priority: 10,
+    phrases: ['knowledge graph', 'semantic search', 'vector database'],
+    terms: ['retrieval', 'rag', 'search', 'graph', 'knowledge']
+  },
+  {
+    label: 'LLM/에이전트',
+    priority: 20,
+    phrases: ['language model', 'tool use', 'coding agent'],
+    terms: ['llm', 'agent', 'reasoning', 'workflow', 'autonomous']
+  },
+  {
+    label: '멀티모달/비전',
+    priority: 30,
+    phrases: ['multimodal model'],
+    terms: ['multimodal', 'vision', 'image', 'video', 'vlm']
+  },
+  {
+    label: '인프라/배포',
+    priority: 40,
+    phrases: ['inference serving', 'eval pipeline'],
+    terms: ['inference', 'serving', 'gpu', 'cuda', 'deploy', 'latency', 'benchmark']
+  },
+  {
+    label: '오픈소스/코드',
+    priority: 50,
+    phrases: ['open source', 'developer tool'],
+    terms: ['repo', 'library', 'framework'],
+    substrings: ['github.com']
+  },
+  {
+    label: 'AI 안전/평가',
+    priority: 60,
+    phrases: ['red team'],
+    terms: ['safety', 'eval', 'alignment', 'privacy', 'security', 'regulation', 'copyright']
+  },
+  {
+    label: '산업/제품 동향',
+    priority: 70,
+    phrases: ['product launch'],
+    terms: ['product', 'launch', 'release', 'pricing', 'market', 'enterprise', 'partnership', 'funding']
+  }
 ];
 
 function runNewsletterArchive() {
