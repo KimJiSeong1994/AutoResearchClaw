@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass
@@ -81,7 +82,15 @@ def _raw_string(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return value.strip()
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = ast.literal_eval(stripped)
+            except (SyntaxError, ValueError):
+                return stripped
+            if isinstance(parsed, list):
+                return _raw_string(parsed)
+        return stripped
     if isinstance(value, list):
         return " ".join(_raw_string(item).rstrip(". ") + "." for item in value if _raw_string(item)).strip()
     return str(value).strip()
@@ -95,6 +104,13 @@ def _raw_bool(value: object) -> bool:
     return bool(value)
 
 
+def _shorten(value: object, limit: int) -> str:
+    text = _plain_line(_raw_string(value))
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip(" ,.;") + "…"
+
+
 def _paper_link_from_raw(paper: dict[str, object]) -> tuple[str, str] | None:
     title = _plain_line(_raw_string(paper.get("title"))) or _raw_string(paper.get("paper_id")) or "paper"
     for key in ("url", "pdf_url"):
@@ -105,6 +121,60 @@ def _paper_link_from_raw(paper: dict[str, object]) -> tuple[str, str] | None:
     if re.match(r"^\d{4}\.\d{4,5}(?:v\d+)?$", arxiv_id):
         return (title[:80], f"https://arxiv.org/abs/{arxiv_id}")
     return None
+
+
+def _paper_id_from_raw(paper: dict[str, object]) -> str:
+    for key in ("paper_id", "id", "doi", "arxiv_id", "url"):
+        value = _raw_string(paper.get(key))
+        if value:
+            return value
+    return _raw_string(paper.get("title"))
+
+
+def _candidate_index(raw: dict[str, object]) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    candidates = raw.get("candidates")
+    if not isinstance(candidates, list):
+        return out
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("paper_id", "id", "doi", "arxiv_id", "url", "title"):
+            value = _raw_string(candidate.get(key))
+            if value:
+                out[value] = candidate
+    return out
+
+
+def _cluster_source_links(
+    cluster: dict[str, object],
+    candidates_by_id: dict[str, dict[str, object]],
+    fallback_candidates: list[dict[str, object]],
+    *,
+    limit: int = 2,
+) -> list[tuple[str, str]]:
+    links: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    paper_ids = cluster.get("paper_ids")
+    if isinstance(paper_ids, list):
+        for paper_id in paper_ids:
+            candidate = candidates_by_id.get(_raw_string(paper_id))
+            if not candidate:
+                continue
+            link = _paper_link_from_raw(candidate)
+            if link and link[1] not in seen:
+                seen.add(link[1])
+                links.append(link)
+            if len(links) >= limit:
+                return links
+    for candidate in fallback_candidates:
+        link = _paper_link_from_raw(candidate)
+        if link and link[1] not in seen:
+            seen.add(link[1])
+            links.append(link)
+        if len(links) >= limit:
+            break
+    return links
 
 
 def _adjacent_raw_path(source_path: Path) -> Path:
@@ -133,9 +203,9 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     report = raw.get("report") if isinstance(raw.get("report"), dict) else {}
     report_dict = report if isinstance(report, dict) else {}
     run_at = _raw_string(raw.get("run_at"))
-    title = "Weekly research trends"
+    title = "최신 연구 동향"
     if run_at:
-        title = f"Weekly research trends — {run_at[:10]}"
+        title = f"최신 연구 동향 — {run_at[:10]}"
 
     soul_source = _raw_string(raw.get("soul_source"))
     soul_fallback = _raw_bool(raw.get("soul_fallback_used"))
@@ -167,46 +237,31 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
             conclusion = conclusion[:397].rstrip(" ,.") + "…"
         lines += ["", f"**한 줄 결론**\n{conclusion}"]
 
-    trends: list[str] = []
+    candidates = raw.get("candidates")
+    fallback_candidates = [c for c in candidates if isinstance(c, dict)] if isinstance(candidates, list) else []
+    candidates_by_id = _candidate_index(raw)
     clusters = report_dict.get("clusters")
+    rendered_clusters = 0
     if isinstance(clusters, list):
+        lines += ["", "**관련 최신 동향**"]
         for cluster in clusters:
             if not isinstance(cluster, dict):
                 continue
             title_text = _plain_line(_raw_string(cluster.get("title")))
-            if title_text:
-                trends.append(title_text)
-            if len(trends) >= 4:
-                break
-    if trends:
-        lines += ["", "**SOUL/Profile 기반 핵심 연구·기술 클러스터**"]
-        lines += [f"- {item}" for item in trends]
-
-    candidates = raw.get("candidates")
-    source_links: list[tuple[str, str]] = []
-    actions: list[str] = []
-    if isinstance(candidates, list):
-        seen: set[str] = set()
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
+            if not title_text:
                 continue
-            link = _paper_link_from_raw(candidate)
-            if link and link[1] not in seen:
-                seen.add(link[1])
-                source_links.append(link)
-            title_text = _plain_line(_raw_string(candidate.get("title")))
-            trend_query = _plain_line(_raw_string(candidate.get("trend_query")))
-            if title_text:
-                actions.append(title_text if not trend_query else f"{title_text} — {trend_query}")
-            if len(source_links) >= 5 and len(actions) >= 3:
+            links = _cluster_source_links(cluster, candidates_by_id, fallback_candidates)
+            source = "; ".join(f"{label}: {url}" for label, url in links) if links else "원문 raw.json 참고"
+            lines += [
+                f"",
+                f"**{rendered_clusters + 1}. {title_text}**",
+                f"- 핵심 요약: {_shorten(cluster.get('summary'), 170)}",
+                f"- 기술 포인트: {_shorten(cluster.get('why_it_matters'), 170)}",
+                f"- 출처 링크: {source}",
+            ]
+            rendered_clusters += 1
+            if rendered_clusters >= 3:
                 break
-
-    if source_links:
-        lines += ["", "**출처 링크**"]
-        lines += [f"- {label}: {url}" for label, url in source_links[:4]]
-    if actions:
-        lines += ["", "**우선 읽을 논문/근거**"]
-        lines += [f"- {item.split(' — ', 1)[0]}" for item in actions[:2]]
 
     lines += ["", "자세한 SOUL/Profile 기반 연구 동향 원문은 PaperWiki/weekly report에 보존되어 있습니다."]
     body = "\n".join(lines)

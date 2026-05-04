@@ -49,11 +49,14 @@ class BriefingRenderTests(unittest.TestCase):
 
             briefing = render_briefing(note)
 
-        self.assertEqual(briefing.title, "Weekly research trends — 2026-05-04")
+        self.assertEqual(briefing.title, "최신 연구 동향 — 2026-05-04")
         self.assertIn("+ raw.json", briefing.body)
         self.assertIn("SOUL 기반", briefing.body)
         self.assertIn("raw conclusion", briefing.body)
         self.assertIn("Raw cluster", briefing.body)
+        self.assertIn("- 핵심 요약:", briefing.body)
+        self.assertIn("- 기술 포인트:", briefing.body)
+        self.assertIn("- 출처 링크:", briefing.body)
         self.assertIn("Raw Paper: https://example.test/raw-paper", briefing.body)
         self.assertNotIn("markdown fallback conclusion", briefing.body)
         self.assertNotIn("Markdown-only cluster", briefing.body)

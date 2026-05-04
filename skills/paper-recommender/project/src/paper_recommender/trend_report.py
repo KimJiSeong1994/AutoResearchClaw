@@ -115,6 +115,8 @@ async def synthesize_trend_report(
     valid_ids = {paper_key(p) for p in candidates}
     system = (
         "You write a weekly research trend report from provided evidence only. "
+        "Write user-facing summaries in Korean while preserving original paper titles. "
+        "Emphasize latest research trends, concrete technical points, and why each trend matters to the reader's SOUL/profile. "
         "Do not cite paper IDs that are not in the evidence. Return strict JSON with keys: "
         "generated_at, at_a_glance, clusters[{title,summary,why_it_matters,paper_ids}], "
         "weak_signals, coverage_caveat."
