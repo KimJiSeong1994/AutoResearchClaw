@@ -16,6 +16,18 @@ Scope: score-based topic taxonomy for newsletter briefings across Python ingest 
 
 ## Review findings
 
+## Post-review resolution
+
+The rollout implementation now addresses the blocking findings identified below:
+
+- Python and Apps Script both use score-based token/phrase matching instead of ordered arbitrary substring first-match.
+- Python tests lock the known false-positive cases (`research` vs `search`) and multi-signal cases (`RAG + agent`, GitHub source, VLM/video, safety/eval).
+- Python `include_all_urls=True` now still filters private utility links such as unsubscribe/account/preferences URLs before raw/page output.
+- Python briefing output preserves the existing Korean bullet contract while adding compact sanitized topic evidence in the `기술 포인트` line.
+- Apps Script deployment guidance now requires taxonomy parity smoke checks before production trigger rollout.
+
+Remaining rollout gap: the current Apps Script parity check is a local Node VM smoke, not a live Apps Script deployment test.
+
 ### High severity
 
 1. **Score-based taxonomy is not implemented yet.**

@@ -111,6 +111,28 @@ def test_source_size_cap_blocks_large_exports(tmp_path: Path) -> None:
         newsletter_ingest.enforce_source_size(source, max_source_bytes=1)
 
 
+def test_include_all_urls_still_filters_private_utility_links(tmp_path: Path) -> None:
+    messages = [
+        newsletter_ingest.NewsletterMessage(
+            subject="Digest links",
+            sender="digest@example.com",
+            received_at="Mon, 04 May 2026 07:00:00 +0900",
+            body=(
+                "Read https://example.com/technical-report "
+                "and manage https://example.com/unsubscribe?token=secret"
+            ),
+        )
+    ]
+
+    items = newsletter_ingest.select_items(
+        messages,
+        sender_allowlist=["digest@example.com"],
+        include_all_urls=True,
+    )
+
+    assert [item["url"] for item in items] == ["https://example.com/technical-report"]
+
+
 def test_cli_writes_idempotent_raw_and_page(tmp_path: Path, capsys) -> None:
     source = tmp_path / "newsletters.jsonl"
     source.write_text(
@@ -191,3 +213,56 @@ def test_topic_briefing_groups_items_without_email_body(tmp_path: Path, capsys) 
     assert "- 출처 링크:" in briefing
     assert "https://arxiv.org/abs/2605.00001" in briefing
     assert "Private body" not in briefing
+
+
+def test_topic_classifier_uses_token_boundaries_not_substrings() -> None:
+    item = {
+        "title": "Research roundup on diffusion models",
+        "kind": "post",
+        "url": "https://example.com/research-roundup",
+    }
+
+    assert newsletter_ingest.classify_topic(item) == "기타 테크 리포트"
+
+
+def test_topic_classifier_prioritizes_safety_eval_over_benchmark_noise() -> None:
+    item = {
+        "title": "OpenAI eval benchmark for agent safety",
+        "kind": "research-post",
+        "url": "https://openai.com/research/evals",
+    }
+
+    result = newsletter_ingest.classify_topic_result(item)
+
+    assert result.label == "AI 안전/평가"
+    assert "eval" in result.evidence
+    assert "safety" in result.evidence
+
+
+def test_topic_classifier_handles_agent_rag_as_primary_retrieval_topic() -> None:
+    item = {
+        "title": "GraphRAG retrieval agents for knowledge graph search",
+        "kind": "post",
+        "url": "https://example.com/graphrag",
+    }
+
+    result = newsletter_ingest.classify_topic_result(item)
+
+    assert result.label == "검색/RAG/지식그래프"
+    assert result.score > 2
+
+
+def test_topic_classifier_uses_url_and_multimodal_signals() -> None:
+    github_item = {
+        "title": "New developer framework",
+        "kind": "code",
+        "url": "https://github.com/example/framework",
+    }
+    video_item = {
+        "title": "Hugging Face VLM video model release",
+        "kind": "post",
+        "url": "https://huggingface.co/blog/video-vlm",
+    }
+
+    assert newsletter_ingest.classify_topic(github_item) == "오픈소스/코드"
+    assert newsletter_ingest.classify_topic(video_item) == "멀티모달/비전"

@@ -66,7 +66,7 @@ const TOPIC_RULES = [
   {
     label: 'LLM/에이전트',
     priority: 20,
-    phrases: ['language model', 'tool use', 'coding agent'],
+    phrases: ['language model', 'tool use', 'coding agent', 'llm agent'],
     terms: ['llm', 'agent', 'reasoning', 'workflow', 'autonomous']
   },
   {

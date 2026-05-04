@@ -56,10 +56,17 @@ Before pasting or deploying updates:
    - `기술 포인트`
    - `의미/근거`
    - `출처 링크`
-3. Grep the Apps Script file and this README for concrete Discord webhook URLs,
+3. Smoke-test taxonomy helpers against the Python fixture intent before
+   deployment. At minimum, verify:
+   - `research paper` falls back to `논문/리서치` instead of matching `search`
+   - `benchmark` does not match `market`
+   - `RAG agent` tie-breaks toward `검색/RAG/지식그래프`
+   - strong `LLM agent` signals beat a generic GitHub/source-kind signal
+   - pricing/enterprise/partnership signals map to `산업/제품 동향`
+4. Grep the Apps Script file and this README for concrete Discord webhook URLs,
    bot tokens, and relay tokens. Only Script Property names should appear in
    source control.
-4. In Apps Script, run `runNewsletterArchive` once with `DELIVERY_MODE=relay_pull`
+5. In Apps Script, run `runNewsletterArchive` once with `DELIVERY_MODE=relay_pull`
    and review `LATEST_BRIEFING` before enabling the daily trigger.
 
 ## Discord 40333 note

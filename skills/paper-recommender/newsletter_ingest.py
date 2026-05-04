@@ -50,15 +50,69 @@ _RESEARCH_HOST_HINTS = (
 
 _DEFAULT_MAX_MESSAGES = 500
 
-_TOPIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("검색/RAG/지식그래프", ("retrieval", "rag", "search", "graph", "knowledge")),
-    ("LLM/에이전트", ("llm", "language model", "agent", "rag", "tool use", "reasoning")),
-    ("멀티모달/비전", ("multimodal", "vision", "image", "video", "vlm")),
-    ("인프라/배포", ("inference", "serving", "gpu", "cuda", "deploy", "latency", "benchmark")),
-    ("오픈소스/코드", ("github.com", "open source", "repo", "library", "framework")),
-    ("AI 안전/평가", ("safety", "eval", "alignment", "red team", "benchmark")),
-    ("산업/제품 동향", ("product", "launch", "release", "pricing", "market", "enterprise")),
+@dataclass(frozen=True)
+class TopicRule:
+    label: str
+    priority: int
+    phrases: tuple[str, ...] = ()
+    terms: tuple[str, ...] = ()
+    substrings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TopicClassification:
+    label: str
+    score: int
+    evidence: tuple[str, ...]
+
+
+_TOPIC_RULES: tuple[TopicRule, ...] = (
+    TopicRule(
+        "검색/RAG/지식그래프",
+        10,
+        phrases=("knowledge graph", "semantic search", "vector database"),
+        terms=("retrieval", "rag", "search", "graph", "knowledge"),
+    ),
+    TopicRule(
+        "LLM/에이전트",
+        20,
+        phrases=("language model", "tool use", "coding agent", "llm agent"),
+        terms=("llm", "agent", "reasoning", "workflow", "autonomous"),
+    ),
+    TopicRule(
+        "멀티모달/비전",
+        30,
+        phrases=("multimodal model",),
+        terms=("multimodal", "vision", "image", "video", "vlm"),
+    ),
+    TopicRule(
+        "인프라/배포",
+        40,
+        phrases=("inference serving", "eval pipeline"),
+        terms=("inference", "serving", "gpu", "cuda", "deploy", "latency", "benchmark"),
+    ),
+    TopicRule(
+        "오픈소스/코드",
+        50,
+        phrases=("open source", "developer tool"),
+        terms=("repo", "repository", "library", "framework"),
+        substrings=("github.com",),
+    ),
+    TopicRule(
+        "AI 안전/평가",
+        60,
+        phrases=("red team",),
+        terms=("safety", "eval", "evaluation", "alignment", "privacy", "security", "regulation", "copyright"),
+    ),
+    TopicRule(
+        "산업/제품 동향",
+        70,
+        phrases=("product launch",),
+        terms=("product", "launch", "release", "pricing", "market", "enterprise", "partnership", "funding"),
+    ),
 )
+
+_TOPIC_SCORE_THRESHOLD = 2
 
 
 @dataclass(frozen=True)
@@ -208,6 +262,27 @@ def is_research_url(url: str) -> bool:
     return any(hint in lower for hint in _RESEARCH_HOST_HINTS)
 
 
+def is_private_utility_url(url: str) -> bool:
+    lower = url.lower()
+    blocked = (
+        "myaccount.google.com",
+        "accounts.google.com",
+        "mail.google.com",
+        "support.google.com",
+        "google.com/analytics/answer",
+        "unsubscribe",
+        "preferences",
+        "privacy",
+        "terms",
+        "login",
+        "signin",
+        "signup",
+        "account",
+        "settings",
+    )
+    return any(token in lower for token in blocked)
+
+
 def select_items(
     messages: Iterable[NewsletterMessage],
     *,
@@ -223,6 +298,8 @@ def select_items(
         if allow and not any(token in sender_lower for token in allow):
             continue
         for url in extract_urls(msg.body):
+            if is_private_utility_url(url):
+                continue
             if not include_all_urls and not is_research_url(url):
                 continue
             key = (msg.subject, url)
@@ -308,23 +385,70 @@ def publish_items(
     return raw_path, page_path
 
 
-def classify_topic(item: dict[str, str]) -> str:
+def _has_token_phrase(text: str, phrase: str) -> bool:
+    phrase = phrase.lower().strip()
+    if not phrase:
+        return False
+    pattern = r"(?<![a-z0-9])" + re.escape(phrase).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+    return re.search(pattern, text.lower()) is not None
+
+
+def _score_topic_rule(text: str, rule: TopicRule) -> TopicClassification | None:
+    score = 0
+    evidence: list[str] = []
+    for phrase in rule.phrases:
+        if _has_token_phrase(text, phrase):
+            score += 4
+            evidence.append(phrase)
+    for term in rule.terms:
+        if _has_token_phrase(text, term):
+            score += 2
+            evidence.append(term)
+    lower = text.lower()
+    for token in rule.substrings:
+        if token.lower() in lower:
+            score += 2
+            evidence.append(token)
+    if score < _TOPIC_SCORE_THRESHOLD:
+        return None
+    return TopicClassification(rule.label, score, tuple(evidence))
+
+
+def classify_topic_result(item: dict[str, str]) -> TopicClassification:
     haystack = " ".join(
-        [item.get("title", ""), item.get("kind", ""), item.get("url", "")]
-    ).lower()
-    for topic, needles in _TOPIC_RULES:
-        if any(needle in haystack for needle in needles):
-            return topic
+        [
+            item.get("title", ""),
+            item.get("kind", ""),
+            item.get("url", ""),
+            item.get("snippet", ""),
+            item.get("summary", ""),
+            item.get("classification_text", ""),
+        ]
+    )
+    matches = [
+        result
+        for rule in _TOPIC_RULES
+        if (result := _score_topic_rule(haystack, rule)) is not None
+    ]
+    if matches:
+        priority = {rule.label: rule.priority for rule in _TOPIC_RULES}
+        return sorted(matches, key=lambda result: (-result.score, priority[result.label]))[0]
     if item.get("kind", "").startswith("paper"):
-        return "논문/리서치"
-    return "기타 테크 리포트"
+        return TopicClassification("논문/리서치", 1, ("paper-kind",))
+    return TopicClassification("기타 테크 리포트", 0, ())
+
+
+def classify_topic(item: dict[str, str]) -> str:
+    return classify_topic_result(item).label
 
 
 def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
     grouped: dict[str, list[dict[str, str]]] = {}
     for item in items:
         grouped.setdefault(classify_topic(item), []).append(item)
-    return sorted(grouped.items(), key=lambda pair: (-len(pair[1]), pair[0]))
+    topic_priority = {rule.label: rule.priority for rule in _TOPIC_RULES}
+    topic_priority.update({"논문/리서치": 900, "기타 테크 리포트": 1000})
+    return sorted(grouped.items(), key=lambda pair: (-len(pair[1]), topic_priority.get(pair[0], 999), pair[0]))
 
 
 def render_topic_briefing(
@@ -365,9 +489,11 @@ def render_topic_briefing(
             kind = item.get("kind") or "post"
             received = item.get("received_at") or "unknown"
             url = item.get("url") or ""
+            classification = classify_topic_result(item)
+            evidence = ", ".join(classification.evidence) or "fallback"
             lines += [
                 f"- 핵심 요약: {title}",
-                f"- 기술 포인트: `{kind}` 유형으로 분류. 발신자 `{sender}`, 수신일 `{received}` 기준으로 추적",
+                f"- 기술 포인트: `{kind}` 유형, 토픽 근거 `{evidence}` 기준으로 분류. 발신자 `{sender}`, 수신일 `{received}` 기준으로 추적",
                 f"- 출처 링크: [{title}]({url})",
             ]
         remaining = len(topic_items) - max_items_per_topic
