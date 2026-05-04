@@ -243,7 +243,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     if conclusion:
         if len(conclusion) > 420:
             conclusion = conclusion[:397].rstrip(" ,.") + "…"
-        lines += ["", f"### 🧭 한 줄 결론\n{conclusion}"]
+        lines += ["", f"### 한 줄 결론\n{conclusion}"]
 
     candidates = raw.get("candidates")
     fallback_candidates = [c for c in candidates if isinstance(c, dict)] if isinstance(candidates, list) else []
@@ -251,7 +251,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     clusters = report_dict.get("clusters")
     rendered_clusters = 0
     if isinstance(clusters, list):
-        lines += ["", f"{_DIVIDER}", "### 🔬 관련 최신 동향"]
+        lines += ["", f"{_DIVIDER}", "### 관련 최신 동향"]
         for cluster in clusters:
             if not isinstance(cluster, dict):
                 continue
@@ -272,7 +272,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
             if rendered_clusters >= 3:
                 break
 
-    lines += ["", _DIVIDER, "📚 자세한 원문은 PaperWiki/weekly report에 보존되어 있습니다."]
+    lines += ["", _DIVIDER, "자세한 원문은 PaperWiki/weekly report에 보존되어 있습니다."]
     body = "\n".join(lines)
     if len(body) > max_chars:
         body = body[: max(0, max_chars - 24)].rstrip() + "\n…(briefing truncated)"
