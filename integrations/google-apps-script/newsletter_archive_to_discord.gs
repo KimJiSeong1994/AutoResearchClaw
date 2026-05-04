@@ -31,7 +31,8 @@ const DEFAULT_COLLECT_ALL_MAIL = false;
 const DEFAULT_INCLUDE_ALL_URLS = true;
 const DEFAULT_FETCH_ARTICLE_DETAILS = true;
 const MAX_ARTICLE_CHARS = 5000;
-const MAX_ARTICLE_FETCHES = 20;
+const MAX_ARTICLE_FETCHES = 35;
+const MIN_ARTICLE_TEXT_CHARS = 220;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -142,7 +143,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
           receivedAt: receivedAt,
           topic: classifyTopic_(subject + ' ' + detailBasis + ' ' + url),
           snippet: snippet,
-          articleText: detailBasis
+          articleText: articleText
         });
       });
     });
@@ -176,22 +177,24 @@ function renderBriefing_(items, query) {
   }
 
   const grouped = groupByTopic_(items);
-  Object.keys(grouped).sort((a, b) => grouped[b].length - grouped[a].length || a.localeCompare(b)).forEach(topic => {
+  Object.keys(grouped).sort((a, b) => detailedItems_(grouped[b]).length - detailedItems_(grouped[a]).length || a.localeCompare(b)).forEach(topic => {
+    const detailed = detailedItems_(grouped[topic]);
+    if (detailed.length === 0) return;
     lines.push('', '### ' + topic);
-    grouped[topic].slice(0, 3).forEach(item => {
+    detailed.slice(0, 3).forEach(item => {
       const title = truncate_(plain_(item.title), 90);
-      const snippet = plain_(item.articleText || item.snippet || '');
+      const snippet = plain_(item.articleText || '');
       lines.push('- 주요 아티클/논문: ' + title);
       lines.push('  - 3줄 요약: ' + summarizeLine1_(title, snippet));
       lines.push('  - 3줄 요약: ' + summarizeLine2_(item, snippet));
-      lines.push('  - 3줄 요약: ' + summarizeLine3_(item));
+      lines.push('  - 3줄 요약: ' + summarizeLine3_(item, snippet));
       if (item.url) {
         lines.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + item.url + ')');
       } else {
         lines.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
       }
     });
-    const remaining = grouped[topic].length - 3;
+    const remaining = detailed.length - 3;
     if (remaining > 0) {
       lines.push('- 추가 항목: ' + remaining + '개는 다음 실행에서 재검토');
     }
@@ -280,7 +283,8 @@ function fetchArticleText_(url) {
     const headers = response.getAllHeaders ? response.getAllHeaders() : {};
     const contentType = String(headers['Content-Type'] || headers['content-type'] || '').toLowerCase();
     if (contentType && contentType.indexOf('text/html') === -1 && contentType.indexOf('text/plain') === -1) return '';
-    return extractReadableText_(response.getContentText()).slice(0, MAX_ARTICLE_CHARS);
+    const readable = extractReadableText_(response.getContentText()).slice(0, MAX_ARTICLE_CHARS);
+    return articleSentences_(readable).join('. ');
   } catch (e) {
     return '';
   }
@@ -319,6 +323,14 @@ function decodeEntities_(text) {
     .replace(/&#39;/g, "'");
 }
 
+function detailedItems_(items) {
+  return items.filter(item => hasArticleDetail_(item));
+}
+
+function hasArticleDetail_(item) {
+  return plain_(item.articleText || '').length >= MIN_ARTICLE_TEXT_CHARS;
+}
+
 function summarizeLine1_(title, snippet) {
   const basis = firstSentence_(snippet) || title;
   return truncate_(basis, 120);
@@ -332,18 +344,35 @@ function summarizeLine2_(item, snippet) {
   return truncate_(second || ('분류 `' + kind + '`; ' + (hint || '발신자 `' + sender + '`의 최신 기술/리서치 항목으로 분류')), 130);
 }
 
-function summarizeLine3_(item) {
-  return truncate_('토픽 `' + (item.topic || '기타 테크 리포트') + '` 관점에서 후속 읽기/아카이브 대상으로 추적', 120);
+function summarizeLine3_(item, snippet) {
+  const third = nthSentence_(snippet, 2) || extractTechnicalHint_(snippet) || ('핵심 토픽은 `' + (item.topic || '기타 테크 리포트') + '`로 분류');
+  return truncate_(third, 130);
+}
+
+function articleSentences_(text) {
+  return String(text || '')
+    .split(/[.!?。]\s+/)
+    .map(plain_)
+    .filter(s => s.length >= 35 && !isBoilerplateSentence_(s));
 }
 
 function firstSentence_(text) {
-  const parts = String(text || '').split(/[.!?。]\s+/).map(plain_).filter(Boolean);
-  return parts[0] || '';
+  return nthSentence_(text, 0);
 }
 
 function secondSentence_(text) {
-  const parts = String(text || '').split(/[.!?。]\s+/).map(plain_).filter(Boolean);
-  return parts[1] || '';
+  return nthSentence_(text, 1);
+}
+
+function nthSentence_(text, idx) {
+  const parts = articleSentences_(text);
+  return parts[idx] || '';
+}
+
+function isBoilerplateSentence_(text) {
+  const lower = String(text || '').toLowerCase();
+  const bad = ['cookie', 'privacy policy', 'terms of use', 'subscribe', 'login', 'sign in', 'accept', 'decline', 'newsletter', 'advertise', 'home posts'];
+  return bad.some(token => lower.indexOf(token) !== -1);
 }
 
 function extractTechnicalHint_(text) {
