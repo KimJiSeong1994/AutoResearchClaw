@@ -33,6 +33,8 @@ const DEFAULT_FETCH_ARTICLE_DETAILS = true;
 const MAX_ARTICLE_CHARS = 5000;
 const MAX_ARTICLE_FETCHES = 35;
 const MIN_ARTICLE_TEXT_CHARS = 220;
+const MIN_SUMMARY_EVIDENCE_CHARS = 160;
+const URL_CONTEXT_WINDOW = 260;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -105,8 +107,20 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
       }
       const subject = message.getSubject() || '(untitled newsletter item)';
       const receivedAt = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm");
-      const body = message.getPlainBody() || stripHtml_(message.getBody() || '');
-      const urls = extractUrls_(body).filter(url => !isPrivateUtilityUrl_(url) && (includeAllUrls || isResearchUrl_(url)));
+      const htmlBody = message.getBody() || '';
+      const body = message.getPlainBody() || stripHtml_(htmlBody);
+      const urlCandidates = extractUrlCandidates_(body, htmlBody)
+        .filter(candidate => !isPrivateUtilityUrl_(candidate.url) && (includeAllUrls || isResearchUrl_(candidate.url)));
+      const contextByUrl = {};
+      const urls = [];
+      urlCandidates.forEach(candidate => {
+        if (!contextByUrl[candidate.url]) {
+          urls.push(candidate.url);
+          contextByUrl[candidate.url] = candidate.context;
+        } else if (candidate.context && candidate.context.length > contextByUrl[candidate.url].length) {
+          contextByUrl[candidate.url] = candidate.context;
+        }
+      });
       const topic = classifyTopic_(subject + ' ' + body);
       const snippet = truncate_(plain_(body), 180);
       if (urls.length === 0) {
@@ -129,7 +143,8 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
         const shouldFetchDetail = fetchArticleDetails && detailFetchCount < MAX_ARTICLE_FETCHES;
         const articleText = shouldFetchDetail ? fetchArticleText_(url) : '';
         if (shouldFetchDetail) detailFetchCount += 1;
-        const detailBasis = articleText || snippet;
+        const sourceContext = contextByUrl[url] || snippet;
+        const detailBasis = articleText || sourceContext || snippet;
         const key = subject + '|' + url;
         if (seen[key]) {
           return;
@@ -143,6 +158,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
           receivedAt: receivedAt,
           topic: classifyTopic_(subject + ' ' + detailBasis + ' ' + url),
           snippet: snippet,
+          sourceContext: sourceContext,
           articleText: articleText
         });
       });
@@ -238,7 +254,7 @@ function postDiscord_(channelId, token, content, webhookUrl) {
   const options = {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({ content: content }),
+    payload: JSON.stringify({ content: content, allowed_mentions: { parse: [] } }),
     muteHttpExceptions: true
   };
   if (!webhookUrl) {
@@ -293,13 +309,80 @@ function scoreNewsletterUrl_(url) {
 }
 
 function sanitizeUrl_(url) {
-  return String(url || '').replace(/[.,;:!?)]}>'"]+$/g, '');
+  const cleaned = decodeEntities_(String(url || '').replace(/[.,;:!?)]}>'"]+$/g, ''));
+  return canonicalPublicUrl_(unwrapTrackedUrl_(cleaned));
+}
+
+function canonicalPublicUrl_(url) {
+  const text = String(url || '').replace(/[.,;:!?)]}>'"]+$/g, '');
+  const parts = text.match(/^(https?:\/\/[^?#]+)(\?[^#]*)?(#.*)?$/i);
+  if (!parts) return text;
+  const base = parts[1];
+  const query = parts[2] ? parts[2].slice(1) : '';
+  const hash = parts[3] || '';
+  if (!query) return base + hash;
+  const keep = [];
+  query.split('&').forEach(pair => {
+    const key = decodeURIComponentSafe_(pair.split('=')[0] || '').toLowerCase();
+    if (!key || isTrackingQueryParam_(key, pair)) return;
+    keep.push(pair);
+  });
+  return base + (keep.length ? '?' + keep.join('&') : '') + hash;
+}
+
+function isTrackingQueryParam_(key, pair) {
+  if (/^utm_/.test(key)) return true;
+  const blocked = [
+    'fbclid', 'gclid', 'dclid', 'mc_cid', 'mc_eid', 'igshid', 'vero_id', 'mkt_tok',
+    'email', 'email_id', 'subscriber', 'subscriber_id', 'subscription_id', 'user_id', 'uid',
+    'token', 'signature', 'sig', 'hash', 'key', 'auth', 'jwt', 'code', 'state', 'session',
+    'unsubscribe', 'preferences', 'ref', 'source', 'campaign', 's', 'sk'
+  ];
+  if (blocked.indexOf(key) !== -1) return true;
+  const value = String(pair || '').split('=').slice(1).join('=');
+  return value.length > 80 && /[A-Za-z0-9_-]{40,}/.test(value);
+}
+
+function unwrapTrackedUrl_(url) {
+  const text = String(url || '');
+  const direct = decodeURIComponentSafe_(text);
+  const params = ['url', 'u', 'q', 'redirect', 'redirect_url', 'target', 'to'];
+  for (let i = 0; i < params.length; i++) {
+    const re = new RegExp('[?&]' + params[i] + '=([^&#]+)', 'i');
+    const match = text.match(re);
+    if (match) {
+      const decoded = decodeURIComponentSafe_(match[1]);
+      if (/^https?:\/\//i.test(decoded) && !isPrivateUtilityUrl_(decoded)) return decoded.replace(/[.,;:!?)]}>'"]+$/g, '');
+    }
+  }
+  const embedded = direct.match(/https?:\/\/[A-Za-z0-9][^\s<>()"'\]]+/g) || [];
+  if (embedded.length > 1) {
+    const last = embedded[embedded.length - 1].replace(/[.,;:!?)]}>'"]+$/g, '');
+    if (!isPrivateUtilityUrl_(last)) return last;
+  }
+  return text;
+}
+
+function decodeURIComponentSafe_(text) {
+  try {
+    return decodeURIComponent(String(text || '').replace(/&amp;/g, '&'));
+  } catch (e) {
+    return String(text || '');
+  }
+}
+
+function articleFetchUrl_(url) {
+  const text = String(url || '');
+  const arxivPdf = text.match(/^https?:\/\/(?:www\.)?arxiv\.org\/pdf\/([^?#]+)(?:\.pdf)?/i);
+  if (arxivPdf) return 'https://arxiv.org/abs/' + arxivPdf[1].replace(/\.pdf$/i, '');
+  return text;
 }
 
 function fetchArticleText_(url) {
-  if (!isFetchableArticleUrl_(url)) return '';
+  const fetchUrl = articleFetchUrl_(url);
+  if (!isFetchableArticleUrl_(fetchUrl)) return '';
   try {
-    const response = UrlFetchApp.fetch(url, {
+    const response = UrlFetchApp.fetch(fetchUrl, {
       method: 'get',
       followRedirects: true,
       muteHttpExceptions: true,
@@ -320,15 +403,37 @@ function fetchArticleText_(url) {
 
 function isFetchableArticleUrl_(url) {
   const lower = String(url || '').toLowerCase();
-  if (!/^https?:\/\//.test(lower)) return false;
+  if (!/^https:\/\//.test(lower)) return false;
+  const hostMatch = lower.match(/^https:\/\/([^\/:?#]+)/);
+  const host = hostMatch ? hostMatch[1] : '';
+  if (!host || isPrivateHost_(host)) return false;
   const blocked = [
     'linkedin.com',
     'mail.google.com',
     'accounts.google.com',
     'localhost',
-    '127.0.0.1'
+    '127.0.0.1',
+    '0.0.0.0',
+    'click.',
+    'tracking.',
+    'track.',
+    'mandrillapp.com',
+    'list-manage.com'
   ];
-  return !blocked.some(host => lower.indexOf(host) !== -1);
+  return !blocked.some(token => host.indexOf(token) !== -1 || lower.indexOf(token) !== -1);
+}
+
+function isPrivateHost_(host) {
+  const lower = String(host || '').toLowerCase();
+  if (lower === 'localhost' || lower.endsWith('.local') || lower.endsWith('.internal')) return true;
+  const ip = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ip) return false;
+  const a = Number(ip[1]);
+  const b = Number(ip[2]);
+  if (a === 10 || a === 127 || a === 0 || a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
 }
 
 function extractArticleText_(html) {
@@ -349,11 +454,39 @@ function extractArticleText_(html) {
 function extractJsonLdArticleBody_(html) {
   const blocks = String(html || '').match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
   for (let i = 0; i < blocks.length; i++) {
-    const json = blocks[i].replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim();
-    const bodyMatch = json.match(/"articleBody"\s*:\s*"([\s\S]*?)"\s*[,}]/i);
-    if (bodyMatch) return decodeJsonString_(bodyMatch[1]);
-    const descMatch = json.match(/"description"\s*:\s*"([\s\S]*?)"\s*[,}]/i);
-    if (descMatch) return decodeJsonString_(descMatch[1]);
+    const json = decodeEntities_(blocks[i].replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim());
+    const parsed = parseJsonLd_(json);
+    const extracted = findJsonLdText_(parsed);
+    if (extracted) return extracted;
+  }
+  return '';
+}
+
+function parseJsonLd_(json) {
+  try {
+    return JSON.parse(json);
+  } catch (e) {
+    return null;
+  }
+}
+
+function findJsonLdText_(node) {
+  if (!node) return '';
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const found = findJsonLdText_(node[i]);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof node !== 'object') return '';
+  if (typeof node.articleBody === 'string' && node.articleBody.length > 80) return node.articleBody;
+  if (typeof node.description === 'string' && node.description.length > 80) return node.description;
+  if (node['@graph']) return findJsonLdText_(node['@graph']);
+  const keys = Object.keys(node);
+  for (let i = 0; i < keys.length; i++) {
+    const found = findJsonLdText_(node[keys[i]]);
+    if (found) return found;
   }
   return '';
 }
@@ -432,13 +565,14 @@ function hasArticleDetail_(item) {
 
 function buildSummaryLines_(item) {
   if (item.summaryLines && item.summaryLines.length === 3) return item.summaryLines;
-  const selected = selectRoleSummaryLines_(item.articleText || '', item.topic || '', item.title || '');
+  const publicEvidence = item.articleText || '';
+  const selected = selectRoleSummaryLines_(publicEvidence, item.topic || '', item.title || '', item.url || '');
   return selected.length === 3 ? selected.map(s => truncate_(cleanSummarySentence_(s), 135)) : [];
 }
 
-function selectRoleSummaryLines_(text, topic, title) {
+function selectRoleSummaryLines_(text, topic, title, url) {
   const sentences = articleSentences_(text);
-  if (sentences.length < 3) return [];
+  if (sentences.length < 3) return buildFallbackSummaryLines_(text, topic, title, url, sentences);
   const roles = [
     { name: 'core', terms: ['announce', 'announces', 'launch', 'launches', 'release', 'releases', 'introduce', 'introduces', 'propose', 'proposes', 'present', 'presents', 'new', 'first', '핵심', '공개', '출시', '발표', '제안'] },
     { name: 'technical', terms: ['architecture', 'framework', 'model', 'dataset', 'training', 'inference', 'retrieval', 'rag', 'agent', 'benchmark', 'evaluation', 'github', 'open-source', 'method', '방법', '모델', '데이터셋', '프레임워크', '아키텍처', '평가', '벤치마크', '검색', '추론'] },
@@ -456,6 +590,50 @@ function selectRoleSummaryLines_(text, topic, title) {
     });
   }
   return picked.length === 3 ? picked : [];
+}
+
+function buildFallbackSummaryLines_(text, topic, title, url, sentences) {
+  const evidence = plain_(text);
+  if (evidence.length < MIN_SUMMARY_EVIDENCE_CHARS || sentences.length === 0) return [];
+  const first = sentences[0];
+  const technical = bestKeywordSentence_(sentences, ['model', 'dataset', 'training', 'inference', 'retrieval', 'rag', 'agent', 'benchmark', 'evaluation', 'architecture', 'framework', 'github', '모델', '데이터셋', '추론', '검색', '평가', '벤치마크']) || sentences[Math.min(1, sentences.length - 1)];
+  const impact = bestKeywordSentence_(sentences, ['improve', 'outperform', 'performance', 'accuracy', 'latency', 'cost', 'result', 'results', 'reduce', 'increase', '성능', '개선', '정확도', '비용', '결과', '한계']) || sentences[Math.min(2, sentences.length - 1)];
+  const domain = publicHostLabel_(url);
+  const titleHint = plain_(title).replace(/^re:\s*/i, '');
+  return [
+    first,
+    technical !== first ? technical : (domain + ' 공개 본문에서 ' + summarizeTechnicalTerms_(evidence, topic) + ' 관련 단서가 확인됩니다'),
+    impact !== first && impact !== technical ? impact : (titleHint ? titleHint + '의 공개 원문이 위 기술 신호를 근거로 다룹니다' : domain + ' 공개 원문이 위 기술 신호를 근거로 다룹니다')
+  ];
+}
+
+function bestKeywordSentence_(sentences, keywords) {
+  let best = '';
+  let bestScore = 0;
+  sentences.forEach(sentence => {
+    const lower = sentence.toLowerCase();
+    let score = 0;
+    keywords.forEach(keyword => { if (lower.indexOf(keyword) !== -1) score += 1; });
+    if (/\d+(\.\d+)?\s*(%|x|×|k|m|b|ms|s|tokens?|parameters?|benchmarks?|datasets?)/i.test(sentence)) score += 1;
+    if (score > bestScore) {
+      best = sentence;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
+function summarizeTechnicalTerms_(text, topic) {
+  const lower = String(text || '').toLowerCase();
+  const terms = ['RAG', 'retrieval', 'agent', 'LLM', 'multimodal', 'benchmark', 'inference', 'dataset', 'model', 'evaluation', 'GitHub'];
+  const hits = terms.filter(term => lower.indexOf(term.toLowerCase()) !== -1).slice(0, 3);
+  if (hits.length > 0) return hits.join('/');
+  return topic || '기술';
+}
+
+function publicHostLabel_(url) {
+  const match = String(url || '').match(/^https?:\/\/([^\/]+)/i);
+  return match ? match[1].replace(/^www\./i, '') : '공개 링크';
 }
 
 function bestSentenceForRole_(sentences, role, picked, topic, title) {
@@ -576,13 +754,43 @@ function matchesAllowlist_(sender, allowlist) {
 }
 
 function extractUrls_(text) {
-  const matches = String(text || '').match(/https?:\/\/[^\s<>()"'\]]+/gi) || [];
+  return extractUrlCandidates_(text, '').map(candidate => candidate.url);
+}
+
+function extractUrlCandidates_(plainText, html) {
+  const candidates = [];
+  const text = String(plainText || '');
+  const urlRe = /https?:\/\/[^\s<>()"'\]]+/gi;
+  let match;
+  while ((match = urlRe.exec(text)) !== null) {
+    const url = sanitizeUrl_(match[0]);
+    candidates.push({ url: url, context: contextAround_(text, match.index, match[0].length) });
+  }
+
+  const htmlText = String(html || '');
+  const hrefRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  while ((match = hrefRe.exec(htmlText)) !== null) {
+    const url = sanitizeUrl_(match[1]);
+    const label = plain_(extractReadableText_(match[2] || ''));
+    const context = label || contextAround_(stripHtml_(htmlText), match.index, match[0].length);
+    candidates.push({ url: url, context: truncate_(context, URL_CONTEXT_WINDOW) });
+  }
+
   const seen = {};
-  return matches.map(url => url.replace(/[.,;:!?)]}>'"]+$/g, '')).filter(url => {
-    if (seen[url]) return false;
-    seen[url] = true;
+  return candidates.filter(candidate => {
+    if (!candidate.url || !/^https?:\/\//i.test(candidate.url)) return false;
+    if (seen[candidate.url]) return false;
+    seen[candidate.url] = true;
+    candidate.context = truncate_(plain_(candidate.context), URL_CONTEXT_WINDOW);
     return true;
   });
+}
+
+function contextAround_(text, index, length) {
+  const source = plain_(text);
+  const start = Math.max(0, index - Math.floor(URL_CONTEXT_WINDOW / 2));
+  const end = Math.min(source.length, index + length + Math.floor(URL_CONTEXT_WINDOW / 2));
+  return source.slice(start, end);
 }
 
 function isPrivateUtilityUrl_(url) {
