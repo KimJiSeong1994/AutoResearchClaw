@@ -26,7 +26,9 @@ if [[ -x "$HOME/.openclaw/workspace/projects/paper-recommender/.venv/bin/python"
   PYTHON_BIN="$HOME/.openclaw/workspace/projects/paper-recommender/.venv/bin/python"
 fi
 
-if [[ "$NEWSLETTER_SOURCE_MODE" == "gmail_api" ]]; then
+if [[ "$NEWSLETTER_SOURCE_MODE" == "apps_script_pull" ]]; then
+  bash "$HOME/.openclaw/workspace/scripts/apps-script-newsletter-pull.sh"
+elif [[ "$NEWSLETTER_SOURCE_MODE" == "gmail_api" ]]; then
   "$PYTHON_BIN" "$SKILL_DIR/gmail_newsletter_briefing.py" \
     --wiki-root "$NEWSLETTER_WIKI_ROOT" \
     --date "$NEWSLETTER_DATE" \

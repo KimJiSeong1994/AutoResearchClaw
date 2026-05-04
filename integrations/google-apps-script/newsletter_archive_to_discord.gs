@@ -7,12 +7,16 @@
  * - Requires SENDER_ALLOWLIST before processing mail.
  *
  * Required Script Properties:
- * - DISCORD_WEBHOOK_URL: Discord channel webhook URL for 아카이브룸/뉴스레타-수집 (recommended)
  * - SENDER_ALLOWLIST: comma-separated sender/domain substrings
  *
+ * Recommended Script Properties for 40333-safe operation:
+ * - DELIVERY_MODE: relay_pull
+ * - RELAY_READ_TOKEN: shared token used by the EC2 puller
+ *
  * Optional Script Properties:
- * - DISCORD_CHANNEL_ID: Discord channel snowflake fallback
- * - DISCORD_BOT_TOKEN: Discord bot token fallback; Apps Script may hit Discord/Cloudflare 40333
+ * - DISCORD_WEBHOOK_URL: direct Discord webhook fallback; may hit Discord/Cloudflare 40333
+ * - DISCORD_CHANNEL_ID: Discord channel snowflake bot-token fallback
+ * - DISCORD_BOT_TOKEN: bot-token fallback; may hit Discord/Cloudflare 40333
  * - GMAIL_QUERY: Gmail search query, default newer_than:7d
  * - MAX_THREADS: default 50
  */
@@ -51,6 +55,7 @@ const TOPIC_RULES = [
 
 function runNewsletterArchive() {
   const props = PropertiesService.getScriptProperties();
+  const deliveryMode = props.getProperty('DELIVERY_MODE') || 'relay_pull';
   const webhookUrl = props.getProperty('DISCORD_WEBHOOK_URL') || '';
   const channelId = props.getProperty('DISCORD_CHANNEL_ID') || DEFAULT_DISCORD_CHANNEL_ID;
   const token = props.getProperty('DISCORD_BOT_TOKEN') || '';
@@ -58,8 +63,8 @@ function runNewsletterArchive() {
   const query = props.getProperty('GMAIL_QUERY') || DEFAULT_GMAIL_QUERY;
   const maxThreads = Number(props.getProperty('MAX_THREADS') || DEFAULT_MAX_THREADS);
 
-  if (!webhookUrl && !token) {
-    throw new Error('DISCORD_WEBHOOK_URL is recommended; otherwise DISCORD_BOT_TOKEN is required as fallback.');
+  if (deliveryMode !== 'relay_pull' && !webhookUrl && !token) {
+    throw new Error('Use DELIVERY_MODE=relay_pull, DISCORD_WEBHOOK_URL, or DISCORD_BOT_TOKEN.');
   }
   if (senderAllowlist.length === 0) {
     throw new Error('SENDER_ALLOWLIST is required; refusing to sweep private mail.');
@@ -67,7 +72,11 @@ function runNewsletterArchive() {
 
   const items = collectNewsletterItems_(query, maxThreads, senderAllowlist);
   const briefing = renderBriefing_(items, query);
-  postDiscord_(channelId, token, briefing, webhookUrl);
+  saveLatestBriefing_(briefing, items.length, query);
+  if (deliveryMode !== 'relay_pull') {
+    postDiscord_(channelId, token, briefing, webhookUrl);
+  }
+  return briefing;
 }
 
 function collectNewsletterItems_(query, maxThreads, senderAllowlist) {
@@ -149,6 +158,35 @@ function renderBriefing_(items, query) {
 
   lines.push('', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.');
   return truncate_(lines.join('\n'), 1900);
+}
+
+
+function saveLatestBriefing_(briefing, itemCount, query) {
+  PropertiesService.getScriptProperties().setProperties({
+    LATEST_BRIEFING: briefing,
+    LATEST_BRIEFING_AT: new Date().toISOString(),
+    LATEST_BRIEFING_ITEM_COUNT: String(itemCount),
+    LATEST_BRIEFING_QUERY: query
+  });
+}
+
+function doGet(e) {
+  const props = PropertiesService.getScriptProperties();
+  const expected = props.getProperty('RELAY_READ_TOKEN') || '';
+  const actual = e && e.parameter ? String(e.parameter.token || '') : '';
+  if (!expected || actual !== expected) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: 'unauthorized' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      briefing: props.getProperty('LATEST_BRIEFING') || '',
+      generated_at: props.getProperty('LATEST_BRIEFING_AT') || '',
+      item_count: Number(props.getProperty('LATEST_BRIEFING_ITEM_COUNT') || '0'),
+      query: props.getProperty('LATEST_BRIEFING_QUERY') || ''
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function postDiscord_(channelId, token, content, webhookUrl) {
