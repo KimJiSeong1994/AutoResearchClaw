@@ -115,7 +115,7 @@ def _shorten(value: object, limit: int) -> str:
 
 
 def _link_line(label: str, url: str) -> str:
-    return f"↳ [{_shorten(label, 52)}]({url})"
+    return f"  - [{_shorten(label, 48)}]({url})"
 
 
 def _paper_link_from_raw(paper: dict[str, object]) -> tuple[str, str] | None:
@@ -259,15 +259,15 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
             if not title_text:
                 continue
             links = _cluster_source_links(cluster, candidates_by_id, fallback_candidates)
-            source_lines = [_link_line(label, url) for label, url in links] or ["↳ 원문 raw.json 참고"]
+            source_lines = [_link_line(label, url) for label, url in links] or ["  - 원문 raw.json 참고"]
             lines += [
                 f"",
                 f"### {rendered_clusters + 1}. {_shorten(title_text, 72)}",
                 f"- **핵심 요약**: {_shorten(cluster.get('summary'), 155)}",
                 f"- **기술 포인트**: {_shorten(cluster.get('why_it_matters'), 155)}",
-                f"- **출처 링크**: {source_lines[0]}",
+                "- **출처 링크**:",
             ]
-            lines.extend(source_lines[1:])
+            lines.extend(source_lines)
             rendered_clusters += 1
             if rendered_clusters >= 3:
                 break
