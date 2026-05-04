@@ -41,6 +41,8 @@ def render_weekly_report(
     profile: dict[str, Any],
     soul_md: str | None,
     user_id: str | None,
+    soul_card: str | None = None,
+    soul_provenance: dict[str, Any] | None = None,
     queries: list[dict[str, str]],
     candidates: list[dict[str, Any]],
     report: dict[str, Any],
@@ -48,21 +50,52 @@ def render_weekly_report(
 ) -> str:
     by_id = {paper_key(p): p for p in candidates}
     week = datetime.fromisoformat(run_iso.replace("Z", "+00:00")).strftime("%G-W%V")
+    soul_provenance = dict(soul_provenance or {})
+    soul_source = str(soul_provenance.get("source") or ("soul" if soul_md else "absent"))
+    fallback_used = bool(soul_provenance.get("fallback_used"))
+    report_type = "weekly-soul-trends" if soul_source == "soul" else "weekly-profile-trends"
     lines: list[str] = [
         "---",
         f'date: "{run_iso[:10]}"',
         f'week: "{week}"',
         'source: paper-recommender',
-        'report_type: weekly-soul-trends',
+        f"report_type: {report_type}",
+        f'soul_source: "{_safe_md(soul_source)}"',
+        f"soul_fallback_used: {str(fallback_used).lower()}",
         "tags:",
         "  - paper-recommender",
         "  - weekly",
         "  - research-trends",
     ]
+    if soul_provenance.get("active_sha256"):
+        lines.append(f'soul_sha256: "{_safe_md(soul_provenance.get("active_sha256"))}"')
+    if soul_provenance.get("soul_last_updated"):
+        lines.append(f'soul_last_updated: "{_safe_md(soul_provenance.get("soul_last_updated"))}"')
     if user_id:
         lines.append(f'user_id: "{_safe_md(user_id)}"')
     lines.extend(["---", "", f"# Weekly research trends — {week}", ""])
-    lines.append("> Coverage caveat: " + _safe_md(report.get("coverage_caveat")))
+    caveat = _safe_md(report.get("coverage_caveat"))
+    if fallback_used:
+        caveat = (caveat + " " if caveat else "") + (
+            f"SOUL source is `{_safe_md(soul_source)}`; profile/narrative fallback was used."
+        )
+    lines.append("> Coverage caveat: " + caveat)
+    lines.append("")
+
+    lines.extend(["## SOUL basis", ""])
+    if soul_source == "soul":
+        lines.append(
+            "- Active SOUL loaded"
+            + (f" for `{_safe_md(user_id)}`" if user_id else "")
+            + (f"; last updated `{_safe_md(soul_provenance.get('soul_last_updated'))}`" if soul_provenance.get("soul_last_updated") else "")
+            + "."
+        )
+    elif fallback_used:
+        lines.append(f"- ⚠️ SOUL unavailable; `{_safe_md(soul_source)}` was used for this run.")
+    else:
+        lines.append("- SOUL was not available for this run.")
+    if soul_provenance.get("active_bytes") is not None:
+        lines.append(f"- Active context bytes: `{_safe_md(soul_provenance.get('active_bytes'))}`; compact card bytes: `{_safe_md(soul_provenance.get('compact_card_bytes'))}`.")
     lines.append("")
 
     glance = _safe_md(report.get("at_a_glance"))
@@ -120,6 +153,16 @@ def render_weekly_report(
             lines.append(f"{i}. **{title}** — {query}")
         lines.append("")
 
+    if soul_card:
+        lines.extend([
+            "<details><summary>Briefing SOUL card</summary>",
+            "",
+            _safe_md(soul_card),
+            "",
+            "</details>",
+            "",
+        ])
+
     if soul_md:
         lines.extend([
             "<details><summary>SOUL context snapshot</summary>",
@@ -138,6 +181,8 @@ def write_weekly_artifacts(
     profile: dict[str, Any],
     soul_md: str | None,
     user_id: str | None,
+    soul_card: str | None = None,
+    soul_provenance: dict[str, Any] | None = None,
     queries: list[dict[str, str]],
     candidates: list[dict[str, Any]],
     report: dict[str, Any],
@@ -150,6 +195,8 @@ def write_weekly_artifacts(
         settings,
         profile=profile,
         soul_md=soul_md,
+        soul_card=soul_card,
+        soul_provenance=soul_provenance,
         user_id=user_id,
         queries=queries,
         candidates=candidates,
@@ -161,7 +208,11 @@ def write_weekly_artifacts(
         "run_at": run_iso,
         "user_id": user_id,
         "profile": profile,
-        "soul_present": bool(soul_md),
+        "soul_present": bool((soul_provenance or {}).get("present", bool(soul_md))),
+        "soul_source": (soul_provenance or {}).get("source") or ("soul" if soul_md else "absent"),
+        "soul_fallback_used": bool((soul_provenance or {}).get("fallback_used")),
+        "soul_provenance": soul_provenance or {},
+        "soul_card": soul_card,
         "queries": queries,
         "candidate_count": len(candidates),
         "candidates": [

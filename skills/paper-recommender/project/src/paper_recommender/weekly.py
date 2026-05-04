@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,20 @@ class WeeklyRunResult:
     query_count: int
 
 
+@dataclass(frozen=True)
+class SoulRunContext:
+    """Auditable SOUL state used by the weekly trend pipeline.
+
+    `source` is deliberately explicit so downstream renderers can distinguish a
+    real SOUL-backed run from a profile/narrative fallback. The compact card is
+    the prompt/search surface; the full text remains only as a snapshot artifact.
+    """
+
+    active_md: str | None
+    compact_card: str | None
+    provenance: dict[str, Any]
+
+
 def _parse_utc(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -54,6 +69,118 @@ def _weekly_due(settings: Settings, store: StateStore, *, now: datetime, force: 
     if last is None:
         return True
     return now - last >= timedelta(days=settings.weekly_report.cadence_days)
+
+
+def _sha256_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _compact_soul_card(soul_md: str | None, profile: dict[str, Any], *, limit: int = 1600) -> str | None:
+    """Create the small SOUL surface that is safe to feed into query/report LLMs.
+
+    Full SOUL files tend to accrete audit logs, blind spots, and historical
+    notes. Those are useful for governance, but noisy as search-query context.
+    This card keeps stable identity + active profile signals and drops obvious
+    maintenance sections.
+    """
+
+    lines: list[str] = []
+    for key, label in (
+        ("interests", "Interests"),
+        ("keywords", "Keywords"),
+        ("methodology_focus", "Methodology"),
+    ):
+        vals = profile.get(key) or []
+        if isinstance(vals, list) and vals:
+            joined = ", ".join(str(v).strip() for v in vals[:8] if str(v).strip())
+            if joined:
+                lines.append(f"{label}: {joined}")
+
+    skip_markers = (
+        "changelog",
+        "change log",
+        "history",
+        "audit",
+        "log",
+        "blind spot",
+        "blindspot",
+        "negative",
+        "suppress",
+        "suppression",
+        "caveat",
+        "운영",
+        "변경",
+        "로그",
+        "제외",
+        "억제",
+    )
+    seen = {line.lower() for line in lines}
+    if soul_md:
+        for raw in soul_md.splitlines():
+            line = raw.strip().strip("#-*`> \t")
+            if not line or len(line) < 8:
+                continue
+            lowered = line.lower()
+            if any(marker in lowered for marker in skip_markers):
+                continue
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            lines.append(line)
+            if sum(len(item) + 1 for item in lines) >= limit:
+                break
+
+    card = "\n".join(lines).strip()
+    return card[:limit].strip() or None
+
+
+def _build_soul_context(
+    settings: Settings,
+    store: StateStore,
+    *,
+    user_id: str | None,
+    profile: dict[str, Any],
+    narrative_md: str | None,
+) -> SoulRunContext:
+    source = "absent"
+    soul_md: str | None = None
+    soul_last_updated: str | None = None
+    if user_id:
+        soul_md = store.load_soul(user_id)
+        soul_last_updated = store.last_soul_update(user_id)
+        if soul_md:
+            source = "soul"
+    active_md = soul_md
+    fallback_used = False
+    if not active_md and narrative_md:
+        active_md = narrative_md
+        source = "profile_narrative_fallback"
+        fallback_used = True
+    elif not active_md:
+        fallback_used = True
+
+    compact_card = _compact_soul_card(
+        active_md,
+        profile,
+        limit=min(max(settings.soul.compact_at_bytes, 800), settings.soul.max_bytes or 1600),
+    )
+    active_bytes = len(active_md.encode("utf-8")) if active_md else 0
+    provenance: dict[str, Any] = {
+        "source": source,
+        "user_id": user_id,
+        "present": source == "soul",
+        "fallback_used": fallback_used,
+        "active_bytes": active_bytes,
+        "active_sha256": _sha256_text(active_md),
+        "compact_card_bytes": len(compact_card.encode("utf-8")) if compact_card else 0,
+        "compact_card_sha256": _sha256_text(compact_card),
+        "soul_last_updated": soul_last_updated,
+        "max_bytes": settings.soul.max_bytes,
+        "compact_at_bytes": settings.soul.compact_at_bytes,
+    }
+    return SoulRunContext(active_md=active_md, compact_card=compact_card, provenance=provenance)
 
 
 async def _gather_weekly_candidates(
@@ -124,18 +251,23 @@ async def run_weekly_report(
     else:
         profile, narrative_md = await build_profiles(settings, store, force=False)
     user_id: str | None = None
-    soul_md: str | None = None
     try:
         user_id = user_id_from_jwt(settings.jiphyeonjeon.token)
-        soul_md = store.load_soul(user_id)
     except Exception as e:
         log.warning("weekly: could not load SOUL by user token, using profile only: %s", e)
-    if not soul_md:
-        soul_md = narrative_md
+    soul_context = _build_soul_context(
+        settings,
+        store,
+        user_id=user_id,
+        profile=profile,
+        narrative_md=narrative_md,
+    )
+    if soul_context.provenance.get("fallback_used"):
+        log.warning("weekly: SOUL fallback active: %s", soul_context.provenance.get("source"))
 
-    queries = await generate_trend_queries(settings, soul_md, profile)
+    queries = await generate_trend_queries(settings, soul_context.compact_card, profile)
     candidates = await _gather_weekly_candidates(settings, store, queries, force=force)
-    report = await synthesize_trend_report(settings, soul_md, profile, queries, candidates)
+    report = await synthesize_trend_report(settings, soul_context.compact_card, profile, queries, candidates)
 
     if dry_run:
         return WeeklyRunResult(target, wrote_artifacts=False, skipped=False, candidate_count=len(candidates), query_count=len(queries))
@@ -143,7 +275,9 @@ async def run_weekly_report(
     artifact_dir = write_weekly_artifacts(
         settings,
         profile=profile,
-        soul_md=soul_md,
+        soul_md=soul_context.active_md,
+        soul_card=soul_context.compact_card,
+        soul_provenance=soul_context.provenance,
         user_id=user_id,
         queries=queries,
         candidates=candidates,
@@ -157,6 +291,7 @@ async def run_weekly_report(
         {
             "run_at": run_iso,
             "user_id": user_id,
+            "soul_provenance": soul_context.provenance,
             "artifact_dir": str(artifact_dir),
             "query_count": len(queries),
             "candidate_count": len(candidates),

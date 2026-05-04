@@ -8,6 +8,27 @@ from paper_recommender.config import Settings
 from paper_recommender.llm import OpenClawLLM
 
 _MAX_QUERY_CHARS = 160
+_SOUL_QUERY_SKIP_MARKERS = (
+    "changelog",
+    "change log",
+    "history",
+    "audit",
+    "log",
+    "blind spot",
+    "blindspot",
+    "negative",
+    "suppress",
+    "suppression",
+    "caveat",
+    "fallback",
+    "provenance",
+    "last updated",
+    "운영",
+    "변경",
+    "로그",
+    "제외",
+    "억제",
+)
 
 
 def _safe_text(value: Any, *, limit: int = 6000) -> str:
@@ -47,6 +68,25 @@ def _dedupe_queries(items: list[dict[str, str]], cap: int) -> list[dict[str, str
     return out
 
 
+def _soul_query_candidates(soul_md: str | None) -> list[str]:
+    if not soul_md:
+        return []
+    candidates: list[str] = []
+    for raw in soul_md.splitlines():
+        line = raw.strip().strip("#- *`>\t")
+        if not 8 <= len(line) <= 120:
+            continue
+        lowered = line.lower()
+        if any(marker in lowered for marker in _SOUL_QUERY_SKIP_MARKERS):
+            continue
+        # Drop obvious markdown/control rows instead of turning them into
+        # literal paper-search queries.
+        if lowered.startswith(("details", "summary", "date:", "week:", "tags:", "source:")):
+            continue
+        candidates.append(line)
+    return candidates
+
+
 def fallback_trend_queries(settings: Settings, soul_md: str | None, profile: dict[str, Any]) -> list[dict[str, str]]:
     candidates: list[str] = []
     for key in ("keywords", "methodology_focus", "interests"):
@@ -55,11 +95,7 @@ def fallback_trend_queries(settings: Settings, soul_md: str | None, profile: dic
             candidates.extend(str(v) for v in vals if v)
     candidates.extend(settings.profile.seed_topics)
 
-    if soul_md:
-        for line in soul_md.splitlines():
-            line = line.strip("#- *\t")
-            if 8 <= len(line) <= 120:
-                candidates.append(line)
+    candidates.extend(_soul_query_candidates(soul_md))
 
     items = [
         {
