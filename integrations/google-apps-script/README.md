@@ -27,7 +27,40 @@ is blocked by app verification, Workspace policy, or test-user restrictions.
 ## Privacy boundary
 
 The script posts only metadata and extracted source URLs. Full email bodies are
-used in memory for URL extraction but are not posted to Discord.
+used in memory for URL extraction and public article-page summaries but are not
+posted to Discord.
+
+Treat `RELAY_READ_TOKEN` as a secret. The web app `doGet` endpoint returns the
+latest stored briefing and Gmail query to callers that provide this token, so
+rotate it if the deployment URL or token is exposed.
+
+When `INCLUDE_ALL_URLS=true`, every non-blocked URL found in matching mail can
+be summarized or linked. Keep `GMAIL_QUERY`, `SENDER_ALLOWLIST`, and
+`COLLECT_ALL_MAIL` narrow when mail may contain private workspaces, documents,
+or internal URLs.
+
+## Validation checklist
+
+This repository does not include a `.clasp.json` or `appsscript.json` for this
+standalone fallback script, so local validation is limited to host-side static
+checks and pure-helper smoke tests.
+
+Before pasting or deploying updates:
+
+1. Copy the script to a temporary `.js` file and run `node --check` on the copy
+   to catch parser-visible JavaScript syntax errors. Node does not parse `.gs`
+   paths directly.
+2. Smoke-test pure rendering helpers with sample public article text and verify
+   that each item renders the Korean output contract:
+   - `핵심`
+   - `기술 포인트`
+   - `의미/근거`
+   - `출처 링크`
+3. Grep the Apps Script file and this README for concrete Discord webhook URLs,
+   bot tokens, and relay tokens. Only Script Property names should appear in
+   source control.
+4. In Apps Script, run `runNewsletterArchive` once with `DELIVERY_MODE=relay_pull`
+   and review `LATEST_BRIEFING` before enabling the daily trigger.
 
 ## Discord 40333 note
 
