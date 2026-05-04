@@ -33,8 +33,7 @@ const DEFAULT_FETCH_ARTICLE_DETAILS = true;
 const MAX_ARTICLE_CHARS = 5000;
 const MAX_ARTICLE_FETCHES = 35;
 const MIN_ARTICLE_TEXT_CHARS = 220;
-const MIN_SUMMARY_EVIDENCE_CHARS = 160;
-const URL_CONTEXT_WINDOW = 260;
+const MIN_CONTEXT_SENTENCE_CHARS = 45;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -143,7 +142,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
         const shouldFetchDetail = fetchArticleDetails && detailFetchCount < MAX_ARTICLE_FETCHES;
         const articleText = shouldFetchDetail ? fetchArticleText_(url) : '';
         if (shouldFetchDetail) detailFetchCount += 1;
-        const sourceContext = contextByUrl[url] || snippet;
+        const sourceContext = extractUrlContext_(body, url);
         const detailBasis = articleText || sourceContext || snippet;
         const key = subject + '|' + url;
         if (seen[key]) {
@@ -205,7 +204,7 @@ function renderBriefing_(items, query) {
       lines.push('  - 기술 포인트: ' + summary[1]);
       lines.push('  - 의미/근거: ' + summary[2]);
       if (item.url) {
-        lines.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + item.url + ')');
+        lines.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
       } else {
         lines.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
       }
@@ -309,77 +308,11 @@ function scoreNewsletterUrl_(url) {
 }
 
 function sanitizeUrl_(url) {
-  const cleaned = decodeEntities_(String(url || '').replace(/[.,;:!?)]}>'"]+$/g, ''));
-  return canonicalPublicUrl_(unwrapTrackedUrl_(cleaned));
-}
-
-function canonicalPublicUrl_(url) {
-  const text = String(url || '').replace(/[.,;:!?)]}>'"]+$/g, '');
-  const parts = text.match(/^(https?:\/\/[^?#]+)(\?[^#]*)?(#.*)?$/i);
-  if (!parts) return text;
-  const base = parts[1];
-  const query = parts[2] ? parts[2].slice(1) : '';
-  const hash = parts[3] || '';
-  if (!query) return base + hash;
-  const keep = [];
-  query.split('&').forEach(pair => {
-    const key = decodeURIComponentSafe_(pair.split('=')[0] || '').toLowerCase();
-    if (!key || isTrackingQueryParam_(key, pair)) return;
-    keep.push(pair);
-  });
-  return base + (keep.length ? '?' + keep.join('&') : '') + hash;
-}
-
-function isTrackingQueryParam_(key, pair) {
-  if (/^utm_/.test(key)) return true;
-  const blocked = [
-    'fbclid', 'gclid', 'dclid', 'mc_cid', 'mc_eid', 'igshid', 'vero_id', 'mkt_tok',
-    'email', 'email_id', 'subscriber', 'subscriber_id', 'subscription_id', 'user_id', 'uid',
-    'token', 'signature', 'sig', 'hash', 'key', 'auth', 'jwt', 'code', 'state', 'session',
-    'unsubscribe', 'preferences', 'ref', 'source', 'campaign', 's', 'sk'
-  ];
-  if (blocked.indexOf(key) !== -1) return true;
-  const value = String(pair || '').split('=').slice(1).join('=');
-  return value.length > 80 && /[A-Za-z0-9_-]{40,}/.test(value);
-}
-
-function unwrapTrackedUrl_(url) {
-  const text = String(url || '');
-  const direct = decodeURIComponentSafe_(text);
-  const params = ['url', 'u', 'q', 'redirect', 'redirect_url', 'target', 'to'];
-  for (let i = 0; i < params.length; i++) {
-    const re = new RegExp('[?&]' + params[i] + '=([^&#]+)', 'i');
-    const match = text.match(re);
-    if (match) {
-      const decoded = decodeURIComponentSafe_(match[1]);
-      if (/^https?:\/\//i.test(decoded) && !isPrivateUtilityUrl_(decoded)) return decoded.replace(/[.,;:!?)]}>'"]+$/g, '');
-    }
-  }
-  const embedded = direct.match(/https?:\/\/[A-Za-z0-9][^\s<>()"'\]]+/g) || [];
-  if (embedded.length > 1) {
-    const last = embedded[embedded.length - 1].replace(/[.,;:!?)]}>'"]+$/g, '');
-    if (!isPrivateUtilityUrl_(last)) return last;
-  }
-  return text;
-}
-
-function decodeURIComponentSafe_(text) {
-  try {
-    return decodeURIComponent(String(text || '').replace(/&amp;/g, '&'));
-  } catch (e) {
-    return String(text || '');
-  }
-}
-
-function articleFetchUrl_(url) {
-  const text = String(url || '');
-  const arxivPdf = text.match(/^https?:\/\/(?:www\.)?arxiv\.org\/pdf\/([^?#]+)(?:\.pdf)?/i);
-  if (arxivPdf) return 'https://arxiv.org/abs/' + arxivPdf[1].replace(/\.pdf$/i, '');
-  return text;
+  return canonicalizeNewsletterUrl_(String(url || '').replace(/[.,;:!?)]}>'"]+$/g, ''));
 }
 
 function fetchArticleText_(url) {
-  const fetchUrl = articleFetchUrl_(url);
+  const fetchUrl = normalizeArticleFetchUrl_(url);
   if (!isFetchableArticleUrl_(fetchUrl)) return '';
   try {
     const response = UrlFetchApp.fetch(fetchUrl, {
@@ -438,55 +371,35 @@ function isPrivateHost_(host) {
 
 function extractArticleText_(html) {
   const raw = String(html || '');
+  const meta = extractMetaDescription_(raw);
+  const title = extractMetaTitle_(raw);
+  const jsonLd = extractJsonLdArticleBody_(raw);
   const candidates = [
-    extractJsonLdArticleBody_(raw),
+    jsonLd,
     extractTaggedContent_(raw, 'article'),
     extractTaggedContent_(raw, 'main'),
-    extractMetaDescription_(raw),
+    meta,
     extractReadableText_(raw)
   ].map(plain_).filter(Boolean);
   const best = candidates.sort((a, b) => b.length - a.length)[0] || '';
-  const meta = extractMetaDescription_(raw);
-  const combined = meta && best.indexOf(meta) === -1 ? meta + '. ' + best : best;
-  return articleSentences_(combined).join('. ');
+  const parts = [];
+  [title, meta, best].forEach(part => {
+    if (part && parts.join(' ').indexOf(part) === -1) parts.push(part);
+  });
+  return articleSentences_(parts.join('. ')).join('. ');
 }
 
 function extractJsonLdArticleBody_(html) {
   const blocks = String(html || '').match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
   for (let i = 0; i < blocks.length; i++) {
-    const json = decodeEntities_(blocks[i].replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim());
-    const parsed = parseJsonLd_(json);
-    const extracted = findJsonLdText_(parsed);
-    if (extracted) return extracted;
-  }
-  return '';
-}
-
-function parseJsonLd_(json) {
-  try {
-    return JSON.parse(json);
-  } catch (e) {
-    return null;
-  }
-}
-
-function findJsonLdText_(node) {
-  if (!node) return '';
-  if (Array.isArray(node)) {
-    for (let i = 0; i < node.length; i++) {
-      const found = findJsonLdText_(node[i]);
-      if (found) return found;
-    }
-    return '';
-  }
-  if (typeof node !== 'object') return '';
-  if (typeof node.articleBody === 'string' && node.articleBody.length > 80) return node.articleBody;
-  if (typeof node.description === 'string' && node.description.length > 80) return node.description;
-  if (node['@graph']) return findJsonLdText_(node['@graph']);
-  const keys = Object.keys(node);
-  for (let i = 0; i < keys.length; i++) {
-    const found = findJsonLdText_(node[keys[i]]);
-    if (found) return found;
+    const json = blocks[i].replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim();
+    const fields = [];
+    ['headline', 'name', 'description', 'abstract', 'articleBody'].forEach(field => {
+      const re = new RegExp('\"' + field + '\"\\s*:\\s*\"([\\s\\S]*?)\"\\s*[,}]', 'i');
+      const match = json.match(re);
+      if (match) fields.push(decodeJsonString_(match[1]));
+    });
+    if (fields.length > 0) return fields.join('. ');
   }
   return '';
 }
@@ -552,10 +465,7 @@ function decodeEntities_(text) {
 
 function detailedItems_(items) {
   return items
-    .map(item => {
-      item.summaryLines = buildSummaryLines_(item);
-      return item;
-    })
+    .map(item => Object.assign({}, item, { summaryLines: buildSummaryLines_(item) }))
     .filter(item => item.summaryLines.length === 3);
 }
 
@@ -565,12 +475,14 @@ function hasArticleDetail_(item) {
 
 function buildSummaryLines_(item) {
   if (item.summaryLines && item.summaryLines.length === 3) return item.summaryLines;
-  const publicEvidence = item.articleText || '';
-  const selected = selectRoleSummaryLines_(publicEvidence, item.topic || '', item.title || '', item.url || '');
-  return selected.length === 3 ? selected.map(s => truncate_(cleanSummarySentence_(s), 135)) : [];
+  const publicText = item.articleText || '';
+  const usablePublicText = publicText.length >= MIN_ARTICLE_TEXT_CHARS ? publicText : '';
+  const selected = selectRoleSummaryLines_(usablePublicText, item.topic || '', item.title || '', item.url || '', Boolean(usablePublicText));
+  if (selected.length === 3) return selected.map(s => truncate_(cleanSummarySentence_(s), 145));
+  return buildStructuredFallbackSummary_(item, Boolean(usablePublicText));
 }
 
-function selectRoleSummaryLines_(text, topic, title, url) {
+function selectRoleSummaryLines_(text, topic, title, url, hasPublicArticleText) {
   const sentences = articleSentences_(text);
   if (sentences.length < 3) return buildFallbackSummaryLines_(text, topic, title, url, sentences);
   const roles = [
@@ -580,11 +492,11 @@ function selectRoleSummaryLines_(text, topic, title, url) {
   ];
   const picked = [];
   roles.forEach(role => {
-    const candidate = bestSentenceForRole_(sentences, role, picked, topic, title);
+    const candidate = bestSentenceForRole_(sentences, role, picked, topic, title, url, hasPublicArticleText);
     if (candidate) picked.push(candidate);
   });
   if (picked.length < 3) {
-    const fallback = selectSubstantiveSentences_(text, topic, title);
+    const fallback = selectSubstantiveSentences_(text, topic, title, url, hasPublicArticleText);
     fallback.forEach(sentence => {
       if (picked.length < 3 && picked.indexOf(sentence) === -1) picked.push(sentence);
     });
@@ -592,56 +504,12 @@ function selectRoleSummaryLines_(text, topic, title, url) {
   return picked.length === 3 ? picked : [];
 }
 
-function buildFallbackSummaryLines_(text, topic, title, url, sentences) {
-  const evidence = plain_(text);
-  if (evidence.length < MIN_SUMMARY_EVIDENCE_CHARS || sentences.length === 0) return [];
-  const first = sentences[0];
-  const technical = bestKeywordSentence_(sentences, ['model', 'dataset', 'training', 'inference', 'retrieval', 'rag', 'agent', 'benchmark', 'evaluation', 'architecture', 'framework', 'github', '모델', '데이터셋', '추론', '검색', '평가', '벤치마크']) || sentences[Math.min(1, sentences.length - 1)];
-  const impact = bestKeywordSentence_(sentences, ['improve', 'outperform', 'performance', 'accuracy', 'latency', 'cost', 'result', 'results', 'reduce', 'increase', '성능', '개선', '정확도', '비용', '결과', '한계']) || sentences[Math.min(2, sentences.length - 1)];
-  const domain = publicHostLabel_(url);
-  const titleHint = plain_(title).replace(/^re:\s*/i, '');
-  return [
-    first,
-    technical !== first ? technical : (domain + ' 공개 본문에서 ' + summarizeTechnicalTerms_(evidence, topic) + ' 관련 단서가 확인됩니다'),
-    impact !== first && impact !== technical ? impact : (titleHint ? titleHint + '의 공개 원문이 위 기술 신호를 근거로 다룹니다' : domain + ' 공개 원문이 위 기술 신호를 근거로 다룹니다')
-  ];
-}
-
-function bestKeywordSentence_(sentences, keywords) {
-  let best = '';
-  let bestScore = 0;
-  sentences.forEach(sentence => {
-    const lower = sentence.toLowerCase();
-    let score = 0;
-    keywords.forEach(keyword => { if (lower.indexOf(keyword) !== -1) score += 1; });
-    if (/\d+(\.\d+)?\s*(%|x|×|k|m|b|ms|s|tokens?|parameters?|benchmarks?|datasets?)/i.test(sentence)) score += 1;
-    if (score > bestScore) {
-      best = sentence;
-      bestScore = score;
-    }
-  });
-  return best;
-}
-
-function summarizeTechnicalTerms_(text, topic) {
-  const lower = String(text || '').toLowerCase();
-  const terms = ['RAG', 'retrieval', 'agent', 'LLM', 'multimodal', 'benchmark', 'inference', 'dataset', 'model', 'evaluation', 'GitHub'];
-  const hits = terms.filter(term => lower.indexOf(term.toLowerCase()) !== -1).slice(0, 3);
-  if (hits.length > 0) return hits.join('/');
-  return topic || '기술';
-}
-
-function publicHostLabel_(url) {
-  const match = String(url || '').match(/^https?:\/\/([^\/]+)/i);
-  return match ? match[1].replace(/^www\./i, '') : '공개 링크';
-}
-
-function bestSentenceForRole_(sentences, role, picked, topic, title) {
+function bestSentenceForRole_(sentences, role, picked, topic, title, url, hasPublicArticleText) {
   let best = null;
   let bestScore = -999;
   sentences.forEach((sentence, idx) => {
     if (picked.indexOf(sentence) !== -1) return;
-    let score = scoreSentence_(sentence, idx, topic, title);
+    let score = scoreSentence_(sentence, idx, topic, title, url, hasPublicArticleText);
     const lower = sentence.toLowerCase();
     role.terms.forEach(term => { if (lower.indexOf(term) !== -1) score += 6; });
     if (score > bestScore) {
@@ -652,7 +520,7 @@ function bestSentenceForRole_(sentences, role, picked, topic, title) {
   return bestScore > 0 ? best : null;
 }
 
-function selectSubstantiveSentences_(text, topic, title) {
+function selectSubstantiveSentences_(text, topic, title, url, hasPublicArticleText) {
   const sentences = articleSentences_(text);
   const seen = {};
   const scored = [];
@@ -660,7 +528,7 @@ function selectSubstantiveSentences_(text, topic, title) {
     const normalized = normalizeSentenceKey_(sentence);
     if (seen[normalized]) return;
     seen[normalized] = true;
-    const score = scoreSentence_(sentence, idx, topic, title);
+    const score = scoreSentence_(sentence, idx, topic, title, url, hasPublicArticleText);
     if (score > 0) scored.push({ sentence: sentence, idx: idx, score: score });
   });
   return scored
@@ -675,7 +543,7 @@ function normalizeSentenceKey_(sentence) {
   return String(sentence || '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, ' ').trim().slice(0, 120);
 }
 
-function scoreSentence_(sentence, idx, topic, title) {
+function scoreSentence_(sentence, idx, topic, title, url, hasPublicArticleText) {
   const text = plain_(sentence);
   const lower = text.toLowerCase();
   if (text.length < 45 || text.length > 420) return -10;
@@ -687,7 +555,8 @@ function scoreSentence_(sentence, idx, topic, title) {
     'improve', 'improves', 'outperform', 'outperforms', 'benchmark', 'evaluation', 'architecture', 'framework',
     'agent', 'agents', 'rag', 'retrieval', 'llm', 'multimodal', 'model', 'training', 'inference', 'dataset',
     'open-source', 'open source', 'github', 'safety', 'alignment', 'reasoning', 'ranking', 'search', 'graph',
-    '제안', '개선', '성능', '평가', '모델', '데이터셋', '프레임워크', '아키텍처', '검색', '그래프', '추론', '에이전트', '벤치마크'
+    'paper', 'study', 'experiment', 'method', 'pipeline', 'tool', 'repository', 'code', 'api', 'data', 'baseline', 'metric',
+    '제안', '개선', '성능', '평가', '모델', '데이터셋', '프레임워크', '아키텍처', '검색', '그래프', '추론', '에이전트', '벤치마크', '논문', '실험', '방법론'
   ];
   strongTerms.forEach(term => { if (lower.indexOf(term) !== -1) score += 3; });
   const titleTerms = plain_(title).toLowerCase().split(/\s+/).filter(w => w.length >= 5).slice(0, 8);
@@ -696,6 +565,9 @@ function scoreSentence_(sentence, idx, topic, title) {
   topicTerms.forEach(term => { if (lower.indexOf(term) !== -1) score += 1.5; });
   if (/\d+(\.\d+)?\s*(%|x|×|k|m|b|ms|s|tokens?|parameters?|benchmarks?|datasets?)/i.test(text)) score += 3;
   if (/[가-힣]/.test(text) && /(이다|한다|했다|제안|분석|개선|가능|필요|중요)/.test(text)) score += 2;
+  const host = extractHost_(url);
+  if (host && lower.indexOf(host.replace(/^www\./, '').split('.')[0]) !== -1) score += 1;
+  if (hasPublicArticleText) score += 2;
   if (/\b(i|we|our|you|your)\b/i.test(text)) score -= 1;
   return score;
 }
@@ -703,9 +575,10 @@ function scoreSentence_(sentence, idx, topic, title) {
 function articleSentences_(text) {
   return String(text || '')
     .replace(/([.!?。])\s*(?=[A-Z가-힣0-9])/g, '$1\n')
+    .replace(/\s[-•*]\s+/g, '\n')
     .split(/\n+|[。]\s+/)
     .map(cleanSummarySentence_)
-    .filter(s => s.length >= 35 && !isBoilerplateSentence_(s));
+    .filter(s => s.length >= MIN_CONTEXT_SENTENCE_CHARS && !isBoilerplateSentence_(s));
 }
 
 function cleanSummarySentence_(text) {
@@ -729,14 +602,90 @@ function isBoilerplateSentence_(text) {
   if (bad.some(token => lower.indexOf(token) !== -1)) return true;
   if (/^(by|글쓴이|작성자)\s+/i.test(lower)) return true;
   if (/^.{0,50}(newsletter|home|posts|authors|upgrade)(\s+|$)/i.test(lower)) return true;
+  if (/^(table of contents|in this issue|this week|daily digest|weekly roundup)/i.test(lower)) return true;
   return false;
 }
 
 function extractTechnicalHint_(text) {
   const lower = String(text || '').toLowerCase();
-  const hints = ['agent', 'rag', 'retrieval', 'llm', 'multimodal', 'benchmark', 'inference', 'open source', 'github', 'evaluation', 'safety', 'product'];
+  const hints = ['agent', 'rag', 'retrieval', 'llm', 'multimodal', 'benchmark', 'inference', 'open source', 'github', 'evaluation', 'safety', 'product', 'dataset', 'architecture', 'model'];
   const hit = hints.find(h => lower.indexOf(h) !== -1);
-  return hit ? '본문에서 `' + hit + '` 관련 신호 확인' : '';
+  return hit ? '`' + hit + '` 신호 확인' : '';
+}
+
+
+function canonicalizeNewsletterUrl_(url) {
+  let text = String(url || '').trim();
+  const wrapperMatch = text.match(/[?&](?:url|u|target|redirect|redirect_url|destination)=([^&#]+)/i);
+  if (wrapperMatch) {
+    try {
+      const decoded = decodeURIComponent(wrapperMatch[1]);
+      if (/^https?:\/\//i.test(decoded)) text = decoded;
+    } catch (e) {
+      // Keep original URL when decoding fails.
+    }
+  }
+  text = text.replace(/[?&](?:utm_[^=&]+|fbclid|gclid|mc_cid|mc_eid|igshid|ref)=[^&#]*/gi, '');
+  text = text.replace(/[?&]$/, '');
+  return text;
+}
+
+function escapeMarkdownUrl_(url) {
+  return String(url || '').replace(/\)/g, '%29').replace(/\(/g, '%28');
+}
+
+function normalizeArticleFetchUrl_(url) {
+  const text = sanitizeUrl_(url);
+  const arxivPdf = text.match(/^https?:\/\/(?:www\.)?arxiv\.org\/pdf\/([^?#]+)(?:\.pdf)?/i);
+  if (arxivPdf) return 'https://arxiv.org/abs/' + arxivPdf[1].replace(/\.pdf$/i, '');
+  return text;
+}
+
+function extractMetaTitle_(html) {
+  const text = String(html || '');
+  const patterns = [
+    /<meta[^>]+property=["']og:title["'][^>]+content=["']([\s\S]*?)["'][^>]*>/i,
+    /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([\s\S]*?)["'][^>]*>/i,
+    /<meta[^>]+content=["']([\s\S]*?)["'][^>]+property=["']og:title["'][^>]*>/i,
+    /<title[^>]*>([\s\S]*?)<\/title>/i,
+    /<h1[^>]*>([\s\S]*?)<\/h1>/i
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    const match = text.match(patterns[i]);
+    if (match) return decodeEntities_(extractReadableText_(match[1]));
+  }
+  return '';
+}
+
+function buildStructuredFallbackSummary_(item, hasPublicArticleText) {
+  const title = truncate_(plain_(item.title || '제목 미상'), 70);
+  const host = extractHost_(item.url || '');
+  const kind = item.kind || classifyUrl_(item.url || '');
+  const topic = item.topic || '기타 테크 리포트';
+  const basisText = item.articleText || title;
+  const hint = extractTechnicalHint_(basisText + ' ' + item.url + ' ' + title);
+  const sourceBasis = hasPublicArticleText ? '공개 원문' : (item.url ? '공개 링크 메타데이터' : '메일 메타데이터');
+  return [
+    topic + ' 범주의 `' + title + '` 항목으로 분류되며, ' + sourceBasis + ' 기준으로 검토 대상입니다.',
+    kind + (host ? ' · ' + host : '') + (hint ? ' · ' + hint : ' · 제목/URL 기반 기술 신호 확인'),
+    '근거: ' + (item.url ? '원문 링크가 보존되어 후속 공개 원문 검증이 가능' : '메일에 외부 출처 링크가 없어 제목/수신 메타데이터만 사용')
+  ].map(s => truncate_(s, 145));
+}
+
+function extractUrlContext_(body, url) {
+  const text = plain_(body);
+  const cleanUrl = sanitizeUrl_(url);
+  if (!text || !cleanUrl) return '';
+  const idx = text.indexOf(cleanUrl);
+  if (idx === -1) return '';
+  const start = Math.max(0, idx - 420);
+  const end = Math.min(text.length, idx + cleanUrl.length + 420);
+  return text.slice(start, end).replace(cleanUrl, ' ');
+}
+
+function extractHost_(url) {
+  const match = String(url || '').match(/^https?:\/\/([^\/]+)/i);
+  return match ? match[1].toLowerCase() : '';
 }
 
 function bool_(value, fallback) {
