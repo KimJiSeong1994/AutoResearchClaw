@@ -910,13 +910,39 @@ function classifyUrl_(url) {
 
 function classifyTopic_(text) {
   const lower = String(text || '').toLowerCase();
-  for (let i = 0; i < TOPIC_RULES.length; i++) {
-    const topic = TOPIC_RULES[i][0];
-    const needles = TOPIC_RULES[i][1];
-    if (needles.some(needle => lower.indexOf(needle) !== -1)) return topic;
+  let best = null;
+  TOPIC_RULES.forEach(rule => {
+    const score = scoreTopicRule_(lower, rule);
+    if (score < TOPIC_SCORE_THRESHOLD) return;
+    if (!best || score > best.score || (score === best.score && rule.priority < best.priority)) {
+      best = { label: rule.label, score: score, priority: rule.priority };
+    }
+  });
+  if (best) {
+    return best.label;
   }
   if (lower.indexOf('arxiv.org') !== -1 || lower.indexOf('doi.org') !== -1 || lower.indexOf('openreview.net') !== -1) return '논문/리서치';
   return '기타 테크 리포트';
+}
+
+function scoreTopicRule_(lower, rule) {
+  let score = 0;
+  (rule.phrases || []).forEach(phrase => {
+    if (containsTokenPhrase_(lower, phrase)) score += 4;
+  });
+  (rule.terms || []).forEach(term => {
+    if (containsTokenPhrase_(lower, term)) score += 2;
+  });
+  (rule.substrings || []).forEach(token => {
+    if (lower.indexOf(token) !== -1) score += 2;
+  });
+  return score;
+}
+
+function containsTokenPhrase_(lower, phrase) {
+  const escaped = String(phrase || '').toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  if (!escaped) return false;
+  return new RegExp('(^|[^a-z0-9])' + escaped + '([^a-z0-9]|$)').test(lower);
 }
 
 function groupByTopic_(items) {
