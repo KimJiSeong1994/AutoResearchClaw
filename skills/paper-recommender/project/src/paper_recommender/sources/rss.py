@@ -17,7 +17,11 @@ from urllib.parse import urlparse
 import httpx
 
 from paper_recommender.sources import CandidateItem, SourceLimits
-from paper_recommender.sources._util import normalize_title_for_dedup
+from paper_recommender.sources._util import (
+    clean_text,
+    item_matches_topics,
+    normalize_title_for_dedup,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +90,7 @@ class RssFeedAdapter:
                         break
                     if limits.year_from and item.year and item.year < limits.year_from:
                         continue
-                    if topics and not _matches_topics(item, topics):
+                    if topics and not item_matches_topics(item, topics):
                         continue
                     key = item.url or normalize_title_for_dedup(item.title)
                     if not key or key in seen:
@@ -177,9 +181,9 @@ def _item(
     year = _year_from_date(published)
     return CandidateItem(
         source=_source_from_url(feed_url),
-        title=_clean(title),
+        title=clean_text(title),
         url=link.strip() if link else None,
-        abstract=_clean(summary)[:max_summary_chars] if summary else None,
+        abstract=clean_text(summary)[:max_summary_chars] if summary else None,
         authors=authors,
         year=year,
         venue=feed_title,
@@ -192,11 +196,6 @@ def _source_from_url(feed_url: str) -> str:
     if host.endswith("medium.com") or ".medium.com" in host:
         return "medium_rss"
     return "rss"
-
-
-def _matches_topics(item: CandidateItem, topics: list[str]) -> bool:
-    hay = f"{item.title}\n{item.abstract or ''}\n{item.venue or ''}".lower()
-    return any(t in hay for t in topics)
 
 
 def _year_from_date(value: str | None) -> int | None:
@@ -214,11 +213,7 @@ def _year_from_date(value: str | None) -> int | None:
 def _text(node: ET.Element | None) -> str | None:
     if node is None or node.text is None:
         return None
-    return _clean(node.text)
-
-
-def _clean(value: str | None) -> str:
-    return " ".join((value or "").split()).strip()
+    return clean_text(node.text)
 
 
 def _strip_ns(tag: str) -> str:

@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from paper_recommender.sources._util import normalize_title_for_dedup
+from pathlib import Path
+
+from paper_recommender.sources import CandidateItem
+from paper_recommender.sources._util import (
+    clean_text,
+    item_matches_topics,
+    normalize_title_for_dedup,
+    redacted_path,
+)
 
 
 def test_empty_or_none_returns_empty_string() -> None:
@@ -56,3 +64,27 @@ def test_only_one_prefix_stripped() -> None:
     out = normalize_title_for_dedup("Show HN: a paper about Show HN: phenomenon")
     assert out.startswith("a paper")
     assert "show hn" in out  # the inner one survives (after punctuation strip)
+
+
+def test_clean_text_collapses_whitespace() -> None:
+    assert clean_text("  hello\n\tworld  ") == "hello world"
+    assert clean_text(None) == ""
+
+
+def test_item_matches_topics_can_include_tags() -> None:
+    item = CandidateItem(
+        source="manual",
+        title="Unrelated title",
+        url="https://example.com",
+        abstract="No keyword here",
+        authors=(),
+        year=2026,
+        venue="Example",
+        tags=("agentic-ai",),
+    )
+    assert not item_matches_topics(item, ["agentic-ai"])
+    assert item_matches_topics(item, ["agentic-ai"], include_tags=True)
+
+
+def test_redacted_path_uses_basename_only() -> None:
+    assert redacted_path(Path("/private/user/secret/news.mbox")) == ".../news.mbox"

@@ -16,7 +16,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from paper_recommender.sources import CandidateItem, SourceLimits
-from paper_recommender.sources._util import normalize_title_for_dedup
+from paper_recommender.sources._util import (
+    clean_text,
+    item_matches_topics,
+    normalize_title_for_dedup,
+    redacted_path,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +65,7 @@ class ManualLinksAdapter:
             try:
                 lines = safe_path.read_text(encoding="utf-8").splitlines()
             except OSError as e:
-                log.warning("manual_links cannot read %s: %s", _redacted_path(path), e)
+                log.warning("manual_links cannot read %s: %s", redacted_path(path), e)
                 continue
             for line_no, line in enumerate(lines, start=1):
                 if len(out) >= limits.max_per_source:
@@ -71,14 +76,14 @@ class ManualLinksAdapter:
                 try:
                     raw = json.loads(line)
                 except json.JSONDecodeError as e:
-                    log.warning("manual_links invalid JSONL %s:%d: %s", _redacted_path(path), line_no, e)
+                    log.warning("manual_links invalid JSONL %s:%d: %s", redacted_path(path), line_no, e)
                     continue
                 item = _to_item(raw, self._settings.max_summary_chars)
                 if item is None:
                     continue
                 if limits.year_from and item.year and item.year < limits.year_from:
                     continue
-                if topics and not _matches_topics(item, topics):
+                if topics and not item_matches_topics(item, topics, include_tags=True):
                     continue
                 key = item.url or normalize_title_for_dedup(item.title)
                 if not key or key in seen:
@@ -89,7 +94,7 @@ class ManualLinksAdapter:
 
 
 def _validated_path(path: Path, max_file_kb: int) -> Path | None:
-    display = _redacted_path(path)
+    display = redacted_path(path)
     if path.is_symlink():
         log.warning("manual_links symlink rejected: %s", display)
         return None
@@ -110,13 +115,13 @@ def _validated_path(path: Path, max_file_kb: int) -> Path | None:
 def _to_item(raw: object, max_summary_chars: int) -> CandidateItem | None:
     if not isinstance(raw, dict):
         return None
-    title = _clean(raw.get("title"))
-    url = _clean(raw.get("url"))
+    title = clean_text(raw.get("title"))
+    url = clean_text(raw.get("url"))
     if not title or not _safe_http_url(url):
         return None
-    summary = _clean(raw.get("summary") or raw.get("abstract"))
+    summary = clean_text(raw.get("summary") or raw.get("abstract"))
     authors = _authors(raw)
-    published = _clean(raw.get("published_at") or raw.get("date"))
+    published = clean_text(raw.get("published_at") or raw.get("date"))
     source = _source(raw.get("source"), url)
     tags = tuple(dict.fromkeys(("manual-link", source, *_tags(raw))))
     return CandidateItem(
@@ -138,7 +143,7 @@ def _safe_http_url(url: str) -> bool:
 
 
 def _source(value: object, url: str) -> str:
-    raw = _clean(value).lower().replace(" ", "_")
+    raw = clean_text(value).lower().replace(" ", "_")
     if raw:
         return raw[:40]
     host = urlparse(url).netloc.lower()
@@ -160,8 +165,8 @@ def _venue(source: str, url: str) -> str:
 def _authors(raw: dict) -> tuple[str, ...]:
     val = raw.get("authors")
     if isinstance(val, list):
-        return tuple(_clean(v) for v in val if _clean(v))
-    author = _clean(raw.get("author"))
+        return tuple(clean_text(v) for v in val if clean_text(v))
+    author = clean_text(raw.get("author"))
     return (author,) if author else ()
 
 
@@ -169,12 +174,7 @@ def _tags(raw: dict) -> tuple[str, ...]:
     val = raw.get("tags")
     if not isinstance(val, list):
         return ()
-    return tuple(_clean(v) for v in val if _clean(v))
-
-
-def _matches_topics(item: CandidateItem, topics: list[str]) -> bool:
-    hay = f"{item.title}\n{item.abstract or ''}\n{item.venue or ''}\n{' '.join(item.tags)}".lower()
-    return any(t in hay for t in topics)
+    return tuple(clean_text(v) for v in val if clean_text(v))
 
 
 def _year_from_date(value: str) -> int | None:
@@ -184,14 +184,6 @@ def _year_from_date(value: str) -> int | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).year
     except ValueError:
         return None
-
-
-def _clean(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _redacted_path(path: Path) -> str:
-    return f".../{path.name}"
 
 
 __all__ = ["ManualLinksAdapter", "ManualLinkSettings"]

@@ -1,0 +1,16 @@
+{
+  "scriptId": "1dCDddGpWEy65_kGYuwv3DQJ5a9phKOx9KmPBqStTrFJ_2BTCndS-xYIO",
+  "rootDir": "../../../../tmp/jiphyeonjeon-newsletter-appsscript",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": [],
+  "skipSubdirectories": false
+}

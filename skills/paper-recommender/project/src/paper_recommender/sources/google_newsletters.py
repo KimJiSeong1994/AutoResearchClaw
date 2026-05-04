@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 from paper_recommender.sources import CandidateItem, SourceLimits
-from paper_recommender.sources._util import normalize_title_for_dedup
+from paper_recommender.sources._util import normalize_title_for_dedup, redacted_path
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ class GoogleNewsletterMboxAdapter:
             except (OSError, mailbox.Error) as e:
                 log.warning(
                     "google_newsletters cannot open configured mbox %s: %s",
-                    _redacted_path(path),
+                    redacted_path(path),
                     e,
                 )
                 continue
@@ -199,7 +199,7 @@ class GoogleNewsletterMboxAdapter:
 
 
 def _validated_mbox_path(path: Path, max_bytes: int) -> Path | None:
-    display = _redacted_path(path)
+    display = redacted_path(path)
     if path.name.endswith(".icloud"):
         log.warning(
             "google_newsletters mbox skipped because it is an iCloud placeholder: %s",
@@ -225,10 +225,6 @@ def _validated_mbox_path(path: Path, max_bytes: int) -> Path | None:
         )
         return None
     return real
-
-
-def _redacted_path(path: Path) -> str:
-    return f".../{path.name}" if path.name else "...(unnamed)"
 
 
 def _matches_any(values: list[str], allowlist: list[str]) -> bool:
