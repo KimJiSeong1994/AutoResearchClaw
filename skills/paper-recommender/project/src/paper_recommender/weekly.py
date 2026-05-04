@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from paper_recommender.auth import user_id_from_jwt
@@ -77,13 +78,106 @@ def _sha256_text(value: str | None) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_SOUL_CARD_SECTION_ALLOW = (
+    "identity",
+    "interest",
+    "keyword",
+    "method",
+    "methodology",
+    "taste",
+    "preference",
+    "priority",
+    "current",
+    "focus",
+    "profile",
+    "research",
+    "관심",
+    "키워드",
+    "방법",
+    "선호",
+    "우선",
+    "현재",
+    "초점",
+    "프로필",
+    "연구",
+)
+_SOUL_CARD_SECTION_DENY = (
+    "changelog",
+    "change log",
+    "history",
+    "audit",
+    "log",
+    "blind spot",
+    "blindspot",
+    "negative",
+    "suppress",
+    "suppression",
+    "caveat",
+    "운영",
+    "변경",
+    "로그",
+    "제외",
+    "억제",
+)
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+
+def _soul_card_sections(soul_md: str) -> list[tuple[str, list[str]]]:
+    sections: list[tuple[str, list[str]]] = []
+    current_title = "preamble"
+    current_lines: list[str] = []
+    for raw in soul_md.splitlines():
+        match = _HEADING_RE.match(raw.strip())
+        if match:
+            if current_lines:
+                sections.append((current_title, current_lines))
+            current_title = match.group(2).strip()
+            current_lines = []
+            continue
+        current_lines.append(raw)
+    if current_lines:
+        sections.append((current_title, current_lines))
+    return sections
+
+
+def _contains_soul_card_marker(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    for marker in markers:
+        marker_l = marker.lower()
+        if re.search(r"[A-Za-z]", marker_l):
+            if re.search(rf"(?<![A-Za-z]){re.escape(marker_l)}(?![A-Za-z])", lowered):
+                return True
+        elif marker_l in lowered:
+            return True
+    return False
+
+
+def _soul_card_section_allowed(title: str) -> bool:
+    lowered = title.lower()
+    if _contains_soul_card_marker(lowered, _SOUL_CARD_SECTION_DENY):
+        return False
+    if lowered == "preamble":
+        return True
+    return _contains_soul_card_marker(lowered, _SOUL_CARD_SECTION_ALLOW)
+
+
+def _normalize_soul_card_line(raw: str) -> str | None:
+    line = raw.strip().strip("#-*`> \t")
+    if not line or len(line) < 8:
+        return None
+    lowered = line.lower()
+    if _contains_soul_card_marker(lowered, _SOUL_CARD_SECTION_DENY):
+        return None
+    return line
+
+
 def _compact_soul_card(soul_md: str | None, profile: dict[str, Any], *, limit: int = 1600) -> str | None:
     """Create the small SOUL surface that is safe to feed into query/report LLMs.
 
     Full SOUL files tend to accrete audit logs, blind spots, and historical
     notes. Those are useful for governance, but noisy as search-query context.
-    This card keeps stable identity + active profile signals and drops obvious
-    maintenance sections.
+    This card keeps stable identity + active profile signals, prefers explicit
+    profile/research sections, and drops governance/maintenance sections.
     """
 
     lines: list[str] = []
@@ -98,37 +192,27 @@ def _compact_soul_card(soul_md: str | None, profile: dict[str, Any], *, limit: i
             if joined:
                 lines.append(f"{label}: {joined}")
 
-    skip_markers = (
-        "changelog",
-        "change log",
-        "history",
-        "audit",
-        "log",
-        "blind spot",
-        "blindspot",
-        "negative",
-        "suppress",
-        "suppression",
-        "caveat",
-        "운영",
-        "변경",
-        "로그",
-        "제외",
-        "억제",
-    )
     seen = {line.lower() for line in lines}
     if soul_md:
-        for raw in soul_md.splitlines():
-            line = raw.strip().strip("#-*`> \t")
-            if not line or len(line) < 8:
+        for title, section_lines in _soul_card_sections(soul_md):
+            if not _soul_card_section_allowed(title):
                 continue
-            lowered = line.lower()
-            if any(marker in lowered for marker in skip_markers):
-                continue
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            lines.append(line)
+            if title != "preamble":
+                heading = title.strip()
+                if heading and heading.lower() not in seen:
+                    seen.add(heading.lower())
+                    lines.append(f"[{heading}]")
+            for raw in section_lines:
+                line = _normalize_soul_card_line(raw)
+                if not line:
+                    continue
+                lowered = line.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                lines.append(line)
+                if sum(len(item) + 1 for item in lines) >= limit:
+                    break
             if sum(len(item) + 1 for item in lines) >= limit:
                 break
 

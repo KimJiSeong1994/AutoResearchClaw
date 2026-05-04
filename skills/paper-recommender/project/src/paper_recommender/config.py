@@ -87,6 +87,8 @@ class SoulSettings:
     max_bytes: int = 3072
     compact_at_bytes: int = 2560
     include_recent_picks_days: int = 5
+    weekly_snapshot_mode: str = "redacted"  # "redacted" | "truncated" | "full"
+    weekly_snapshot_max_chars: int = 1200
 
 
 @dataclass

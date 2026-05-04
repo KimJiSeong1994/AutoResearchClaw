@@ -77,7 +77,11 @@ def _soul_query_candidates(soul_md: str | None) -> list[str]:
         if not 8 <= len(line) <= 120:
             continue
         lowered = line.lower()
-        if any(marker in lowered for marker in _SOUL_QUERY_SKIP_MARKERS):
+        if any(
+            re.search(rf"(?<![A-Za-z]){re.escape(marker)}(?![A-Za-z])", lowered)
+            if re.search(r"[A-Za-z]", marker) else marker in lowered
+            for marker in _SOUL_QUERY_SKIP_MARKERS
+        ):
             continue
         # Drop obvious markdown/control rows instead of turning them into
         # literal paper-search queries.

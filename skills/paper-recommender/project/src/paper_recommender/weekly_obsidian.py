@@ -12,6 +12,11 @@ from paper_recommender.config import Settings
 
 _SAFE_PATH_ID_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$")
+_SENSITIVE_REPLACEMENTS = (
+    (re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[^\s,'\")]+"), r"\1: [REDACTED]"),
+    (re.compile(r"(?i)(bearer)\s+[A-Za-z0-9._~+/=-]{16,}"), r"\1 [REDACTED]"),
+    (re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]"),
+)
 
 
 def _safe_md(value: Any) -> str:
@@ -20,6 +25,46 @@ def _safe_md(value: Any) -> str:
     out = str(value).replace("\n", " ").replace("\r", " ").replace("|", "\\|")
     out = re.sub(r"[<>\[\]]", "", out)
     return out.strip()
+
+
+def _sanitize_snapshot(value: str) -> str:
+    sanitized = value
+    for pattern, replacement in _SENSITIVE_REPLACEMENTS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return _safe_md(sanitized)
+
+
+def _snapshot_policy(settings: Settings) -> tuple[str, int]:
+    soul_settings = getattr(settings, "soul", None)
+    mode = str(getattr(soul_settings, "weekly_snapshot_mode", "redacted") or "redacted").lower()
+    if mode not in {"redacted", "truncated", "full"}:
+        mode = "redacted"
+    max_chars = int(getattr(soul_settings, "weekly_snapshot_max_chars", 1200) or 1200)
+    return mode, max(0, max_chars)
+
+
+def _render_soul_snapshot(settings: Settings, soul_md: str | None) -> tuple[str | None, dict[str, Any]]:
+    if not soul_md:
+        return None, {"mode": "absent", "included": False, "chars": 0, "truncated": False}
+
+    mode, max_chars = _snapshot_policy(settings)
+    if mode == "redacted":
+        return None, {"mode": mode, "included": False, "chars": 0, "truncated": False}
+
+    sanitized = _sanitize_snapshot(soul_md)
+    had_redaction = "REDACTED" in sanitized
+    truncated = mode == "truncated" and len(sanitized) > max_chars
+    if truncated:
+        suffix = " … [truncated]"
+        if had_redaction and "REDACTED" not in sanitized[:max_chars]:
+            suffix = " REDACTED" + suffix
+        sanitized = sanitized[:max_chars].rstrip() + suffix
+    return sanitized, {
+        "mode": mode,
+        "included": True,
+        "chars": len(sanitized),
+        "truncated": truncated,
+    }
 
 
 def _paper_url(p: dict[str, Any]) -> str | None:
@@ -53,6 +98,8 @@ def render_weekly_report(
     soul_provenance = dict(soul_provenance or {})
     soul_source = str(soul_provenance.get("source") or ("soul" if soul_md else "absent"))
     fallback_used = bool(soul_provenance.get("fallback_used"))
+    soul_snapshot, snapshot_policy = _render_soul_snapshot(settings, soul_md)
+    soul_provenance.setdefault("snapshot_policy", snapshot_policy)
     report_type = "weekly-soul-trends" if soul_source == "soul" else "weekly-profile-trends"
     lines: list[str] = [
         "---",
@@ -163,13 +210,18 @@ def render_weekly_report(
             "",
         ])
 
-    if soul_md:
+    if soul_snapshot:
         lines.extend([
             "<details><summary>SOUL context snapshot</summary>",
             "",
-            _safe_md(soul_md),
+            soul_snapshot,
             "",
             "</details>",
+            "",
+        ])
+    elif soul_md:
+        lines.extend([
+            "<!-- SOUL context snapshot omitted by soul.weekly_snapshot_mode; soul_sha256/provenance retained. -->",
             "",
         ])
     return "\n".join(lines)

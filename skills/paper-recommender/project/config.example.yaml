@@ -66,6 +66,11 @@ soul:
   max_bytes: 3072
   compact_at_bytes: 2560
   include_recent_picks_days: 5
+  # Weekly markdown does not embed the full SOUL by default; raw.json keeps
+  # hashes/provenance plus the compact card. Set to "truncated" for a sanitized
+  # excerpt or "full" only for private vaults where oversharing is acceptable.
+  weekly_snapshot_mode: redacted
+  weekly_snapshot_max_chars: 1200
 
 decay:
   # Exponential time-decay weighting on bookmarks. Older bookmarks still

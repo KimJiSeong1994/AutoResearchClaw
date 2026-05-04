@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 from paper_recommender.trend_queries import fallback_trend_queries
+from paper_recommender.weekly import _compact_soul_card
 from paper_recommender.weekly_obsidian import render_weekly_report, write_weekly_artifacts
 
 
@@ -18,6 +19,7 @@ def _settings(tmp_path):
             max_queries=10,
         ),
         profile=SimpleNamespace(seed_topics=["seed graph topic"]),
+        soul=SimpleNamespace(weekly_snapshot_mode="redacted", weekly_snapshot_max_chars=1200),
     )
 
 
@@ -77,6 +79,86 @@ def test_weekly_raw_records_soul_provenance_and_compact_card(tmp_path) -> None:
     assert raw["soul_fallback_used"] is False
     assert raw["soul_provenance"]["active_sha256"] == "hash"
     assert raw["soul_card"] == "Keywords: heterogeneous graph embedding"
+
+
+def test_compact_soul_card_prefers_profile_sections_over_governance_noise() -> None:
+    card = _compact_soul_card(
+        "\n".join(
+            [
+                "# Research profile",
+                "- Temporal graph neural networks",
+                "- Graph retrieval augmented generation",
+                "# Changelog",
+                "- Added Discord briefing governance",
+                "# Blind spots",
+                "- suppress generic AI product news",
+                "# Methodology preferences",
+                "- Prefer benchmarked retrieval studies",
+            ]
+        ),
+        {"keywords": ["heterogeneous graphs"]},
+        limit=400,
+    )
+
+    assert card is not None
+    assert "Keywords: heterogeneous graphs" in card
+    assert "[Research profile]" in card
+    assert "Temporal graph neural networks" in card
+    assert "[Methodology preferences]" in card
+    assert "benchmarked retrieval studies" in card
+    assert "Discord briefing governance" not in card
+    assert "suppress generic" not in card
+
+
+def test_weekly_markdown_redacts_soul_snapshot_by_default(tmp_path) -> None:
+    md = render_weekly_report(
+        _settings(tmp_path),
+        profile={"keywords": ["heterogeneous graph embedding"]},
+        soul_md="private SOUL text token=abc123supersecret researcher@example.com",
+        user_id="researcher-1",
+        soul_card="Keywords: heterogeneous graph embedding",
+        soul_provenance={
+            "source": "soul",
+            "present": True,
+            "fallback_used": False,
+            "active_bytes": 60,
+            "active_sha256": "hash",
+            "compact_card_bytes": 37,
+        },
+        queries=[],
+        candidates=[],
+        report={"coverage_caveat": "", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    assert "SOUL context snapshot omitted" in md
+    assert "abc123supersecret" not in md
+    assert "researcher@example.com" not in md
+
+
+def test_weekly_markdown_can_include_sanitized_truncated_snapshot(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    settings.soul.weekly_snapshot_mode = "truncated"
+    settings.soul.weekly_snapshot_max_chars = 36
+
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": ["heterogeneous graph embedding"]},
+        soul_md="token=abc123supersecret contact researcher@example.com with graph preferences",
+        user_id="researcher-1",
+        soul_card=None,
+        soul_provenance={"source": "soul", "present": True, "fallback_used": False},
+        queries=[],
+        candidates=[],
+        report={"coverage_caveat": "", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    assert "<details><summary>SOUL context snapshot</summary>" in md
+    assert "REDACTED" in md
+    assert "abc123supersecret" not in md
+    assert "researcher@example.com" not in md
+    assert "[truncated]" in md
 
 
 def test_fallback_queries_skip_soul_governance_noise() -> None:
