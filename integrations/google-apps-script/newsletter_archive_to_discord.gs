@@ -36,6 +36,7 @@ const MIN_ARTICLE_TEXT_CHARS = 220;
 const MIN_CONTEXT_SENTENCE_CHARS = 45;
 const URL_CONTEXT_WINDOW = 260;
 const DISCORD_SAFE_CHAR_LIMIT = 1850;
+const BRIEFING_RENDER_CHAR_LIMIT = 7600;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -163,6 +164,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
       const snippet = truncate_(plain_(body), 180);
       if (urls.length === 0) {
         const key = subject + '|message|' + receivedAt;
+        if (isBlockedNewsletterItem_(subject, '', emptyArticleDetail_(), snippet)) return;
         if (!seen[key]) {
           seen[key] = true;
           items.push({
@@ -184,6 +186,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
         if (shouldFetchDetail) detailFetchCount += 1;
         const sourceContext = contextByUrl[url] || extractUrlContext_(body, url);
         const detailBasis = articleText || articleDetail.title || articleDetail.description || sourceContext || snippet;
+        if (isBlockedNewsletterItem_(subject, url, articleDetail, sourceContext)) return;
         const key = subject + '|' + url;
         if (seen[key]) {
           return;
@@ -234,46 +237,46 @@ function renderBriefing_(items, query) {
   }
 
   const grouped = groupByTopic_(items);
-  let stoppedForLength = false;
-  Object.keys(grouped).sort((a, b) => detailedItems_(grouped[b]).length - detailedItems_(grouped[a]).length || a.localeCompare(b)).forEach(topic => {
-    if (stoppedForLength) return;
-    const detailed = detailedItems_(grouped[topic]);
-    if (detailed.length === 0) return;
-    const topicHeader = ['', '### ' + topic];
-    if (!appendWithinLimit_(lines, topicHeader, DISCORD_SAFE_CHAR_LIMIT)) {
-      stoppedForLength = true;
+  const topics = Object.keys(grouped)
+    .map(topic => ({ topic: topic, detailed: detailedItems_(grouped[topic]), total: grouped[topic].length }))
+    .filter(entry => entry.detailed.length > 0)
+    .sort((a, b) => b.detailed.length - a.detailed.length || b.total - a.total || a.topic.localeCompare(b.topic));
+
+  const topicOverview = topics.slice(0, 8).map(entry => entry.topic + ' ' + entry.detailed.length + '/' + entry.total).join(' · ');
+  if (topicOverview) {
+    appendWithinLimit_(lines, ['', '- 토픽 분포: ' + topicOverview], BRIEFING_RENDER_CHAR_LIMIT);
+  }
+
+  topics.forEach(entry => {
+    const topicHeader = ['', '### ' + entry.topic];
+    if (!appendWithinLimit_(lines, topicHeader, BRIEFING_RENDER_CHAR_LIMIT)) return;
+    const item = entry.detailed[0];
+    const title = truncate_(plain_(item.articleTitle || item.title), 90);
+    const summary = buildSummaryLines_(item);
+    const block = [
+      '- 주요 아티클/논문: ' + title,
+      '  - 핵심 내용:',
+      '    - ' + summary[0],
+      '    - ' + summary[1],
+      '    - ' + summary[2]
+    ];
+    if (item.url) {
+      block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
+    } else {
+      block.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
+    }
+    if (!appendWithinLimit_(lines, block, BRIEFING_RENDER_CHAR_LIMIT)) {
+      lines.pop();
+      lines.pop();
       return;
     }
-    let renderedInTopic = 0;
-    detailed.slice(0, 3).forEach(item => {
-      if (stoppedForLength) return;
-      const title = truncate_(plain_(item.articleTitle || item.title), 90);
-      const summary = buildSummaryLines_(item);
-      const block = [
-        '- 주요 아티클/논문: ' + title,
-        '  - 핵심 내용:',
-        '    - ' + summary[0],
-        '    - ' + summary[1],
-        '    - ' + summary[2]
-      ];
-      if (item.url) {
-        block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
-      } else {
-        block.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
-      }
-      if (!appendWithinLimit_(lines, block, DISCORD_SAFE_CHAR_LIMIT)) {
-        stoppedForLength = true;
-        return;
-      }
-      renderedInTopic += 1;
-    });
-    const remaining = detailed.length - renderedInTopic;
+    const remaining = entry.detailed.length - 1;
     if (remaining > 0) {
-      appendWithinLimit_(lines, ['- 추가 항목: ' + remaining + '개는 다음 실행에서 재검토'], DISCORD_SAFE_CHAR_LIMIT);
+      appendWithinLimit_(lines, ['- 추가 항목: ' + remaining + '개는 raw archive 및 다음 실행에서 재검토'], BRIEFING_RENDER_CHAR_LIMIT);
     }
   });
 
-  appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.'], DISCORD_SAFE_CHAR_LIMIT);
+  appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.'], BRIEFING_RENDER_CHAR_LIMIT);
   return lines.join('\n');
 }
 
@@ -894,6 +897,18 @@ function isPrivateUtilityUrl_(url) {
     'terms'
   ];
   return blocked.some(token => lower.indexOf(token) !== -1);
+}
+
+function isBlockedNewsletterItem_(subject, url, articleDetail, context) {
+  const title = String((articleDetail && articleDetail.title) || subject || '').toLowerCase();
+  const description = String((articleDetail && articleDetail.description) || '').toLowerCase();
+  const lowerUrl = String(url || '').toLowerCase();
+  const lowerContext = String(context || '').toLowerCase();
+  if (lowerUrl.indexOf('colab.research.google.com') !== -1) return true;
+  if (title.indexOf('google colab') !== -1 || title === 'colab') return true;
+  if (title.indexOf('colaboratory') !== -1) return true;
+  if (lowerUrl.indexOf('c.gle/') !== -1 && (title.indexOf('colab') !== -1 || description.indexOf('colab') !== -1 || lowerContext.indexOf('colab') !== -1)) return true;
+  return false;
 }
 
 function isResearchUrl_(url) {
