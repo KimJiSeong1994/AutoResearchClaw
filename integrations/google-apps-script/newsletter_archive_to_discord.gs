@@ -21,6 +21,7 @@
  * - MAX_THREADS: default 50
  * - COLLECT_ALL_MAIL: true to process all messages matching GMAIL_QUERY
  * - INCLUDE_ALL_URLS: true to include non-research URLs
+ * - FETCH_ARTICLE_DETAILS: true to fetch public article pages for richer summaries
  */
 
 const DEFAULT_DISCORD_CHANNEL_ID = '1500839270921801879';
@@ -28,6 +29,9 @@ const DEFAULT_GMAIL_QUERY = 'newer_than:7d';
 const DEFAULT_MAX_THREADS = 50;
 const DEFAULT_COLLECT_ALL_MAIL = false;
 const DEFAULT_INCLUDE_ALL_URLS = true;
+const DEFAULT_FETCH_ARTICLE_DETAILS = true;
+const MAX_ARTICLE_CHARS = 5000;
+const MAX_ARTICLE_FETCHES = 20;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -66,6 +70,7 @@ function runNewsletterArchive() {
   const senderAllowlist = csv_(props.getProperty('SENDER_ALLOWLIST') || '');
   const collectAllMail = bool_(props.getProperty('COLLECT_ALL_MAIL'), DEFAULT_COLLECT_ALL_MAIL);
   const includeAllUrls = bool_(props.getProperty('INCLUDE_ALL_URLS'), DEFAULT_INCLUDE_ALL_URLS);
+  const fetchArticleDetails = bool_(props.getProperty('FETCH_ARTICLE_DETAILS'), DEFAULT_FETCH_ARTICLE_DETAILS);
   const query = props.getProperty('GMAIL_QUERY') || DEFAULT_GMAIL_QUERY;
   const maxThreads = Number(props.getProperty('MAX_THREADS') || DEFAULT_MAX_THREADS);
 
@@ -76,7 +81,7 @@ function runNewsletterArchive() {
     throw new Error('SENDER_ALLOWLIST is required unless COLLECT_ALL_MAIL=true.');
   }
 
-  const items = collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls);
+  const items = collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls, fetchArticleDetails);
   const briefing = renderBriefing_(items, query);
   saveLatestBriefing_(briefing, items.length, query);
   if (deliveryMode !== 'relay_pull') {
@@ -85,10 +90,11 @@ function runNewsletterArchive() {
   return briefing;
 }
 
-function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls) {
+function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls, fetchArticleDetails) {
   const threads = GmailApp.search(query, 0, maxThreads);
   const seen = {};
   const items = [];
+  let detailFetchCount = 0;
 
   threads.forEach(thread => {
     thread.getMessages().forEach(message => {
@@ -99,7 +105,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
       const subject = message.getSubject() || '(untitled newsletter item)';
       const receivedAt = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm");
       const body = message.getPlainBody() || stripHtml_(message.getBody() || '');
-      const urls = extractUrls_(body).filter(url => includeAllUrls || isResearchUrl_(url));
+      const urls = extractUrls_(body).filter(url => !isPrivateUtilityUrl_(url) && (includeAllUrls || isResearchUrl_(url)));
       const topic = classifyTopic_(subject + ' ' + body);
       const snippet = truncate_(plain_(body), 180);
       if (urls.length === 0) {
@@ -119,6 +125,10 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
         return;
       }
       urls.slice(0, 3).forEach(url => {
+        const shouldFetchDetail = fetchArticleDetails && detailFetchCount < MAX_ARTICLE_FETCHES;
+        const articleText = shouldFetchDetail ? fetchArticleText_(url) : '';
+        if (shouldFetchDetail) detailFetchCount += 1;
+        const detailBasis = articleText || snippet;
         const key = subject + '|' + url;
         if (seen[key]) {
           return;
@@ -130,8 +140,9 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
           kind: classifyUrl_(url),
           sender: sender,
           receivedAt: receivedAt,
-          topic: topic,
-          snippet: snippet
+          topic: classifyTopic_(subject + ' ' + detailBasis + ' ' + url),
+          snippet: snippet,
+          articleText: detailBasis
         });
       });
     });
@@ -169,15 +180,15 @@ function renderBriefing_(items, query) {
     lines.push('', '### ' + topic);
     grouped[topic].slice(0, 3).forEach(item => {
       const title = truncate_(plain_(item.title), 90);
-      lines.push('- 핵심 요약: ' + title);
-      lines.push('- 기술 포인트: `' + item.kind + '` 유형. 발신자 `' + truncate_(plain_(item.sender), 70) + '`, 수신일 `' + item.receivedAt + '` 기준으로 추적');
-      if (item.snippet) {
-        lines.push('- 내용 스니펫: ' + truncate_(plain_(item.snippet), 140));
-      }
+      const snippet = plain_(item.articleText || item.snippet || '');
+      lines.push('- 주요 아티클/논문: ' + title);
+      lines.push('  - 3줄 요약: ' + summarizeLine1_(title, snippet));
+      lines.push('  - 3줄 요약: ' + summarizeLine2_(item, snippet));
+      lines.push('  - 3줄 요약: ' + summarizeLine3_(item));
       if (item.url) {
-        lines.push('- 출처 링크: [' + title.replace(/]/g, '') + '](' + item.url + ')');
+        lines.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + item.url + ')');
       } else {
-        lines.push('- 출처 링크: 메일 본문 내 외부 링크 없음');
+        lines.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
       }
     });
     const remaining = grouped[topic].length - 3;
@@ -251,6 +262,97 @@ function installDailyNewsletterTrigger() {
     .create();
 }
 
+
+
+function fetchArticleText_(url) {
+  if (!isFetchableArticleUrl_(url)) return '';
+  try {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      followRedirects: true,
+      muteHttpExceptions: true,
+      headers: {
+        'User-Agent': 'Jiphyeonjeon-Claw-NewsletterArchive/1.0 (+research briefing)'
+      }
+    });
+    const status = response.getResponseCode();
+    if (status < 200 || status >= 300) return '';
+    const headers = response.getAllHeaders ? response.getAllHeaders() : {};
+    const contentType = String(headers['Content-Type'] || headers['content-type'] || '').toLowerCase();
+    if (contentType && contentType.indexOf('text/html') === -1 && contentType.indexOf('text/plain') === -1) return '';
+    return extractReadableText_(response.getContentText()).slice(0, MAX_ARTICLE_CHARS);
+  } catch (e) {
+    return '';
+  }
+}
+
+function isFetchableArticleUrl_(url) {
+  const lower = String(url || '').toLowerCase();
+  if (!/^https?:\/\//.test(lower)) return false;
+  const blocked = [
+    'linkedin.com',
+    'mail.google.com',
+    'accounts.google.com',
+    'localhost',
+    '127.0.0.1'
+  ];
+  return !blocked.some(host => lower.indexOf(host) !== -1);
+}
+
+function extractReadableText_(html) {
+  let text = String(html || '');
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  text = text.replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ');
+  text = text.replace(/<[^>]+>/g, ' ');
+  text = decodeEntities_(text);
+  return plain_(text);
+}
+
+function decodeEntities_(text) {
+  return String(text || '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function summarizeLine1_(title, snippet) {
+  const basis = firstSentence_(snippet) || title;
+  return truncate_(basis, 120);
+}
+
+function summarizeLine2_(item, snippet) {
+  const kind = item.kind || 'post';
+  const sender = truncate_(plain_(item.sender), 55);
+  const hint = snippet ? extractTechnicalHint_(snippet) : '';
+  const second = secondSentence_(snippet);
+  return truncate_(second || ('분류 `' + kind + '`; ' + (hint || '발신자 `' + sender + '`의 최신 기술/리서치 항목으로 분류')), 130);
+}
+
+function summarizeLine3_(item) {
+  return truncate_('토픽 `' + (item.topic || '기타 테크 리포트') + '` 관점에서 후속 읽기/아카이브 대상으로 추적', 120);
+}
+
+function firstSentence_(text) {
+  const parts = String(text || '').split(/[.!?。]\s+/).map(plain_).filter(Boolean);
+  return parts[0] || '';
+}
+
+function secondSentence_(text) {
+  const parts = String(text || '').split(/[.!?。]\s+/).map(plain_).filter(Boolean);
+  return parts[1] || '';
+}
+
+function extractTechnicalHint_(text) {
+  const lower = String(text || '').toLowerCase();
+  const hints = ['agent', 'rag', 'retrieval', 'llm', 'multimodal', 'benchmark', 'inference', 'open source', 'github', 'evaluation', 'safety', 'product'];
+  const hit = hints.find(h => lower.indexOf(h) !== -1);
+  return hit ? '본문에서 `' + hit + '` 관련 신호 확인' : '';
+}
+
 function bool_(value, fallback) {
   if (value === null || value === undefined || String(value).trim() === '') return fallback;
   return ['1', 'true', 'yes', 'on'].indexOf(String(value).trim().toLowerCase()) !== -1;
@@ -273,6 +375,21 @@ function extractUrls_(text) {
     seen[url] = true;
     return true;
   });
+}
+
+function isPrivateUtilityUrl_(url) {
+  const lower = String(url || '').toLowerCase();
+  const blocked = [
+    'myaccount.google.com',
+    'accounts.google.com',
+    'mail.google.com',
+    'support.google.com/accounts',
+    'unsubscribe',
+    'preferences',
+    'privacy',
+    'terms'
+  ];
+  return blocked.some(token => lower.indexOf(token) !== -1);
 }
 
 function isResearchUrl_(url) {

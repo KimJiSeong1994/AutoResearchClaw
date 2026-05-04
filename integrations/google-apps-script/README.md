@@ -18,6 +18,7 @@ is blocked by app verification, Workspace policy, or test-user restrictions.
    - Optional `DISCORD_BOT_TOKEN`: bot-token fallback; may fail from Apps Script with Discord/Cloudflare 40333
    - Optional `GMAIL_QUERY`: default `newer_than:7d`
    - Optional `INCLUDE_ALL_URLS`: default `true`
+   - Optional `FETCH_ARTICLE_DETAILS`: default `true`; fetches public article pages for richer summaries
    - Optional `MAX_THREADS`: default `50`
 
 4. Run `runNewsletterArchive` once and approve Gmail/UrlFetch permissions.
