@@ -82,6 +82,8 @@ def _raw_string(value: object) -> str:
         return ""
     if isinstance(value, str):
         return value.strip()
+    if isinstance(value, list):
+        return " ".join(_raw_string(item).rstrip(". ") + "." for item in value if _raw_string(item)).strip()
     return str(value).strip()
 
 
