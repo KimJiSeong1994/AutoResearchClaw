@@ -9,14 +9,15 @@ is blocked by app verification, Workspace policy, or test-user restrictions.
 2. Paste `newsletter_archive_to_discord.gs` into `Code.gs`.
 3. Set Script Properties:
 
-   - `SENDER_ALLOWLIST`: comma-separated senders/domains, for example
-     `substack.com,openai.com,anthropic.com,deepmind.google,semianalysis.com`
+   - `COLLECT_ALL_MAIL`: `true` to process every message matching `GMAIL_QUERY`
+   - `SENDER_ALLOWLIST`: optional when `COLLECT_ALL_MAIL=true`; otherwise comma-separated senders/domains
    - `DELIVERY_MODE`: `relay_pull` (**recommended; avoids Apps Script → Discord 40333**)
    - `RELAY_READ_TOKEN`: shared token for the EC2 puller
    - Optional `DISCORD_WEBHOOK_URL`: direct Discord fallback; may fail with 40333
    - Optional `DISCORD_CHANNEL_ID`: `1500839270921801879` bot-token fallback
    - Optional `DISCORD_BOT_TOKEN`: bot-token fallback; may fail from Apps Script with Discord/Cloudflare 40333
    - Optional `GMAIL_QUERY`: default `newer_than:7d`
+   - Optional `INCLUDE_ALL_URLS`: default `true`
    - Optional `MAX_THREADS`: default `50`
 
 4. Run `runNewsletterArchive` once and approve Gmail/UrlFetch permissions.

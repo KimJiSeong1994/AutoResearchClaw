@@ -4,10 +4,10 @@
  * Privacy boundary:
  * - Reads Gmail only inside the user's own Google Apps Script runtime.
  * - Posts only subject/from/date/extracted source URLs, not full email bodies.
- * - Requires SENDER_ALLOWLIST before processing mail.
+ * - Supports explicit all-mail collection for recent mail windows. Full email bodies are used only in memory for topic extraction/snippets and are not posted verbatim.
  *
  * Required Script Properties:
- * - SENDER_ALLOWLIST: comma-separated sender/domain substrings
+ * - SENDER_ALLOWLIST: comma-separated sender/domain substrings, unless COLLECT_ALL_MAIL=true
  *
  * Recommended Script Properties for 40333-safe operation:
  * - DELIVERY_MODE: relay_pull
@@ -19,11 +19,15 @@
  * - DISCORD_BOT_TOKEN: bot-token fallback; may hit Discord/Cloudflare 40333
  * - GMAIL_QUERY: Gmail search query, default newer_than:7d
  * - MAX_THREADS: default 50
+ * - COLLECT_ALL_MAIL: true to process all messages matching GMAIL_QUERY
+ * - INCLUDE_ALL_URLS: true to include non-research URLs
  */
 
 const DEFAULT_DISCORD_CHANNEL_ID = '1500839270921801879';
 const DEFAULT_GMAIL_QUERY = 'newer_than:7d';
 const DEFAULT_MAX_THREADS = 50;
+const DEFAULT_COLLECT_ALL_MAIL = false;
+const DEFAULT_INCLUDE_ALL_URLS = true;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -60,17 +64,19 @@ function runNewsletterArchive() {
   const channelId = props.getProperty('DISCORD_CHANNEL_ID') || DEFAULT_DISCORD_CHANNEL_ID;
   const token = props.getProperty('DISCORD_BOT_TOKEN') || '';
   const senderAllowlist = csv_(props.getProperty('SENDER_ALLOWLIST') || '');
+  const collectAllMail = bool_(props.getProperty('COLLECT_ALL_MAIL'), DEFAULT_COLLECT_ALL_MAIL);
+  const includeAllUrls = bool_(props.getProperty('INCLUDE_ALL_URLS'), DEFAULT_INCLUDE_ALL_URLS);
   const query = props.getProperty('GMAIL_QUERY') || DEFAULT_GMAIL_QUERY;
   const maxThreads = Number(props.getProperty('MAX_THREADS') || DEFAULT_MAX_THREADS);
 
   if (deliveryMode !== 'relay_pull' && !webhookUrl && !token) {
     throw new Error('Use DELIVERY_MODE=relay_pull, DISCORD_WEBHOOK_URL, or DISCORD_BOT_TOKEN.');
   }
-  if (senderAllowlist.length === 0) {
-    throw new Error('SENDER_ALLOWLIST is required; refusing to sweep private mail.');
+  if (!collectAllMail && senderAllowlist.length === 0) {
+    throw new Error('SENDER_ALLOWLIST is required unless COLLECT_ALL_MAIL=true.');
   }
 
-  const items = collectNewsletterItems_(query, maxThreads, senderAllowlist);
+  const items = collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls);
   const briefing = renderBriefing_(items, query);
   saveLatestBriefing_(briefing, items.length, query);
   if (deliveryMode !== 'relay_pull') {
@@ -79,7 +85,7 @@ function runNewsletterArchive() {
   return briefing;
 }
 
-function collectNewsletterItems_(query, maxThreads, senderAllowlist) {
+function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls) {
   const threads = GmailApp.search(query, 0, maxThreads);
   const seen = {};
   const items = [];
@@ -87,16 +93,32 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist) {
   threads.forEach(thread => {
     thread.getMessages().forEach(message => {
       const sender = message.getFrom() || '';
-      if (!matchesAllowlist_(sender, senderAllowlist)) {
+      if (!collectAllMail && !matchesAllowlist_(sender, senderAllowlist)) {
         return;
       }
       const subject = message.getSubject() || '(untitled newsletter item)';
       const receivedAt = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm");
       const body = message.getPlainBody() || stripHtml_(message.getBody() || '');
-      extractUrls_(body).forEach(url => {
-        if (!isResearchUrl_(url)) {
-          return;
+      const urls = extractUrls_(body).filter(url => includeAllUrls || isResearchUrl_(url));
+      const topic = classifyTopic_(subject + ' ' + body);
+      const snippet = truncate_(plain_(body), 180);
+      if (urls.length === 0) {
+        const key = subject + '|message|' + receivedAt;
+        if (!seen[key]) {
+          seen[key] = true;
+          items.push({
+            title: subject,
+            url: '',
+            kind: 'mail-summary',
+            sender: sender,
+            receivedAt: receivedAt,
+            topic: topic,
+            snippet: snippet
+          });
         }
+        return;
+      }
+      urls.slice(0, 3).forEach(url => {
         const key = subject + '|' + url;
         if (seen[key]) {
           return;
@@ -108,7 +130,8 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist) {
           kind: classifyUrl_(url),
           sender: sender,
           receivedAt: receivedAt,
-          topic: classifyTopic_(subject + ' ' + url)
+          topic: topic,
+          snippet: snippet
         });
       });
     });
@@ -129,7 +152,7 @@ function renderBriefing_(items, query) {
     '## 토픽별 기술 리포트/뉴스레터 요약',
     '',
     '- 수집 항목: ' + items.length + '개',
-    '- 기준: allowlist로 허용한 발신자/도메인의 Gmail 뉴스레터',
+    '- 기준: Gmail 검색 조건에 맞는 최근 메일 전체를 수집 후 토픽별 정리',
     '- 운영 메모: Google Apps Script 내부에서 실행되며 Discord에는 요약과 출처 링크만 게시'
   ];
 
@@ -148,7 +171,14 @@ function renderBriefing_(items, query) {
       const title = truncate_(plain_(item.title), 90);
       lines.push('- 핵심 요약: ' + title);
       lines.push('- 기술 포인트: `' + item.kind + '` 유형. 발신자 `' + truncate_(plain_(item.sender), 70) + '`, 수신일 `' + item.receivedAt + '` 기준으로 추적');
-      lines.push('- 출처 링크: [' + title.replace(/]/g, '') + '](' + item.url + ')');
+      if (item.snippet) {
+        lines.push('- 내용 스니펫: ' + truncate_(plain_(item.snippet), 140));
+      }
+      if (item.url) {
+        lines.push('- 출처 링크: [' + title.replace(/]/g, '') + '](' + item.url + ')');
+      } else {
+        lines.push('- 출처 링크: 메일 본문 내 외부 링크 없음');
+      }
     });
     const remaining = grouped[topic].length - 3;
     if (remaining > 0) {
@@ -219,6 +249,11 @@ function installDailyNewsletterTrigger() {
     .atHour(8)
     .nearMinute(15)
     .create();
+}
+
+function bool_(value, fallback) {
+  if (value === null || value === undefined || String(value).trim() === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].indexOf(String(value).trim().toLowerCase()) !== -1;
 }
 
 function csv_(value) {
