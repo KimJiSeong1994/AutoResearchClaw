@@ -16,11 +16,13 @@ Local, version-controlled workspace for the OpenClaw agent running on the EC2 ga
   - `skills/openclaw-ec2-ops/`
   - `skills/karpathy-guidelines/`
   - `skills/researchclaw/`
+  - `skills/discord-openclaw-bridge/`
 - Local helper scripts:
   - `scripts/deploy-openclaw-workspace.sh`
   - `scripts/openclaw-dashboard-tunnel.sh`
   - `scripts/run-researchclaw-topic.sh`
   - `scripts/sync-researchclaw-results.sh`
+  - `scripts/deploy-discord-openclaw-bridge.sh`
 
 ## Target runtime
 
@@ -43,6 +45,14 @@ bash scripts/deploy-openclaw-workspace.sh
 ```
 
 The deploy script maps `workspace/*.md` into the remote OpenClaw workspace root.
+
+## Deploy Discord OpenClaw bridge
+
+```bash
+bash scripts/deploy-discord-openclaw-bridge.sh
+```
+
+On EC2, set `DISCORD_BOT_TOKEN` in `~/.openclaw/workspace/skills/discord-openclaw-bridge/project/.env`, run `bash project/scripts/install.sh`, then start `discord-openclaw-bridge.service`. The bridge is allowlisted to Discord guild `1500743272551813142` and channel `1500743273361440823` by default.
 
 ## Open the dashboard through SSH
 

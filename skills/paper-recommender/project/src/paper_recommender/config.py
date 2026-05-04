@@ -9,6 +9,8 @@ import yaml
 
 from paper_recommender.sources import SourceLimits
 from paper_recommender.sources.google_newsletters import GoogleNewsletterSettings
+from paper_recommender.sources.manual_links import ManualLinkSettings
+from paper_recommender.sources.rss import RssFeedSettings
 
 
 @dataclass
@@ -160,6 +162,8 @@ class SourceSettings:
     enabled: list[str] = field(default_factory=list)
     limits: SourceLimits = field(default_factory=SourceLimits)
     rss_feeds: list[str] = field(default_factory=list)
+    rss: RssFeedSettings = field(default_factory=RssFeedSettings)
+    manual_links: ManualLinkSettings = field(default_factory=ManualLinkSettings)
     google_newsletters: GoogleNewsletterSettings = field(
         default_factory=GoogleNewsletterSettings
     )
@@ -219,6 +223,8 @@ def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings |
     auth_raw = raw.get("auth") or {}
 
     google_newsletters_raw = sources_raw.get("google_newsletters") or {}
+    rss_raw = sources_raw.get("rss") or {}
+    manual_links_raw = sources_raw.get("manual_links") or {}
     sources = SourceSettings(
         enabled=list(sources_raw.get("enabled", [])),
         limits=SourceLimits(
@@ -227,6 +233,15 @@ def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings |
             timeout_sec=float(sources_raw.get("timeout_sec", 30.0)),
         ),
         rss_feeds=list(sources_raw.get("rss_feeds", [])),
+        rss=RssFeedSettings(
+            feed_urls=list(rss_raw.get("feed_urls", sources_raw.get("rss_feeds", []))),
+            max_summary_chars=int(rss_raw.get("max_summary_chars", 700)),
+        ),
+        manual_links=ManualLinkSettings(
+            paths=list(manual_links_raw.get("paths", [])),
+            max_file_kb=int(manual_links_raw.get("max_file_kb", 512)),
+            max_summary_chars=int(manual_links_raw.get("max_summary_chars", 700)),
+        ),
         google_newsletters=GoogleNewsletterSettings(
             mbox_paths=list(google_newsletters_raw.get("mbox_paths", [])),
             sender_allowlist=list(google_newsletters_raw.get("sender_allowlist", [])),

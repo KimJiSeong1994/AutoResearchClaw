@@ -23,6 +23,12 @@ COPYFILE_DISABLE=1 rsync -az \
   "$REMOTE_HOST:$REMOTE_WORKSPACE/"
 
 COPYFILE_DISABLE=1 rsync -az --delete \
+  --exclude '.env' \
+  --exclude '.env.local' \
+  --exclude '.env.production' \
+  --exclude '.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
   -e "$SSH_CMD" \
   skills/ \
   "$REMOTE_HOST:$REMOTE_WORKSPACE/skills/"

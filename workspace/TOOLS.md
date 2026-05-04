@@ -24,6 +24,15 @@
 - Open local SSH tunnel to the dashboard:
   - `bash scripts/openclaw-dashboard-tunnel.sh`
 
+## Discord OpenClaw bridge
+
+- Bridge project: `~/.openclaw/workspace/skills/discord-openclaw-bridge/project`
+- Service: `discord-openclaw-bridge.service`
+- Default Discord guild: `1500743272551813142`
+- Default Discord channel: `1500743273361440823`
+- Runtime calls OpenClaw through `http://127.0.0.1:18789/v1`; do not expose the gateway publicly for Discord.
+- Secret file: bridge project `.env` contains `DISCORD_BOT_TOKEN` and must not be version-controlled.
+
 ## Safety defaults
 
 - Loopback-only gateway is the default.

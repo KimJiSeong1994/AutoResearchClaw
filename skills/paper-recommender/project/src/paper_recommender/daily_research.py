@@ -43,6 +43,8 @@ from paper_recommender.sources.hackernews import HackerNewsAdapter
 from paper_recommender.sources.huggingface_papers import HuggingFacePapersAdapter
 from paper_recommender.sources.google_newsletters import GoogleNewsletterMboxAdapter
 from paper_recommender.sources.jiphyeonjeon import JiphyeonjeonSourceAdapter
+from paper_recommender.sources.manual_links import ManualLinksAdapter
+from paper_recommender.sources.rss import RssFeedAdapter
 from paper_recommender.state import StateStore
 
 log = logging.getLogger(__name__)
@@ -417,6 +419,16 @@ def _build_adapters(
             out.append(JiphyeonjeonSourceAdapter(jiphy_client))
         elif name == "huggingface_papers":
             out.append(HuggingFacePapersAdapter())
+        elif name == "rss":
+            if settings is None or settings.daily_research is None:
+                log.warning("rss requires daily_research settings — skipping")
+                continue
+            out.append(RssFeedAdapter(settings.daily_research.sources.rss))
+        elif name == "manual_links":
+            if settings is None or settings.daily_research is None:
+                log.warning("manual_links requires daily_research settings — skipping")
+                continue
+            out.append(ManualLinksAdapter(settings.daily_research.sources.manual_links))
         elif name == "google_newsletters":
             if settings is None or settings.daily_research is None:
                 log.warning(

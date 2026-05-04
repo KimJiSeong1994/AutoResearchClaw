@@ -3,9 +3,12 @@ from __future__ import annotations
 import sys
 import types
 
-# Match the existing test pattern: stub yaml so importing config.py does not
-# require pyyaml to be installed in the test environment.
-sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *_a, **_k: {}))
+# Keep the historical no-PyYAML fallback, but do not shadow a real PyYAML
+# install because later integration tests call yaml.safe_dump.
+try:
+    import yaml as _yaml  # noqa: F401
+except ModuleNotFoundError:  # pragma: no cover - only for minimal test envs
+    sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda *_a, **_k: {}))
 
 from paper_recommender.config import (  # noqa: E402
     ClusterSettings,
@@ -33,7 +36,16 @@ def test_parse_full_block_produces_correct_settings() -> None:
             "max_per_source": 30,
             "year_from": 2024,
             "timeout_sec": 20.0,
-            "rss_feeds": ["https://a.test/rss", "https://b.test/atom"],
+            "rss_feeds": ["https://legacy.test/rss"],
+            "rss": {
+                "feed_urls": ["https://a.test/rss", "https://b.test/atom"],
+                "max_summary_chars": 321,
+            },
+            "manual_links": {
+                "paths": ["~/links.jsonl"],
+                "max_file_kb": 64,
+                "max_summary_chars": 456,
+            },
             "google_newsletters": {
                 "mbox_paths": ["~/Downloads/takeout.mbox"],
                 "sender_allowlist": ["newsletter.example"],
@@ -71,7 +83,12 @@ def test_parse_full_block_produces_correct_settings() -> None:
     assert s.sources.limits == SourceLimits(
         max_per_source=30, year_from=2024, timeout_sec=20.0
     )
-    assert s.sources.rss_feeds == ["https://a.test/rss", "https://b.test/atom"]
+    assert s.sources.rss_feeds == ["https://legacy.test/rss"]
+    assert s.sources.rss.feed_urls == ["https://a.test/rss", "https://b.test/atom"]
+    assert s.sources.rss.max_summary_chars == 321
+    assert s.sources.manual_links.paths == ["~/links.jsonl"]
+    assert s.sources.manual_links.max_file_kb == 64
+    assert s.sources.manual_links.max_summary_chars == 456
     assert s.sources.google_newsletters.mbox_paths == ["~/Downloads/takeout.mbox"]
     assert s.sources.google_newsletters.sender_allowlist == ["newsletter.example"]
     assert s.sources.google_newsletters.subject_allowlist == ["research"]

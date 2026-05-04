@@ -117,19 +117,34 @@ daily_research:
   # default — when this section is absent the legacy daily/weekly modes run
   # as before. Activated by `paper-recommender daily-research` subcommand.
   #
-  # Phase B v1 ships 4 adapters: arxiv, hackernews, jiphyeonjeon,
-  # huggingface_papers (HF Daily Papers — replaces the dead Papers With Code
-  # API). Phase B.5 will add semantic_scholar, github_trending, rss.
+  # Phase B ships academic + tech-web adapters. RSS covers Medium and
+  # first-party company/engineering blogs without scraping pages. manual_links
+  # is the compliance-safe path for LinkedIn or other user-provided URLs.
   sources:
     enabled:
       - arxiv
       - hackernews
       - jiphyeonjeon
       - huggingface_papers
+      # - rss
+      # - manual_links
     max_per_source: 50
     year_from: 2024
     timeout_sec: 30.0
-    rss_feeds: []  # for the (future) rss adapter
+    # RSS/Atom metadata only; does not fetch full article pages. Medium examples:
+    #   https://medium.com/feed/tag/agentic-ai
+    #   https://medium.com/feed/@username
+    rss_feeds: []  # legacy alias for rss.feed_urls
+    rss:
+      feed_urls: []
+      max_summary_chars: 700
+    # Compliance-safe LinkedIn/industry intake: local JSONL with explicit
+    # user-provided URL metadata. No login, crawling, or scraping is performed.
+    # JSONL fields: title, url, summary, author/authors, published_at, source, tags.
+    manual_links:
+      paths: []
+      max_file_kb: 512
+      max_summary_chars: 700
     # Safe Google-account newsletter intake: no live Gmail access or OAuth.
     # Export newsletters with Google Takeout (Mail mbox) or another local mbox
     # flow, then put real paths/allowlists only in the deployed config.yaml.

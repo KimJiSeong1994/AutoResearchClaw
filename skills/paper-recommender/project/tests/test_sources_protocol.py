@@ -79,8 +79,16 @@ def test_fetch_all_sources_isolates_adapter_failures() -> None:
 
 
 def test_fetch_all_sources_runs_adapters_concurrently() -> None:
-    """Two adapters that each sleep N seconds should finish in ~N seconds total,
-    not 2N. Generous tolerance to keep this resilient on loaded CI runners."""
+    """Adapters should overlap, not run strictly one after another.
+
+    Avoid strict wall-clock thresholds: loaded local/CI runners can add hundreds
+    of milliseconds around event-loop startup while the adapter work still
+    overlaps correctly.
+    """
+
+    import time
+
+    spans: dict[str, tuple[float, float]] = {}
 
     class _SlowAdapter:
         def __init__(self, name: str, delay: float) -> None:
@@ -92,18 +100,20 @@ def test_fetch_all_sources_runs_adapters_concurrently() -> None:
             seed_topics: list[str],
             limits: SourceLimits,
         ) -> list[CandidateItem]:
+            started = time.monotonic()
             await asyncio.sleep(self._delay)
+            ended = time.monotonic()
+            spans[self.name] = (started, ended)
             return [CandidateItem(source=self.name, title=self.name)]
-
-    import time
 
     a = _SlowAdapter("arxiv", 0.10)
     b = _SlowAdapter("hackernews", 0.10)
-    start = time.monotonic()
     out = asyncio.run(fetch_all_sources([a, b], ["x"], SourceLimits()))
-    elapsed = time.monotonic() - start
     assert set(out.keys()) == {"arxiv", "hackernews"}
-    assert elapsed < 0.18, f"sources ran serially (elapsed={elapsed:.3f}s)"
+
+    a_start, a_end = spans["arxiv"]
+    b_start, b_end = spans["hackernews"]
+    assert a_start < b_end and b_start < a_end, f"sources did not overlap: {spans}"
 
 
 def test_fetch_all_sources_empty_list_returns_empty_dict() -> None:
