@@ -27,7 +27,7 @@
 const DEFAULT_DISCORD_CHANNEL_ID = '1500839270921801879';
 const DEFAULT_GMAIL_QUERY = 'newer_than:7d';
 const DEFAULT_MAX_THREADS = 50;
-const DEFAULT_COLLECT_ALL_MAIL = false;
+const DEFAULT_COLLECT_ALL_MAIL = true;
 const DEFAULT_INCLUDE_ALL_URLS = true;
 const DEFAULT_FETCH_ARTICLE_DETAILS = true;
 const MAX_ARTICLE_CHARS = 5000;
@@ -302,6 +302,9 @@ function doGet(e) {
     return ContentService
       .createTextOutput(JSON.stringify({ error: 'unauthorized' }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+  if (e && e.parameter && String(e.parameter.refresh || '') === 'true') {
+    runNewsletterArchive();
   }
   return ContentService
     .createTextOutput(JSON.stringify({
