@@ -29,6 +29,8 @@ def test_card_news_renderer_creates_readable_cards_without_part_counters() -> No
                 "primary_topic_display": "검색/RAG/지식그래프",
                 "topic_confidence": 1.0,
                 "topic_reasons": ["rag", "knowledge graph"],
+                "claim": "Graph-grounded retrieval should be evaluated as a system design choice.",
+                "mechanism": "Indexing and query planning change the evidence available to the generator.",
                 "summary_lines": [
                     "The article presents graph-grounded retrieval agents.",
                     "It compares indexing, query planning, and answer grounding.",
@@ -58,6 +60,7 @@ def test_card_news_renderer_creates_readable_cards_without_part_counters() -> No
     assert "1. The article presents graph-grounded retrieval agents." in messages[1]
     assert "**왜 지금인가**" in messages[1]
     assert "**핵심 주장**" in messages[1]
+    assert "- 주장: Graph-grounded retrieval should be evaluated as a system design choice." in messages[1]
     assert "**근거**" in messages[1]
     assert "**산업/현장 해석**" in messages[1]
     assert "**다음 질문**" in messages[1]
@@ -65,6 +68,55 @@ def test_card_news_renderer_creates_readable_cards_without_part_counters() -> No
     assert "<https://example.com/graphrag>" in messages[1]
     assert "**Card" not in "\n".join(messages)
     assert not any("(1/" in message or "(2/" in message for message in messages)
+
+
+def test_card_news_renderer_keeps_skeletal_cards_short_and_honest() -> None:
+    payload = {
+        "items": [
+            {
+                "title": "RAG, LLM Wiki, or Gbrain? How Your Agent Remembers Changes Everything",
+                "public_excerpt": "RAG, LLM Wiki, or Gbrain? How Your Agent Remembers Changes Everything",
+                "url": "https://example.com/agent-memory",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.4,
+                "topic_reasons": ["llm", "agent"],
+                "summary_lines": [],
+            }
+        ]
+    }
+
+    message = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert "**읽는 법**" in message
+    assert "상세 본문 요약이 없어" in message
+    assert "**핵심 주장**" not in message
+    assert "**왜 지금인가**" not in message
+    assert "잠정 분류" in message
+    assert "확인된 단서:" not in message
+    assert message.count("RAG, LLM Wiki, or Gbrain?") == 2
+
+
+def test_card_news_renderer_does_not_repeat_excerpt_across_sections() -> None:
+    excerpt = "A new benchmark compares retrieval memory designs for long-running agents."
+    payload = {
+        "items": [
+            {
+                "title": "Agent memory benchmark",
+                "public_excerpt": excerpt,
+                "url": "https://example.com/benchmark",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.8,
+                "topic_reasons": ["agent", "memory"],
+                "summary_lines": [],
+            }
+        ]
+    }
+
+    message = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert "**발췌**" in message
+    assert message.count(excerpt) == 1
+    assert "**핵심 주장**" not in message
 
 
 def test_card_news_renderer_deduplicates_titles_and_prioritizes_topic_spread() -> None:
