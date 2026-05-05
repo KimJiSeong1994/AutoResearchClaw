@@ -546,7 +546,7 @@ def write_weekly_artifacts(
                 "doi": p.get("doi"),
                 "arxiv_id": p.get("arxiv_id"),
                 "trend_query": p.get("_trend_query"),
-                "trend_axis": p.get("_trend_axis"),
+                "trend_axis": p.get("_trend_axis") or p.get("trend_axis"),
             }
             for p in candidates[: settings.weekly_report.top_papers]
         ],

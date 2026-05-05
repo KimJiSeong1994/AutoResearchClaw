@@ -46,6 +46,8 @@ def validate_trend_report(report: dict[str, Any], valid_ids: set[str], min_evide
             clusters_out.append({
                 "title": _safe_text(cluster.get("title") or "Trend cluster", limit=120),
                 "summary": _safe_text(cluster.get("summary") or "", limit=900),
+                "technical_point": _safe_text(cluster.get("technical_point") or "", limit=700),
+                "researcher_action": _safe_text(cluster.get("researcher_action") or "", limit=700),
                 "why_it_matters": _safe_text(cluster.get("why_it_matters") or "", limit=700),
                 "paper_ids": ids,
             })
@@ -74,7 +76,9 @@ def fallback_trend_report(settings: Settings, candidates: list[dict[str, Any]]) 
         {
             "title": axis,
             "summary": "Retrieved papers cluster around this SOUL/profile-derived search axis.",
-            "why_it_matters": "Use this as an evidence queue for manual weekly review; synthesis fallback was used.",
+            "technical_point": "Compare the linked evidence papers before inferring a stronger method-level claim.",
+            "researcher_action": "Use this deterministic cluster as a manual weekly review queue.",
+            "why_it_matters": "Synthesis fallback was used, so the cluster is a navigation aid rather than a model-written trend claim.",
             "paper_ids": ids[: max(settings.weekly_report.min_evidence_per_cluster, 3)],
         }
         for axis, ids in by_axis.items()
@@ -118,8 +122,8 @@ async def synthesize_trend_report(
         "Write user-facing summaries in Korean while preserving original paper titles. "
         "Emphasize latest research trends, concrete technical points, and why each trend matters to the reader's SOUL/profile. "
         "Do not cite paper IDs that are not in the evidence. Return strict JSON with keys: "
-        "generated_at, at_a_glance, clusters[{title,summary,why_it_matters,paper_ids}], "
-        "weak_signals, coverage_caveat."
+        "generated_at, at_a_glance, clusters[{title,summary,technical_point,researcher_action,why_it_matters,paper_ids}], "
+        "weak_signals, coverage_caveat. Keep technical_point and researcher_action evidence-grounded and concise."
     )
     user = {
         "profile": profile,
