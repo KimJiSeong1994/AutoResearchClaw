@@ -216,6 +216,10 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
 }
 
 function renderBriefing_(items, query) {
+  return renderBriefingWithTelemetry_(items, query).briefing;
+}
+
+function renderBriefingWithTelemetry_(items, query) {
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   const lines = [
     '**집현전-Claw 뉴스레터 수집 브리핑**',
@@ -235,8 +239,9 @@ function renderBriefing_(items, query) {
     lines.push('', '### 수집 결과 없음');
     lines.push('- 핵심 요약: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.');
     lines.push('- 기술 포인트: SENDER_ALLOWLIST, GMAIL_QUERY, 메일 수신 상태를 점검해야 합니다.');
+    lines.push('- 의미/근거: 수집 후보가 없어 토픽 다양성 및 요약 품질을 산출하지 않았습니다.');
     lines.push('- 출처 링크: 없음');
-    return lines.join('\n');
+    return { briefing: lines.join('\n'), telemetry: buildBriefingTelemetry_(items, query, [], 0, false) };
   }
 
   const grouped = groupByTopic_(items);
@@ -245,42 +250,57 @@ function renderBriefing_(items, query) {
     .filter(entry => entry.detailed.length > 0)
     .sort((a, b) => b.detailed.length - a.detailed.length || b.total - a.total || a.topic.localeCompare(b.topic));
 
-  const topicOverview = topics.slice(0, 8).map(entry => entry.topic + ' ' + entry.detailed.length + '/' + entry.total).join(' · ');
+  const selectedTopics = topics.slice(0, BRIEFING_MAX_TOPICS);
+  const topicOverview = selectedTopics.map(entry => entry.topic + ' ' + entry.detailed.length + '/' + entry.total).join(' · ');
   if (topicOverview) {
     appendWithinLimit_(lines, ['', '- 토픽 분포: ' + topicOverview], BRIEFING_RENDER_CHAR_LIMIT);
   }
 
-  topics.forEach(entry => {
+  let renderedItems = 0;
+  let renderTruncated = false;
+  selectedTopics.forEach(entry => {
     const topicHeader = ['', '### ' + entry.topic];
-    if (!appendWithinLimit_(lines, topicHeader, BRIEFING_RENDER_CHAR_LIMIT)) return;
-    const item = entry.detailed[0];
-    const title = truncate_(plain_(item.articleTitle || item.title), 90);
-    const summary = buildSummaryLines_(item);
-    const block = [
-      '- 주요 아티클/논문: ' + title,
-      '  - 핵심 내용:',
-      '    - ' + summary[0],
-      '    - ' + summary[1],
-      '    - ' + summary[2]
-    ];
-    if (item.url) {
-      block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
-    } else {
-      block.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
-    }
-    if (!appendWithinLimit_(lines, block, BRIEFING_RENDER_CHAR_LIMIT)) {
-      lines.pop();
-      lines.pop();
+    if (!appendWithinLimit_(lines, topicHeader, BRIEFING_RENDER_CHAR_LIMIT)) {
+      renderTruncated = true;
       return;
     }
-    const remaining = entry.detailed.length - 1;
+    const itemsToRender = entry.detailed.slice(0, BRIEFING_MAX_ITEMS_PER_TOPIC);
+    itemsToRender.forEach(item => {
+      const title = truncate_(plain_(item.articleTitle || item.title), 90);
+      const summary = buildSummaryLines_(item);
+      const block = [
+        '- 주요 아티클/논문: ' + title,
+        '  - 핵심 요약: ' + summary[0],
+        '  - 기술 포인트: ' + summary[1],
+        '  - 의미/근거: ' + summary[2]
+      ];
+      if (item.url) {
+        block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
+      } else {
+        block.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
+      }
+      if (appendWithinLimit_(lines, block, BRIEFING_RENDER_CHAR_LIMIT)) {
+        renderedItems += 1;
+      } else {
+        renderTruncated = true;
+      }
+    });
+    const remaining = entry.detailed.length - itemsToRender.length;
     if (remaining > 0) {
       appendWithinLimit_(lines, ['- 추가 항목: ' + remaining + '개는 raw archive 및 다음 실행에서 재검토'], BRIEFING_RENDER_CHAR_LIMIT);
     }
   });
 
+  if (topics.length > selectedTopics.length) {
+    renderTruncated = true;
+    appendWithinLimit_(lines, ['- 추가 토픽: ' + (topics.length - selectedTopics.length) + '개는 다음 실행에서 재검토'], BRIEFING_RENDER_CHAR_LIMIT);
+  }
+
   appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.'], BRIEFING_RENDER_CHAR_LIMIT);
-  return lines.join('\n');
+  return {
+    briefing: lines.join('\n'),
+    telemetry: buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated)
+  };
 }
 
 function appendWithinLimit_(lines, block, limit) {
@@ -291,13 +311,49 @@ function appendWithinLimit_(lines, block, limit) {
 }
 
 
-function saveLatestBriefing_(briefing, itemCount, query) {
+function buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated) {
+  const topicCounts = {};
+  items.forEach(item => {
+    const topic = item.topic || '기타 테크 리포트';
+    topicCounts[topic] = (topicCounts[topic] || 0) + 1;
+  });
+  const detailedItemCount = selectedTopics.reduce((sum, entry) => sum + entry.detailed.length, 0);
+  return {
+    generated_at: new Date().toISOString(),
+    query: query,
+    item_count: items.length,
+    topic_count: Object.keys(topicCounts).length,
+    rendered_topic_count: selectedTopics.length,
+    rendered_item_count: renderedItems,
+    detailed_item_count: detailedItemCount,
+    max_topics: BRIEFING_MAX_TOPICS,
+    max_items_per_topic: BRIEFING_MAX_ITEMS_PER_TOPIC,
+    truncated: Boolean(renderTruncated),
+    topic_counts: topicCounts
+  };
+}
+
+function saveLatestBriefing_(briefing, telemetry) {
+  const generatedAt = telemetry && telemetry.generated_at ? telemetry.generated_at : new Date().toISOString();
+  const itemCount = telemetry && typeof telemetry.item_count !== 'undefined' ? telemetry.item_count : 0;
+  const query = telemetry && telemetry.query ? telemetry.query : '';
   PropertiesService.getScriptProperties().setProperties({
     LATEST_BRIEFING: briefing,
-    LATEST_BRIEFING_AT: new Date().toISOString(),
+    LATEST_BRIEFING_AT: generatedAt,
     LATEST_BRIEFING_ITEM_COUNT: String(itemCount),
-    LATEST_BRIEFING_QUERY: query
+    LATEST_BRIEFING_QUERY: query,
+    LATEST_BRIEFING_TELEMETRY: JSON.stringify(telemetry || {})
   });
+}
+
+function readLatestBriefingTelemetry_(props) {
+  const raw = props.getProperty('LATEST_BRIEFING_TELEMETRY') || '';
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return { parse_error: true };
+  }
 }
 
 function doGet(e) {
@@ -317,7 +373,8 @@ function doGet(e) {
       briefing: props.getProperty('LATEST_BRIEFING') || '',
       generated_at: props.getProperty('LATEST_BRIEFING_AT') || '',
       item_count: Number(props.getProperty('LATEST_BRIEFING_ITEM_COUNT') || '0'),
-      query: props.getProperty('LATEST_BRIEFING_QUERY') || ''
+      query: props.getProperty('LATEST_BRIEFING_QUERY') || '',
+      telemetry: readLatestBriefingTelemetry_(props)
     }))
     .setMimeType(ContentService.MimeType.JSON);
 }
