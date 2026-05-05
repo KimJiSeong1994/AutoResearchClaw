@@ -50,16 +50,20 @@ def test_card_news_renderer_creates_readable_cards_without_part_counters() -> No
 
     assert CARD_NEWS_TITLE in messages[0]
     assert "선별 카드: 2개" in messages[0]
+    assert "블로그형 기술 브리핑" in messages[0]
     assert "**제목**" in messages[1]
     assert "GraphRAG systems benchmark" in messages[1]
-    assert "**토픽**" in messages[1]
+    assert "**토픽과 근거 수준**" in messages[1]
     assert "**3줄 요약**" in messages[1]
     assert "1. The article presents graph-grounded retrieval agents." in messages[1]
-    assert "**기술 포인트**" in messages[1]
-    assert "**의미**" in messages[1]
+    assert "**왜 지금인가**" in messages[1]
+    assert "**핵심 주장**" in messages[1]
     assert "**근거**" in messages[1]
+    assert "**산업/현장 해석**" in messages[1]
+    assert "**다음 질문**" in messages[1]
     assert "**출처**" in messages[1]
     assert "<https://example.com/graphrag>" in messages[1]
+    assert "**Card" not in "\n".join(messages)
     assert not any("(1/" in message or "(2/" in message for message in messages)
 
 
