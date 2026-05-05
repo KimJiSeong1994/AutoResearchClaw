@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 DISCORD_SUPPRESS_EMBEDS_FLAG = 1 << 2
+NEWSLETTER_TITLE = "집현전-Claw 뉴스레터 수집 브리핑"
 
 
 class NewsletterPostConfigError(RuntimeError):
@@ -123,6 +124,61 @@ async def _post_message_with_rate_limit(
         await asyncio.sleep(min(max(retry_after, 0.25), 10.0))
 
 
+async def _delete_message_with_rate_limit(
+    client: httpx.AsyncClient,
+    message_url: str,
+    *,
+    headers: dict[str, str],
+    max_retries: int = 4,
+) -> None:
+    for attempt in range(max_retries + 1):
+        response = await client.delete(message_url, headers=headers)
+        if response.status_code != 429:
+            response.raise_for_status()
+            return
+        retry_after = 1.0
+        try:
+            retry_after = float(response.json().get("retry_after") or retry_after)
+        except Exception:
+            header_value = response.headers.get("retry-after")
+            if header_value:
+                try:
+                    retry_after = float(header_value)
+                except ValueError:
+                    retry_after = 1.0
+        if attempt >= max_retries:
+            response.raise_for_status()
+        await asyncio.sleep(min(max(retry_after, 0.25), 10.0))
+
+
+def _is_newsletter_bot_message(message: dict[str, object]) -> bool:
+    content = str(message.get("content") or "")
+    author = message.get("author")
+    author_is_bot = isinstance(author, dict) and bool(author.get("bot"))
+    return author_is_bot and NEWSLETTER_TITLE in content
+
+
+async def _purge_previous_newsletter_messages(
+    client: httpx.AsyncClient,
+    messages_url: str,
+    *,
+    headers: dict[str, str],
+    limit: int = 50,
+) -> int:
+    response = await client.get(f"{messages_url}?limit={limit}", headers=headers)
+    response.raise_for_status()
+    deleted = 0
+    for message in response.json():
+        if not isinstance(message, dict) or not _is_newsletter_bot_message(message):
+            continue
+        message_id = str(message.get("id") or "")
+        if not message_id:
+            continue
+        await _delete_message_with_rate_limit(client, f"{messages_url}/{message_id}", headers=headers)
+        deleted += 1
+    return deleted
+
+
 async def run() -> None:
     _load_dotenv(Path.cwd() / ".env")
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
@@ -143,22 +199,31 @@ async def run() -> None:
         "no",
         "off",
     }
+    purge_previous = os.environ.get("DISCORD_PURGE_PREVIOUS_NEWSLETTER", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     body = _load_message(source, max_chars=max_chars * 20)
     messages = _split_newsletter_messages(body, max_chars=max_chars)
 
     url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
     headers = {"Authorization": f"Bot {token}"}
     async with httpx.AsyncClient(timeout=30) as client:
-        for idx, message in enumerate(messages, start=1):
-            suffix = f"\n\n({idx}/{len(messages)})" if len(messages) > 1 else ""
+        purged = 0
+        if purge_previous:
+            purged = await _purge_previous_newsletter_messages(client, url, headers=headers)
+        for message in messages:
             await _post_message_with_rate_limit(
                 client,
                 url,
                 headers=headers,
-                content=message + suffix,
+                content=message,
                 suppress_embeds=suppress_embeds,
             )
-    print(f"posted newsletter briefing to channel={channel_id} source={source} messages={len(messages)}")
+    suffix = f" purged={purged}" if purge_previous else ""
+    print(f"posted newsletter briefing to channel={channel_id} source={source} messages={len(messages)}{suffix}")
 
 
 def main() -> None:

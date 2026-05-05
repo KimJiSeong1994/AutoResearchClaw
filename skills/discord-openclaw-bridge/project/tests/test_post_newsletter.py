@@ -11,8 +11,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from discord_openclaw_bridge.post_newsletter import (  # noqa: E402
     DISCORD_SUPPRESS_EMBEDS_FLAG,
     NewsletterPostConfigError,
+    _is_newsletter_bot_message,
     _load_message,
     _post_message_with_rate_limit,
+    _purge_previous_newsletter_messages,
     _required_snowflake,
     _split_newsletter_messages,
 )
@@ -122,3 +124,66 @@ def test_newsletter_post_can_disable_embed_suppression() -> None:
     asyncio.run(scenario())
 
     assert "flags" not in seen[0]
+
+
+def test_newsletter_bot_message_matcher_targets_only_bot_newsletter_messages() -> None:
+    assert _is_newsletter_bot_message(
+        {
+            "content": "**집현전-Claw 뉴스레터 수집 브리핑**\n(6/10)",
+            "author": {"bot": True},
+        }
+    )
+    assert not _is_newsletter_bot_message(
+        {
+            "content": "**집현전-Claw 뉴스레터 수집 브리핑**",
+            "author": {"bot": False},
+        }
+    )
+
+
+def test_newsletter_purge_deletes_only_prior_bot_newsletter_messages() -> None:
+    import httpx
+    import json
+
+    deleted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "1",
+                        "content": "**집현전-Claw 뉴스레터 수집 브리핑**\nold",
+                        "author": {"bot": True},
+                    },
+                    {
+                        "id": "2",
+                        "content": "unrelated",
+                        "author": {"bot": True},
+                    },
+                    {
+                        "id": "3",
+                        "content": "**집현전-Claw 뉴스레터 수집 브리핑**",
+                        "author": {"bot": False},
+                    },
+                ],
+                request=request,
+            )
+        if request.method == "DELETE":
+            deleted.append(request.url.path.rsplit("/", 1)[-1])
+            return httpx.Response(204, request=request)
+        raise AssertionError(json.dumps({"method": request.method}))
+
+    async def scenario() -> int:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await _purge_previous_newsletter_messages(
+                client,
+                "https://discord.com/api/v10/channels/1/messages",
+                headers={"Authorization": "Bot test"},
+            )
+
+    purged = asyncio.run(scenario())
+
+    assert purged == 1
+    assert deleted == ["1"]
