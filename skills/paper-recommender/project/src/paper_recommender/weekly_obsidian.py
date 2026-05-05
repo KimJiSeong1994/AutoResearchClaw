@@ -46,7 +46,7 @@ def _safe_md_list(value: Any) -> list[str]:
                 return _safe_md_list(parsed)
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines) > 1:
-            return [_safe_md(re.sub(r"^[-*\d.)\s]+", "", line)) for line in lines]
+            return [_safe_md(_strip_list_marker(line)) for line in lines]
         return [_safe_md(text)]
     if isinstance(value, dict):
         title = value.get("title") or value.get("label") or value.get("summary") or value.get("text")
@@ -62,6 +62,10 @@ def _safe_md_list(value: Any) -> list[str]:
             out.extend(_safe_md_list(item))
         return [item for item in out if item]
     return [_safe_md(value)]
+
+
+def _strip_list_marker(line: str) -> str:
+    return re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
 
 
 def _render_at_a_glance(value: Any) -> list[str]:
@@ -85,12 +89,14 @@ def _render_cluster_role_bullets(cluster: dict[str, Any]) -> list[str]:
         cluster.get("technical_point"),
         cluster.get("technical_points"),
         cluster.get("method"),
-        cluster.get("why_it_matters"),
     )
+    why_it_matters = _first_text(cluster.get("why_it_matters"))
     action = _first_text(cluster.get("researcher_action"), cluster.get("next_action"), cluster.get("action"))
     if not action:
         title = _safe_md(cluster.get("title")) or "this cluster"
         action = f"아래 근거 논문을 먼저 대조해 `{title}` 축의 후속 읽기 우선순위를 정한다."
+        if why_it_matters:
+            action = f"{action} 중요성 단서: {why_it_matters}"
     if not summary:
         summary = "근거 논문으로 확인 가능한 공통 주제를 묶은 클러스터다."
     if not technical:
@@ -241,7 +247,8 @@ def render_weekly_report(
         lines.append("")
         lines.extend(_render_cluster_role_bullets(cluster))
         lines.append("")
-        lines.append("**Evidence papers**")
+        lines.append("**근거 논문**")
+        evidence_count = 0
         for pid in cluster.get("paper_ids") or []:
             p = by_id.get(str(pid))
             if not p:
@@ -252,6 +259,9 @@ def render_weekly_report(
             url = _paper_url(p)
             title_part = f"[{title}]({url})" if url else title
             lines.append(f"- {title_part} ({year}, {venue})")
+            evidence_count += 1
+        if evidence_count == 0:
+            lines.append("- 근거 논문 링크를 후보 목록에서 확인하지 못했습니다.")
         lines.append("")
 
     weak = report.get("weak_signals") or []
