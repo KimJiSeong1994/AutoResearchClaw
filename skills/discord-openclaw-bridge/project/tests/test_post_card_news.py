@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -10,7 +11,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     CARD_NEWS_TITLE,
+    CARD_SEPARATOR,
     DISCORD_SUPPRESS_EMBEDS_FLAG,
+    LEAN_DISCLAIMER_WITH_EXCERPT,
+    LEAN_DISCLAIMER_WITHOUT_EXCERPT,
     _create_forum_card_news_thread,
     _is_card_news_bot_message,
     _purge_previous_card_news_messages,
@@ -18,105 +22,595 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
 )
 
 
-def test_card_news_renderer_creates_readable_cards_without_part_counters() -> None:
+FORBIDDEN_LABELS = (
+    "**제목**",
+    "**토픽과 근거 수준**",
+    "**3줄 요약**",
+    "**왜 지금인가**",
+    "**핵심 주장**",
+    "**근거**",
+    "**산업/현장 해석**",
+    "**발췌**",
+    "**읽는 법**",
+)
+
+
+def _strip_footer(card: str) -> str:
+    body_lines: list[str] = []
+    for line in card.split("\n"):
+        if line.startswith("— "):
+            break
+        body_lines.append(line)
+    return "\n".join(body_lines).rstrip()
+
+
+def _has_long_overlap(a: str, b: str, *, min_len: int = 30) -> bool:
+    if len(a) < min_len or len(b) < min_len:
+        return False
+    return any(a[i : i + min_len] in b for i in range(len(a) - min_len + 1))
+
+
+def _body_paragraphs(card: str) -> list[str]:
+    """Body chunks excluding the leading separator+title chunk and footer."""
+    chunks = [chunk for chunk in _strip_footer(card).split("\n\n") if chunk.strip()]
+    # First chunk is "{separator}\n**title**"; drop it.
+    return chunks[1:]
+
+
+def test_rich_card_uses_essay_paragraphs_with_connective() -> None:
     payload = {
         "date": "2026-05-05",
         "items": [
             {
-                "title": "Digest subject",
                 "article_title": "GraphRAG systems benchmark",
                 "url": "https://example.com/graphrag",
                 "primary_topic_display": "검색/RAG/지식그래프",
-                "topic_confidence": 1.0,
+                "topic_confidence": 0.92,
                 "topic_reasons": ["rag", "knowledge graph"],
-                "claim": "Graph-grounded retrieval should be evaluated as a system design choice.",
-                "mechanism": "Indexing and query planning change the evidence available to the generator.",
+                "why_now": "지식그래프 기반 검색 평가가 빠르게 표준화되고 있다.",
+                "claim": "그래프 기반 검색은 시스템 설계 선택지로 평가되어야 한다.",
+                "mechanism": "인덱싱과 쿼리 플래닝이 생성기에 전달되는 근거 풀을 결정한다.",
+                "evidence": "다섯 도메인에서 hop 수와 정확도 trade-off가 측정되었다.",
                 "summary_lines": [
-                    "The article presents graph-grounded retrieval agents.",
-                    "It compares indexing, query planning, and answer grounding.",
-                    "It helps researchers track accuracy and latency trade-offs.",
+                    "그래프 기반 검색 에이전트의 비교 연구다.",
+                    "운영 환경에서 인덱싱 비용이 어떻게 변하는지 검증한다.",
+                    "정확도와 지연시간 trade-off를 함께 제시한다.",
                 ],
-            },
-            {
-                "title": "Agent memory report",
-                "url": "https://example.com/agent-memory",
-                "primary_topic_display": "LLM/에이전트",
-                "topic_confidence": 0.7,
-                "topic_reasons": ["agent", "llm"],
-                "summary_lines": ["Core", "Tech", "Impact"],
-            },
+                "source_name": "Newsletter A",
+            }
         ],
     }
 
-    messages = render_card_news_messages(payload, max_cards=2)
+    card = render_card_news_messages(payload, max_cards=1)[1]
 
-    assert CARD_NEWS_TITLE in messages[0]
-    assert "선별 카드: 2개" in messages[0]
-    assert "블로그형 기술 브리핑" in messages[0]
-    assert "**제목**" in messages[1]
-    assert "GraphRAG systems benchmark" in messages[1]
-    assert "**토픽과 근거 수준**" in messages[1]
-    assert "**3줄 요약**" in messages[1]
-    assert "1. The article presents graph-grounded retrieval agents." in messages[1]
-    assert "**왜 지금인가**" in messages[1]
-    assert "**핵심 주장**" in messages[1]
-    assert "- 주장: Graph-grounded retrieval should be evaluated as a system design choice." in messages[1]
-    assert "**근거**" in messages[1]
-    assert "**산업/현장 해석**" in messages[1]
-    assert "**다음 질문**" in messages[1]
-    assert "**출처**" in messages[1]
-    assert "<https://example.com/graphrag>" in messages[1]
-    assert "**Card" not in "\n".join(messages)
-    assert not any("(1/" in message or "(2/" in message for message in messages)
+    for label in FORBIDDEN_LABELS:
+        assert label not in card, f"unexpected label {label} in card: {card}"
+
+    assert any(connector in card for connector in ("따라서", "다만", "구체적으로", "한편")), card
+
+    paragraphs = _body_paragraphs(card)
+    assert len(paragraphs) >= 3, paragraphs
 
 
-def test_card_news_renderer_keeps_skeletal_cards_short_and_honest() -> None:
+def test_rich_card_omits_next_question_when_no_specific_input() -> None:
     payload = {
         "items": [
             {
-                "title": "RAG, LLM Wiki, or Gbrain? How Your Agent Remembers Changes Everything",
-                "public_excerpt": "RAG, LLM Wiki, or Gbrain? How Your Agent Remembers Changes Everything",
-                "url": "https://example.com/agent-memory",
+                "article_title": "Specific input absent",
+                "url": "https://example.com/no-summary",
                 "primary_topic_display": "LLM/에이전트",
-                "topic_confidence": 0.4,
-                "topic_reasons": ["llm", "agent"],
+                "topic_confidence": 0.75,
+                "why_now": "에이전트 운영 비용 평가가 본격화된다.",
+                "claim": "기억 구조 선택이 운영 비용을 좌우한다.",
                 "summary_lines": [],
+                "source_name": "Newsletter B",
             }
         ]
     }
 
-    message = render_card_news_messages(payload, max_cards=1)[1]
+    card = render_card_news_messages(payload, max_cards=1)[1]
 
-    assert "**읽는 법**" in message
-    assert "상세 본문 요약이 없어" in message
-    assert "**핵심 주장**" not in message
-    assert "**왜 지금인가**" not in message
-    assert "잠정 분류" in message
-    assert "확인된 단서:" not in message
-    assert message.count("RAG, LLM Wiki, or Gbrain?") == 2
+    assert "**다음 질문**" not in card
 
 
-def test_card_news_renderer_does_not_repeat_excerpt_across_sections() -> None:
-    excerpt = "A new benchmark compares retrieval memory designs for long-running agents."
+def test_lean_card_is_excerpt_paragraph_with_honest_limit_line() -> None:
     payload = {
         "items": [
             {
-                "title": "Agent memory benchmark",
-                "public_excerpt": excerpt,
-                "url": "https://example.com/benchmark",
+                "article_title": "Agent memory benchmark",
+                "public_excerpt": "장기 실행 에이전트의 검색 메모리 설계를 비교한 새 벤치마크가 발표되었다.",
+                "url": "https://example.com/lean",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.65,
+                "summary_lines": [],
+                "source_name": "Newsletter L",
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert LEAN_DISCLAIMER_WITH_EXCERPT in card
+    assert "발표되었습니다" in card  # excerpt + 합니다체 normalization
+    for label in FORBIDDEN_LABELS + ("**다음 질문**",):
+        assert label not in card, f"unexpected label {label} in lean card: {card}"
+
+
+def test_skeletal_card_is_three_lines_max_no_topic_boilerplate() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Skeletal candidate",
+                "url": "https://example.com/skel",
+                "primary_topic_display": "오픈소스/코드",
+                "topic_confidence": 0.3,
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    non_separator_lines = [line for line in card.split("\n") if line and CARD_SEPARATOR not in line]
+    assert len(non_separator_lines) <= 3, non_separator_lines
+
+    legacy_phrases = (
+        "기술 확산 속도와 재현 가능성이",
+        "검색 정확도보다 지식 구조",
+        "모델 성능보다 기억 구조",
+        "재사용 속도만큼 보안",
+        "원문에서 방법, 평가 조건",
+    )
+    for phrase in legacy_phrases:
+        assert phrase not in card, f"legacy boilerplate leaked: {phrase}"
+    assert "후속 읽기 후보" in card
+    assert "`잠정`" in card
+
+
+def test_footer_includes_source_url_topic_confidence_bucket() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Footer fixture",
+                "url": "https://example.com/footer",
+                "primary_topic_display": "멀티모달/비전",
+                "topic_confidence": 0.85,
+                "topic_reasons": ["vision", "encoder"],
+                "claim": "비전 인코더는 입력 양식을 결정한다.",
+                "mechanism": "토큰화 방식이 다운스트림 정확도를 바꾼다.",
+                "summary_lines": ["요약 한 줄.", "요약 두 줄.", "요약 세 줄."],
+                "source_name": "Vision Weekly",
+            }
+        ]
+    }
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    expected_prefix = "— Vision Weekly · <https://example.com/footer> · `멀티모달/비전` · `높음` · 단서 vision · encoder"
+    assert expected_prefix in card
+
+    # generic topic should drop the topic backtick
+    generic_payload = {
+        "items": [
+            {
+                "article_title": "Generic skeletal",
+                "url": "https://example.com/gen",
+                "primary_topic_display": "기타 테크 리포트",
+                "topic_confidence": 0.55,
+            }
+        ]
+    }
+    generic_card = render_card_news_messages(generic_payload, max_cards=1)[1]
+    assert "`기타 테크 리포트`" not in generic_card
+    assert "`보통`" in generic_card
+
+    # numeric confidence value must NOT appear anywhere
+    for raw in ("0.85", "0.55"):
+        assert raw not in card, raw
+        assert raw not in generic_card, raw
+
+
+def test_same_topic_cards_do_not_duplicate_body_text() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Card A — graph indexing",
+                "url": "https://example.com/a",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.9,
+                "topic_reasons": ["graph", "indexing"],
+                "why_now": "그래프 인덱싱 평가가 운영 환경으로 옮겨지고 있다.",
+                "claim": "그래프 인덱싱은 정확도에 영향을 미친다.",
+                "mechanism": "인접 노드 정보가 생성기에 추가 컨텍스트를 제공한다.",
+                "evidence": "두 도메인 데이터셋에서 정확도가 8% 상승했다.",
+                "summary_lines": [
+                    "그래프 인덱싱 사례 비교.",
+                    "운영 환경에서 인접 노드 활용 방식을 분석한다.",
+                    "데이터셋별 차이를 보고한다.",
+                ],
+                "source_name": "Search Weekly",
+            },
+            {
+                "article_title": "Card B — query planner latency",
+                "url": "https://example.com/b",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.8,
+                "topic_reasons": ["query planner", "latency"],
+                "why_now": "쿼리 플래너 지연 분석이 운영 로그로 확장되고 있다.",
+                "claim": "쿼리 플래너 설계가 응답 지연시간을 결정한다.",
+                "mechanism": "다단계 검색이 캐시 미스를 유발한다.",
+                "evidence": "프로덕션 로그에서 평균 지연시간이 220ms 늘어났다.",
+                "summary_lines": [
+                    "쿼리 플래너 설계 비교.",
+                    "운영 환경에서 캐시 전략을 검증한다.",
+                    "지연시간 trade-off를 측정한다.",
+                ],
+                "source_name": "Latency Notes",
+            },
+        ]
+    }
+
+    messages = render_card_news_messages(payload, max_cards=2)
+    assert len(messages) == 3, messages
+    body_a = _strip_footer(messages[1])
+    body_b = _strip_footer(messages[2])
+
+    assert not _has_long_overlap(body_a, body_b), (body_a, body_b)
+
+
+def test_header_card_uses_theme_sentence_not_machinery() -> None:
+    payload = {
+        "date": "2026-05-05",
+        "items": [
+            {
+                "article_title": "Header fixture",
+                "url": "https://example.com/header",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.85,
+                "why_now": "에이전트 운영 비용 평가가 본격화된다. 두 번째 문장은 무시된다.",
+                "claim": "운영 비용은 기억 구조 선택에 좌우된다.",
+                "summary_lines": ["요약 한 줄.", "요약 두 줄.", "요약 세 줄."],
+            }
+        ],
+    }
+
+    header = render_card_news_messages(payload, max_cards=1)[0]
+
+    assert header.startswith(f"**{CARD_NEWS_TITLE} — 2026-05-05**")
+    assert "구성:" not in header
+    assert "블로그형 기술 브리핑" not in header
+    assert "선별 1건" in header
+    assert "수집 1건" in header
+    assert "에이전트 운영 비용 평가가 본격화됩니다." in header
+    assert "두 번째 문장은 무시된다." not in header
+
+
+def test_register_normalization_converts_sentence_endings() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Register fixture",
+                "url": "https://example.com/reg",
+                "primary_topic_display": "오픈소스/코드",
+                "topic_confidence": 0.8,
+                "topic_reasons": ["oss"],
+                "claim": "비용 감소는 도구 채택을 가속한다.",
+                "mechanism": "운영 비용 구조가 도구 채택 속도를 결정한다.",
+                "evidence": "사례 연구가 발표되었다. 채택 비율도 증가했다.",
+                "summary_lines": [
+                    "이 변화는 운영 비용을 줄인다.",
+                    "운영 환경에서 오픈소스 도구 비교 결과를 다룬다.",
+                    "후속 연구가 진행 중이다.",
+                ],
+                "source_name": "OSS Weekly",
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    for normalized in ("줄입니다.", "가속합니다.", "발표되었습니다.", "결정합니다.", "다룹니다.", "증가했습니다."):
+        assert normalized in card, f"missing normalized form {normalized}: {card}"
+
+    for raw in ("줄인다.", "가속한다.", "발표되었다.", "결정한다.", "다룬다.", "증가했다."):
+        assert raw not in card, f"raw 한다체 leaked: {raw}: {card}"
+
+
+# ============================================================
+# Codex review (2026-05-05) — 8 new tests for essay contract v2
+# ============================================================
+
+
+def test_implication_paragraph_omits_when_no_action_signal() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Implication signal absent",
+                "url": "https://example.com/im",
                 "primary_topic_display": "LLM/에이전트",
                 "topic_confidence": 0.8,
-                "topic_reasons": ["agent", "memory"],
-                "summary_lines": [],
+                "claim": "에이전트는 메모리 구조에 의존한다.",
+                "mechanism": "기억 컴포넌트가 검색 우선순위를 바꾼다.",
+                "summary_lines": [
+                    "에이전트 메모리 사례 정리.",
+                    "방법을 정량적으로 분석한다.",
+                    "결과는 사례별로 다르다.",
+                ],
+                "source_name": "Memory Weekly",
             }
         ]
     }
 
-    message = render_card_news_messages(payload, max_cards=1)[1]
+    card = render_card_news_messages(payload, max_cards=1)[1]
 
-    assert "**발췌**" in message
-    assert message.count(excerpt) == 1
-    assert "**핵심 주장**" not in message
+    for line in card.split("\n"):
+        assert not line.startswith("따라서 "), f"unexpected 따라서 implication line: {line}"
+    # `구체적으로` from claim+mechanism still satisfies the connective requirement
+    assert "구체적으로" in card
+
+
+def test_next_question_only_renders_when_interrogative() -> None:
+    declarative_payload = {
+        "items": [
+            {
+                "article_title": "Declarative summary",
+                "url": "https://example.com/d",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.8,
+                "claim": "X는 Y에 영향을 준다.",
+                "mechanism": "Z가 발생한다.",
+                "summary_lines": [
+                    "리드 문장이다.",
+                    "본문 문장이다.",
+                    "이 논문은 결과를 보고한다.",
+                ],
+            }
+        ]
+    }
+    decl_card = render_card_news_messages(declarative_payload, max_cards=1)[1]
+    assert "**다음 질문**" not in decl_card
+
+    interrogative_payload = {
+        "items": [
+            {
+                "article_title": "Interrogative summary",
+                "url": "https://example.com/i",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.8,
+                "claim": "X는 Y에 영향을 준다.",
+                "mechanism": "Z가 발생한다.",
+                "summary_lines": [
+                    "리드 문장이다.",
+                    "본문 문장이다.",
+                    "이 결과가 다른 운영 환경에서도 유지되는가?",
+                ],
+            }
+        ]
+    }
+    int_card = render_card_news_messages(interrogative_payload, max_cards=1)[1]
+    assert "**다음 질문**" in int_card
+    assert "유지되는가?" in int_card
+
+    transformable_payload = {
+        "items": [
+            {
+                "article_title": "Transformable summary",
+                "url": "https://example.com/t",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.8,
+                "claim": "X는 Y에 영향을 준다.",
+                "mechanism": "Z가 발생한다.",
+                "summary_lines": [
+                    "리드 문장이다.",
+                    "본문 문장이다.",
+                    "정확도와 지연시간 trade-off를 함께 제시합니다.",
+                ],
+            }
+        ]
+    }
+    trans_card = render_card_news_messages(transformable_payload, max_cards=1)[1]
+    assert "**다음 질문**" in trans_card
+    assert "비교 가능한가?" in trans_card
+
+
+def test_connector_avoids_double_topic_marker() -> None:
+    """Connector `구체적으로는` must never collide with a mechanism subject's
+    topic marker. The topic marker can appear on the first word, the second
+    word, or deeper inside the noun phrase, so the renderer drops 는 from the
+    bridging connector unconditionally."""
+
+    case_first_word_collision = {
+        "items": [
+            {
+                "article_title": "Topic marker collision (first word)",
+                "url": "https://example.com/tm-1",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.8,
+                "claim": "그래프 색인은 정확도에 영향을 미친다.",
+                "mechanism": "엔터티는 그래프 노드에 매핑된다.",
+                "summary_lines": ["x.", "y.", "z."],
+            }
+        ]
+    }
+    case_second_word_collision = {
+        "items": [
+            {
+                "article_title": "Topic marker collision (second word)",
+                "url": "https://example.com/tm-2",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.8,
+                "claim": "검색 정확도는 모델 성능보다 색인 구조와 질의 계획에 의해 더 크게 좌우된다.",
+                "mechanism": "그래프 색인은 엔터티 간 관계를 보존해 후보 문서의 정밀도를 끌어올린다.",
+                "summary_lines": ["x.", "y.", "z."],
+            }
+        ]
+    }
+
+    for payload in (case_first_word_collision, case_second_word_collision):
+        card = render_card_news_messages(payload, max_cards=1)[1]
+
+        # No `구체적으로는` followed (directly or after a few words) by a 은/는 token.
+        assert "구체적으로는" not in card, card
+        assert not re.search(r"구체적으로는 [가-힣\s]*[가-힣]+(은|는)(\s|\.|$)", card), card
+
+    card_first = render_card_news_messages(case_first_word_collision, max_cards=1)[1]
+    assert "구체적으로 엔터티는" in card_first, card_first
+
+    card_second = render_card_news_messages(case_second_word_collision, max_cards=1)[1]
+    assert "구체적으로 그래프 색인은" in card_second, card_second
+    # The exact double-topic-marker phrase from the regression report must not appear.
+    assert "구체적으로는 그래프 색인은" not in card_second, card_second
+
+
+def test_adjective_register_normalization() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Adjective register",
+                "url": "https://example.com/adj",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.8,
+                "claim": "정확도 분산이 크다.",
+                "mechanism": "도메인별 정규화 정책의 영향이 컸다.",
+                "evidence": "샘플 수가 많다. 측정 오차도 작다.",
+                "summary_lines": [
+                    "이 결과는 좋다.",
+                    "운영 환경에서 추가 단서가 좋았다.",
+                    "후속 작업이 필요하다.",
+                ],
+                "source_name": "Adj Weekly",
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    for normalized in ("큽니다.", "컸습니다.", "많습니다.", "좋습니다.", "좋았습니다.", "작습니다."):
+        assert normalized in card, f"missing adjective form {normalized}: {card}"
+    for raw in ("크다.", "컸다.", "많다.", "좋다.", "좋았다.", "작다."):
+        assert raw not in card, f"raw adjective leaked: {raw}: {card}"
+
+
+def test_same_topic_cards_use_distinct_discourse_frames() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Frame card A",
+                "url": "https://example.com/fa",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.9,
+                "topic_reasons": ["graph", "indexing"],
+                "why_now": "OpenAI가 그래프 인덱싱 운영 평가를 공개했다.",
+                "claim": "그래프 인덱싱은 정확도에 영향을 준다.",
+                "mechanism": "인접 노드 정보가 컨텍스트 풀을 바꾼다.",
+                "evidence": "두 도메인에서 정확도가 8% 상승했다.",
+                "summary_lines": ["사례 정리.", "운영 환경 분석을 제공한다.", "추가 자료를 제시한다."],
+                "source_name": "Search Weekly",
+            },
+            {
+                "article_title": "Frame card B",
+                "url": "https://example.com/fb",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.85,
+                "topic_reasons": ["query planner", "latency"],
+                "why_now": "벤더별 쿼리 플래너 비교가 새 보고서로 정리되었다.",
+                "claim": "쿼리 플래너 설계가 지연시간을 결정한다.",
+                "mechanism": "다단계 검색이 캐시 미스를 유발한다.",
+                "evidence": "프로덕션 로그에서 지연시간이 220ms 늘어났다.",
+                "summary_lines": ["설계 비교.", "운영 환경 캐시 전략을 검증한다.", "trade-off를 측정한다."],
+                "source_name": "Latency Notes",
+            },
+        ]
+    }
+
+    messages = render_card_news_messages(payload, max_cards=2)
+    paras_a = _body_paragraphs(messages[1])
+    paras_b = _body_paragraphs(messages[2])
+
+    # First-paragraph first words should differ (frame1 leads with why_now,
+    # frame2 leads with claim text).
+    first_word_a = paras_a[0].split()[0]
+    first_word_b = paras_b[0].split()[0]
+    assert first_word_a != first_word_b, (first_word_a, first_word_b)
+
+    # Second-paragraph connectives differ:
+    # frame1's second paragraph contains "구체적으로" (claim+mechanism connector);
+    # frame2's second paragraph starts with "다만" (evidence caveat).
+    assert "구체적으로" in paras_a[1], paras_a[1]
+    assert paras_b[1].startswith("다만 "), paras_b[1]
+
+
+def test_header_synthesizes_cross_topic_theme_when_diverse() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "A",
+                "url": "https://a",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "claim": "claim A",
+                "topic_confidence": 0.8,
+            },
+            {
+                "article_title": "B",
+                "url": "https://b",
+                "primary_topic_display": "LLM/에이전트",
+                "claim": "claim B",
+                "topic_confidence": 0.8,
+            },
+        ]
+    }
+    header = render_card_news_messages(payload, max_cards=2)[0]
+
+    assert "오늘의 축" in header
+    assert "검색/RAG/지식그래프" in header
+    assert "LLM/에이전트" in header
+
+
+def test_lean_disclaimer_variant_for_excerpt_present() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Lean fixture",
+                "public_excerpt": "공개 발췌 단락이다.",
+                "url": "https://example.com/l",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.65,
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert LEAN_DISCLAIMER_WITH_EXCERPT in card
+    assert LEAN_DISCLAIMER_WITHOUT_EXCERPT not in card
+    # Old disclaimer copy must not leak
+    assert "본문 근거가 아직 얇아 원문 확인이 필요합니다." not in card
+
+
+def test_evidence_blockquote_drops_classification_reasons_line() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Blockquote test",
+                "url": "https://example.com/bq",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.9,
+                "topic_reasons": ["rag", "graph"],
+                "claim": "claim text.",
+                "mechanism": "mechanism text.",
+                "evidence": "evidence sentence.",
+                "summary_lines": ["a.", "b.", "c."],
+                "source_name": "Newsletter",
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert "분류 근거" not in card
+    assert "> Newsletter: evidence sentence." in card
+    # Bullet markers must not appear in the blockquote
+    assert "> -" not in card
+    # Reasons surface in the footer instead
+    assert "단서 rag · graph" in card
 
 
 def test_card_news_renderer_deduplicates_titles_and_prioritizes_topic_spread() -> None:
@@ -131,9 +625,10 @@ def test_card_news_renderer_deduplicates_titles_and_prioritizes_topic_spread() -
     messages = render_card_news_messages(payload, max_cards=3)
     joined = "\n".join(messages)
 
-    assert joined.count("**제목**") == 2
-    assert "Same" in joined
-    assert "Vision" in joined
+    assert joined.count(CARD_SEPARATOR) == 2
+    assert "**Same**" in joined
+    assert "**Vision**" in joined
+    assert "**제목**" not in joined
 
 
 def test_card_news_bot_message_matcher_targets_only_card_news_bot_messages() -> None:

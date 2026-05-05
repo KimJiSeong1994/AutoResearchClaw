@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from collections import OrderedDict
 from datetime import date
@@ -28,6 +29,80 @@ CARD_NEWS_THREAD_NAME_MARKERS = (
     "블로그 포스팅 워크플로우 카드뉴스",
 )
 
+CARD_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━"
+GENERIC_TOPIC = "기타 테크 리포트"
+LEAN_DISCLAIMER_WITH_EXCERPT = "공개 본문만으로는 추가 근거를 확인하지 못했습니다."
+LEAN_DISCLAIMER_WITHOUT_EXCERPT = "현재 카드에는 원문 발췌가 포함되지 않았습니다."
+CONNECTIVES = ("따라서", "다만", "구체적으로", "한편")
+TOPIC_PRIORITY: dict[str, int] = {
+    "검색/RAG/지식그래프": 10,
+    "LLM/에이전트": 20,
+    "멀티모달/비전": 30,
+    "인프라/배포": 40,
+    "오픈소스/코드": 50,
+    "AI 안전/평가": 60,
+    "산업/제품 동향": 70,
+    "논문/리서치": 80,
+    GENERIC_TOPIC: 900,
+}
+_REGISTER_PAIRS = (
+    # Order matters: longer / more specific endings first so they win the lookahead match.
+    ("되었다", "되었습니다"),
+    ("하였다", "하였습니다"),
+    ("했다", "했습니다"),
+    ("였다", "였습니다"),
+    ("많았다", "많았습니다"),
+    ("좋았다", "좋았습니다"),
+    ("작았다", "작았습니다"),
+    ("높았다", "높았습니다"),
+    ("낮았다", "낮았습니다"),
+    ("컸다", "컸습니다"),
+    ("된다", "됩니다"),
+    ("한다", "합니다"),
+    ("하다", "합니다"),
+    ("는다", "습니다"),
+    ("이다", "입니다"),
+    ("있다", "있습니다"),
+    ("없다", "없습니다"),
+    ("많다", "많습니다"),
+    ("좋다", "좋습니다"),
+    ("작다", "작습니다"),
+    ("높다", "높습니다"),
+    ("낮다", "낮습니다"),
+    ("크다", "큽니다"),
+)
+_ACTION_SIGNAL_TERMS = (
+    "원문",
+    "확인",
+    "검증",
+    "검토",
+    "도입",
+    "운영",
+    "평가",
+    "재현",
+    "한계",
+    "주의",
+    "리스크",
+    "트레이드오프",
+    "trade-off",
+    "trade off",
+)
+_INTERROGATIVE_SUFFIXES = (
+    "인가",
+    "는가",
+    "할 수 있는가",
+    "해야 하는가",
+    "가능한가",
+)
+_QUESTION_TRANSFORMS = (
+    (re.compile(r"^(.+?)을 함께 제시합니다\.?$"), r"\1이 같은 조건에서 비교 가능한가?"),
+    (re.compile(r"^(.+?)를 함께 제시합니다\.?$"), r"\1가 같은 조건에서 비교 가능한가?"),
+    (re.compile(r"^(.+?)을 함께 측정합니다\.?$"), r"\1이 운영 환경에서도 유지되는가?"),
+    (re.compile(r"^(.+?)를 함께 측정합니다\.?$"), r"\1가 운영 환경에서도 유지되는가?"),
+    (re.compile(r"^(.+?)을 측정합니다\.?$"), r"\1이 운영 환경에서도 유지되는가?"),
+    (re.compile(r"^(.+?)를 측정합니다\.?$"), r"\1가 운영 환경에서도 유지되는가?"),
+)
+
 
 def _clean(value: object, *, limit: int | None = None) -> str:
     text = " ".join(str(value or "").split()).strip()
@@ -42,7 +117,7 @@ def _strip_emoji(value: str) -> str:
         for char in value
         if not (
             "\U0001F000" <= char <= "\U0001FAFF"
-            or "\u2600" <= char <= "\u27BF"
+            or "☀" <= char <= "➿"
         )
     ).strip()
 
@@ -109,52 +184,97 @@ def _raw_title(item: dict[str, Any]) -> str:
     return _clean_title(item.get("article_title") or item.get("title") or "Untitled")
 
 
-def _confidence_text(value: object) -> str:
-    if isinstance(value, (int, float)):
-        if value < 0.5:
-            return f"{float(value):.2f} · 잠정 분류"
-        return f"{float(value):.2f}"
-    return "잠정 분류"
+_HANGUL_BASE = 0xAC00
+_HANGUL_LAST = 0xD7A3
+_JONGSEONG_NIEUN = 4  # ㄴ
+_JONGSEONG_SSANG_SIOT = 20  # ㅆ (past tense marker like 갔/했/었)
+_JONGSEONG_BIEUP = 17  # ㅂ
+_DA_PATTERN = re.compile(r"([가-힣])다(?=[.!?]|$)")
 
 
-def _topic_lens(topic: str) -> str:
-    mapping = {
-        "검색/RAG/지식그래프": "검색 정확도보다 지식 구조, 색인 품질, 평가 체계를 먼저 정리해야 하는 문제",
-        "LLM/에이전트": "모델 성능보다 기억 구조, 도구 사용, 운영 안정성이 결과를 좌우하는 문제",
-        "멀티모달/비전": "입력 양식이 늘어날수록 데이터 품질, 평가 기준, 적용 환경이 함께 바뀌는 문제",
-        "인프라/배포": "연구 성능을 실제 서비스 비용, 지연시간, 운영 안정성으로 번역하는 문제",
-        "오픈소스/코드": "기술 확산 속도와 재현 가능성이 커지는 대신 유지보수 책임이 분산되는 문제",
-        "AI 안전/평가": "성능 경쟁을 넘어 실패 양상, 검증 프로토콜, 책임 경계를 제도화하는 문제",
-        "산업/제품 동향": "기술 선택이 제품 전략, 조직 인센티브, 시장 포지셔닝으로 이어지는 문제",
-        "논문/리서치": "새 방법의 기여가 평가 설정과 재현 조건에 얼마나 의존하는지 따져야 하는 문제",
-    }
-    return mapping.get(topic, "기술 변화가 연구·제품·현장 적용 조건을 어떻게 바꾸는지 확인해야 하는 문제")
+def _convert_da_ending(match: re.Match[str]) -> str:
+    char = match.group(1)
+    code = ord(char) - _HANGUL_BASE
+    final = code % 28
+    if final == _JONGSEONG_NIEUN:
+        # (vowel-stem)ㄴ다 → (stem with ㅂ final)니다 (e.g. 인 → 입, 룬 → 룹)
+        swapped = chr(_HANGUL_BASE + code - _JONGSEONG_NIEUN + _JONGSEONG_BIEUP)
+        return f"{swapped}니다"
+    if final == _JONGSEONG_SSANG_SIOT:
+        # past tense (...)ㅆ다 → (...)ㅆ습니다 (e.g. 났 → 났습니다, 갔 → 갔습니다)
+        return f"{char}습니다"
+    return match.group(0)
 
 
-def _next_question(topic: str) -> str:
-    mapping = {
-        "검색/RAG/지식그래프": "이 접근이 실제 질의 분포, 최신성 요구, 그래프 유지 비용까지 견딜 수 있는가.",
-        "LLM/에이전트": "기억·도구·계획 구조가 장기 실행에서 오류 누적과 비용 증가를 줄이는가.",
-        "멀티모달/비전": "벤치마크 개선이 실제 센서·문서·사용자 입력의 노이즈에서도 유지되는가.",
-        "인프라/배포": "성능 이득이 배포 비용, 장애 대응, 관측 가능성 비용을 상쇄하는가.",
-        "오픈소스/코드": "재사용 속도만큼 보안, 라이선스, 장기 유지보수 책임도 명확한가.",
-        "AI 안전/평가": "평가 기준이 실제 실패 비용과 책임 소재를 충분히 반영하는가.",
-        "산업/제품 동향": "제품 발표가 실제 사용량, 매출, 조직 생산성 변화로 이어지는가.",
-        "논문/리서치": "주장된 개선이 다른 데이터셋, 구현, 평가 조건에서도 재현되는가.",
-    }
-    return mapping.get(topic, "원문에서 방법, 평가 조건, 한계가 어떤 근거로 제시되는지 확인해야 합니다.")
+def _normalize_register(text: str) -> str:
+    if not text:
+        return text
+    for src, dst in _REGISTER_PAIRS:
+        text = re.sub(rf"{src}(?=[.!?]|$)", dst, text)
+    text = _DA_PATTERN.sub(_convert_da_ending, text)
+    return text
 
 
-def _dedup_push(sections: list[tuple[str, str]], seen: set[str], label: str, body: str) -> None:
-    text = _clean_multiline(body)
-    if not text or text in seen:
-        return
-    sections.append((label, text))
-    seen.add(text)
+def _confidence_bucket(value: object) -> str:
+    try:
+        v = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "잠정"
+    if v >= 0.7:
+        return "높음"
+    if v >= 0.5:
+        return "보통"
+    return "잠정"
+
+
+def _format_footer(
+    source: str,
+    url: str,
+    topic: str,
+    bucket: str,
+    *,
+    reasons: list[str] | None = None,
+) -> str:
+    parts = [f"— {source}", f"<{url}>"]
+    if topic and topic != GENERIC_TOPIC:
+        parts.append(f"`{topic}`")
+    parts.append(f"`{bucket}`")
+    base = " · ".join(parts)
+    if reasons:
+        cleaned = [r for r in (_clean(item, limit=40) for item in reasons[:2]) if r]
+        if cleaned:
+            label = f"단서 {cleaned[0]}"
+            tail = " · ".join([label, *cleaned[1:]])
+            base = f"{base} · {tail}"
+    return base
+
+
+def _has_substring_overlap(prev: str, new: str, *, min_len: int = 30) -> bool:
+    if len(new) < min_len or len(prev) < min_len:
+        return False
+    for i in range(len(new) - min_len + 1):
+        if new[i:i + min_len] in prev:
+            return True
+    return False
+
+
+def _dedup_paragraphs(paragraphs: list[str]) -> list[str]:
+    kept: list[str] = []
+    for para in paragraphs:
+        if any(_has_substring_overlap(prev, para) for prev in kept):
+            continue
+        kept.append(para)
+    return kept
 
 
 def _richness(item: dict[str, Any], *, raw_title: str) -> str:
-    if _summary_lines(item) or len(_clean(item.get("article_description"))) >= 120 or item.get("why_now") or item.get("evidence"):
+    if (
+        _clean(item.get("why_now"))
+        or _clean(item.get("claim") or item.get("thesis"))
+        or _clean(item.get("mechanism") or item.get("claim_mechanism"))
+        or _clean(item.get("evidence"))
+        or _summary_lines(item)
+    ):
         return "rich"
     excerpt = _clean(item.get("public_excerpt") or item.get("article_description"))
     if excerpt and _clean_title(excerpt).lower() != raw_title.lower():
@@ -162,32 +282,14 @@ def _richness(item: dict[str, Any], *, raw_title: str) -> str:
     return "skeletal"
 
 
-def _render_sections(sections: list[tuple[str, str]]) -> list[str]:
-    rendered: list[str] = []
-    for label, body in sections:
-        rendered.extend([f"**{label}**", body, ""])
-    if rendered and rendered[-1] == "":
-        rendered.pop()
-    return rendered
-
-
 def _topic_groups(items: list[dict[str, Any]]) -> OrderedDict[str, list[dict[str, Any]]]:
     groups: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
     for item in items:
-        topic = _clean(item.get("primary_topic_display") or "기타 테크 리포트")
+        topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
         groups.setdefault(topic, []).append(item)
-    priority = {
-        "검색/RAG/지식그래프": 10,
-        "LLM/에이전트": 20,
-        "멀티모달/비전": 30,
-        "인프라/배포": 40,
-        "오픈소스/코드": 50,
-        "AI 안전/평가": 60,
-        "산업/제품 동향": 70,
-        "논문/리서치": 80,
-        "기타 테크 리포트": 900,
-    }
-    return OrderedDict(sorted(groups.items(), key=lambda pair: (priority.get(pair[0], 800), -len(pair[1]), pair[0])))
+    return OrderedDict(
+        sorted(groups.items(), key=lambda pair: (TOPIC_PRIORITY.get(pair[0], 800), -len(pair[1]), pair[0]))
+    )
 
 
 def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[str, Any]]:
@@ -219,105 +321,336 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
     return selected
 
 
+def _first_sentence(text: str) -> str:
+    if not text:
+        return ""
+    parts = re.split(r"(?<=[.!?。])\s+", text.strip(), maxsplit=1)
+    return parts[0].strip() if parts else text.strip()
+
+
+def _distinct_topics_in_order(cards: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    for item in cards:
+        topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+        if topic and topic not in seen:
+            seen.append(topic)
+    return sorted(seen, key=lambda t: TOPIC_PRIORITY.get(t, 800))
+
+
+def _theme_sentence(cards: list[dict[str, Any]]) -> str:
+    distinct = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    if len(distinct) >= 2:
+        return f"{distinct[0]}와 {distinct[1]}가 오늘의 축입니다."
+    for item in cards:
+        why_now = _clean(item.get("why_now"), limit=240)
+        if why_now:
+            return _normalize_register(_first_sentence(why_now))
+    for item in cards:
+        summary = _summary_lines(item)
+        if summary:
+            return _normalize_register(summary[0])
+    return "오늘은 본문 근거가 얇은 읽기 후보 중심입니다."
+
+
+def _is_interrogative(text: str) -> bool:
+    if not text:
+        return False
+    if text.endswith("?"):
+        return True
+    stripped = text.rstrip(".!?。")
+    return any(stripped.endswith(suffix) for suffix in _INTERROGATIVE_SUFFIXES)
+
+
+def _question_or_transform(seed: str) -> str | None:
+    if not seed:
+        return None
+    if _is_interrogative(seed):
+        if seed.endswith("?"):
+            return seed
+        return seed.rstrip(".!?。") + "?"
+    for pattern, replacement in _QUESTION_TRANSFORMS:
+        if pattern.match(seed):
+            return pattern.sub(replacement, seed)
+    return None
+
+
+def _has_action_signal(text: str) -> bool:
+    return any(term in text for term in _ACTION_SIGNAL_TERMS)
+
+
+def _maybe_implication(seed: str, *, has_claim: bool, has_evidence: bool) -> str | None:
+    if not seed or not _has_action_signal(seed):
+        return None
+    if has_evidence and not has_claim:
+        return f"다만 {seed}"
+    return f"따라서 {seed}"
+
+
+def _format_claim_mechanism(claim: str, mechanism: str) -> str:
+    """Combine claim and mechanism in a single paragraph (frame-1 style).
+
+    Always bridges with the bare adverb ``구체적으로`` (no 는). Preserving the
+    topic marker on the connector creates a ``구체적으로는 X은/는`` collision
+    whenever the mechanism's subject also carries 은/는 — which can land on any
+    of the first few tokens, not just the first word. Dropping 는 here reads
+    equally well in Korean prose and eliminates the entire collision class.
+    """
+    if claim and mechanism:
+        return f"{claim} 구체적으로 {mechanism}"
+    if claim:
+        return claim
+    if mechanism:
+        return f"구체적으로 {mechanism}"
+    return ""
+
+
+def _build_frame1_paragraphs(
+    *,
+    why_now: str,
+    summary: list[str],
+    claim: str,
+    mechanism: str,
+    evidence: str,
+    source: str,
+) -> list[str]:
+    paragraphs: list[str] = []
+
+    if why_now:
+        paragraphs.append(why_now)
+    elif summary:
+        paragraphs.append(_normalize_register(summary[0]))
+
+    combined = _format_claim_mechanism(claim, mechanism)
+    if combined:
+        paragraphs.append(combined)
+
+    if evidence:
+        paragraphs.append(f"> {source}: {evidence}")
+
+    if len(summary) >= 2:
+        seed = _normalize_register(summary[1])
+        implication = _maybe_implication(seed, has_claim=bool(claim), has_evidence=bool(evidence))
+        if implication:
+            paragraphs.append(implication)
+
+    return paragraphs
+
+
+def _build_frame2_paragraphs(
+    *,
+    why_now: str,
+    summary: list[str],
+    claim: str,
+    mechanism: str,
+    evidence: str,
+) -> list[str]:
+    paragraphs: list[str] = []
+
+    if claim:
+        paragraphs.append(claim)
+    elif why_now:
+        paragraphs.append(why_now)
+    elif summary:
+        paragraphs.append(_normalize_register(summary[0]))
+
+    if evidence:
+        paragraphs.append(f"다만 {evidence}")
+
+    if mechanism:
+        paragraphs.append(f"구체적으로 {mechanism}")
+
+    seeds: list[str] = []
+    if summary:
+        seeds.append(_normalize_register(summary[-1]))
+    if why_now and why_now != claim:
+        seeds.append(why_now)
+    if summary and len(summary) >= 1:
+        seeds.append(_normalize_register(summary[0]))
+    for candidate in seeds:
+        qtext = _question_or_transform(candidate)
+        if qtext and not any(_has_substring_overlap(p, qtext) for p in paragraphs):
+            paragraphs.append(qtext)
+            break
+
+    return paragraphs
+
+
+def _render_rich_card(
+    item: dict[str, Any],
+    *,
+    title: str,
+    topic: str,
+    source: str,
+    url: str,
+    bucket: str,
+    reasons: list[str] | None = None,
+    frame: int = 1,
+) -> str:
+    summary = _summary_lines(item)
+    why_now = _normalize_register(_clean(item.get("why_now"), limit=240))
+    claim = _normalize_register(_clean(item.get("claim") or item.get("thesis"), limit=220))
+    mechanism = _normalize_register(_clean(item.get("mechanism") or item.get("claim_mechanism"), limit=220))
+    evidence = _normalize_register(_clean(item.get("evidence"), limit=220))
+
+    if frame == 2:
+        paragraphs = _build_frame2_paragraphs(
+            why_now=why_now,
+            summary=summary,
+            claim=claim,
+            mechanism=mechanism,
+            evidence=evidence,
+        )
+        emit_next_question_label = False
+    else:
+        paragraphs = _build_frame1_paragraphs(
+            why_now=why_now,
+            summary=summary,
+            claim=claim,
+            mechanism=mechanism,
+            evidence=evidence,
+            source=source,
+        )
+        emit_next_question_label = True
+
+    paragraphs = _dedup_paragraphs(paragraphs)
+
+    next_question_text: str | None = None
+    if emit_next_question_label and summary:
+        seed = _normalize_register(summary[-1])
+        qtext = _question_or_transform(seed)
+        if qtext and not any(_has_substring_overlap(p, qtext) for p in paragraphs):
+            next_question_text = qtext
+
+    body_parts: list[str] = [
+        CARD_SEPARATOR,
+        f"**{title}**",
+        "",
+    ]
+    for para in paragraphs:
+        body_parts.append(para)
+        body_parts.append("")
+    if next_question_text:
+        body_parts.append("**다음 질문**")
+        body_parts.append(next_question_text)
+        body_parts.append("")
+    body_parts.append(_format_footer(source, url, topic, bucket, reasons=reasons))
+    return "\n".join(body_parts)
+
+
+def _render_lean_card(
+    item: dict[str, Any],
+    *,
+    title: str,
+    topic: str,
+    source: str,
+    url: str,
+    bucket: str,
+    reasons: list[str] | None = None,
+) -> str:
+    excerpt = _normalize_register(
+        _clean_title(item.get("public_excerpt") or item.get("article_description"), limit=320)
+    )
+    disclaimer = LEAN_DISCLAIMER_WITH_EXCERPT if excerpt else LEAN_DISCLAIMER_WITHOUT_EXCERPT
+    body_parts = [
+        CARD_SEPARATOR,
+        f"**{title}**",
+        "",
+    ]
+    if excerpt:
+        body_parts.extend([excerpt, ""])
+    body_parts.extend(
+        [
+            disclaimer,
+            "",
+            _format_footer(source, url, topic, bucket, reasons=reasons),
+        ]
+    )
+    return "\n".join(body_parts)
+
+
+def _render_skeletal_card(
+    *,
+    title: str,
+    topic: str,
+    url: str,
+    bucket: str,
+) -> str:
+    follow_up_topic = topic if topic and topic != GENERIC_TOPIC else "기술"
+    body_parts = [
+        CARD_SEPARATOR,
+        f"**{title}**",
+        f"{follow_up_topic} 영역의 후속 읽기 후보입니다.",
+        f"<{url}> · `{bucket}`",
+    ]
+    return "\n".join(body_parts)
+
+
 def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) -> list[str]:
     items = [item for item in payload.get("items", []) if isinstance(item, dict)]
     cards = _select_cards(items, max_cards=max_cards)
     run_date = _clean(payload.get("date") or date.today().isoformat())
-    messages = [
-        "\n".join(
-            [
-                f"**{CARD_NEWS_TITLE} — 블로그형 기술 브리핑**",
-                f"발행일: `{run_date}`",
-                "연구자가 기술 변화의 사실, 해석, 현장 함의를 함께 읽을 수 있도록 카드별 근거 두께에 맞춰 재구성했습니다.",
-                f"선별 카드: {len(cards)}개 / 수집 항목: {len(items)}개",
-                "구성: 상세 근거가 있는 카드는 논증형으로, 제목 중심 카드는 읽기 후보와 확인 질문 중심으로 축약합니다.",
-            ]
-        )
-    ]
+
+    header = "\n".join(
+        [
+            f"**{CARD_NEWS_TITLE} — {run_date}**",
+            "",
+            _theme_sentence(cards),
+            "",
+            f"선별 {len(cards)}건 / 수집 {len(items)}건",
+        ]
+    )
+    messages = [header]
+    topic_index: dict[str, int] = {}
+
     for item in cards:
         raw_title = _raw_title(item)
         title = _title(item)
-        topic = _clean(item.get("primary_topic_display") or "기타 테크 리포트", limit=60)
-        confidence_text = _confidence_text(item.get("topic_confidence"))
-        reasons = item.get("topic_reasons") or []
-        if isinstance(reasons, list):
-            reason_text = _clean(", ".join(str(reason) for reason in reasons[:4]), limit=120)
-        else:
-            reason_text = ""
-        summary = _summary_lines(item)
-        url = _clean(item.get("url"))
+        topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60)
         source = _source_name(item)
-        richness = _richness(item, raw_title=raw_title)
-        excerpt = _clean_title(item.get("public_excerpt") or item.get("article_description"), limit=190)
-        if excerpt.lower() == raw_title.lower():
-            excerpt = ""
-        lens = _topic_lens(topic)
-        next_question = _next_question(topic)
-        explicit_why_now = _clean(item.get("why_now"), limit=180)
-        claim = _clean(item.get("claim") or item.get("thesis"), limit=180)
-        mechanism = _clean(item.get("mechanism") or item.get("claim_mechanism"), limit=180)
-        evidence = _clean(
-            item.get("evidence"),
-            limit=160,
-        )
-        sections: list[tuple[str, str]] = []
-        seen: set[str] = {raw_title} if raw_title != title else set()
-        _dedup_push(sections, seen, "제목", title)
-        _dedup_push(sections, seen, "토픽과 근거 수준", f"{topic} · {confidence_text}")
-
-        if summary:
-            summary_body = "\n".join(f"{idx}. {line}" for idx, line in enumerate(summary, start=1))
-            _dedup_push(sections, seen, "3줄 요약", summary_body)
-        elif excerpt:
-            _dedup_push(sections, seen, "발췌", excerpt)
-        else:
-            _dedup_push(
-                sections,
-                seen,
-                "읽는 법",
-                f"현재 수집본에는 상세 본문 요약이 없어, 이 카드는 `{title}`를 {topic} 영역의 후속 읽기 후보로 표시합니다.",
+        url = _clean(item.get("url"))
+        bucket = _confidence_bucket(item.get("topic_confidence"))
+        raw_reasons = item.get("topic_reasons") or []
+        reasons: list[str] = []
+        if isinstance(raw_reasons, list):
+            for raw in raw_reasons:
+                cleaned = _clean(raw, limit=40)
+                if cleaned and cleaned not in reasons:
+                    reasons.append(cleaned)
+                if len(reasons) >= 2:
+                    break
+        kind = _richness(item, raw_title=raw_title)
+        if kind == "rich":
+            idx = topic_index.get(topic, 0)
+            topic_index[topic] = idx + 1
+            frame = 2 if idx % 2 == 1 else 1
+            messages.append(
+                _render_rich_card(
+                    item,
+                    title=title,
+                    topic=topic,
+                    source=source,
+                    url=url,
+                    bucket=bucket,
+                    reasons=reasons,
+                    frame=frame,
+                )
             )
-
-        if explicit_why_now:
-            _dedup_push(sections, seen, "왜 지금인가", explicit_why_now)
-        elif richness == "rich" and summary:
-            _dedup_push(sections, seen, "왜 지금인가", f"{summary[0]} 이 변화는 {lens}와 연결됩니다.")
-
-        claim_lines: list[str] = []
-        if claim:
-            claim_lines.append(f"- 주장: {claim}")
-        if mechanism:
-            claim_lines.append(f"- 메커니즘: {mechanism}")
-        if claim_lines:
-            _dedup_push(sections, seen, "핵심 주장", "\n".join(claim_lines))
-
-        evidence_lines = [f"- 출처: {source}"]
-        if reason_text:
-            evidence_lines.append(f"- 분류 근거: {reason_text}")
-        if evidence and evidence.lower() != title.lower() and evidence not in seen:
-            evidence_lines.append(f"- 확인된 단서: {evidence}")
-        else:
-            evidence_lines.append("- 근거 한계: 현재 카드에는 원문 제목·링크·토픽 분류까지만 반영되어 세부 방법과 수치는 원문 확인이 필요합니다.")
-        _dedup_push(sections, seen, "근거", "\n".join(evidence_lines))
-
-        if topic != "기타 테크 리포트":
-            if richness == "rich":
-                interpretation = f"{topic} 관점에서 이 항목은 {lens}입니다. 따라서 원문을 읽을 때 성능 수치뿐 아니라 데이터 조건, 평가 방식, 운영 비용을 함께 확인해야 합니다."
-            else:
-                interpretation = f"{topic} 분류의 읽기 후보입니다. 아직 본문 근거가 얇으므로 {lens}인지 원문에서 먼저 검증해야 합니다."
-            _dedup_push(sections, seen, "산업/현장 해석", interpretation)
-
-        _dedup_push(sections, seen, "다음 질문", next_question)
-        _dedup_push(sections, seen, "출처", f"<{url}>")
-
-        messages.append(
-            "\n".join(
-                [
-                    "━━━━━━━━━━━━━━━━━━━━",
-                    *_render_sections(sections),
-                ]
+        elif kind == "lean":
+            messages.append(
+                _render_lean_card(
+                    item,
+                    title=title,
+                    topic=topic,
+                    source=source,
+                    url=url,
+                    bucket=bucket,
+                    reasons=reasons,
+                )
             )
-        )
+        else:
+            messages.append(
+                _render_skeletal_card(title=title, topic=topic, url=url, bucket=bucket)
+            )
     return messages
 
 
