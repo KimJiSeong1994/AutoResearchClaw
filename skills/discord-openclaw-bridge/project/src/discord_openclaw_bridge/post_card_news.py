@@ -145,6 +145,10 @@ _META_DESC_PATTERN = re.compile(
     flags=re.IGNORECASE | re.DOTALL,
 )
 _TITLE_PATTERN = re.compile(r"<title\b[^>]*>(.*?)</title>", flags=re.IGNORECASE | re.DOTALL)
+_ARXIV_ABSTRACT_PATTERN = re.compile(
+    r"<blockquote\b[^>]*class\s*=\s*['\"][^'\"]*\babstract\b[^'\"]*['\"][^>]*>(.*?)</blockquote>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _SKIP_FETCH_URL_PATTERNS = (
     "linkedin.com/comm/",
@@ -152,6 +156,20 @@ _SKIP_FETCH_URL_PATTERNS = (
     "linkedin.com/mynetwork",
     "linkedin.com/messaging",
     "cardreceipt",
+    "unsubscribe",
+    "preferences",
+)
+_NON_ARTICLE_TERMS = (
+    "receipt",
+    "invoice",
+    "order",
+    "pedido",
+    "pix",
+    "analytics",
+    "access request",
+    "액세스 권한",
+    "제안을 보냈습니다",
+    "답장을 기다리고",
     "unsubscribe",
     "preferences",
 )
@@ -315,6 +333,13 @@ def _extract_public_metadata(markup: str) -> dict[str, str]:
     title_match = _TITLE_PATTERN.search(markup or "")
     if title_match:
         title = _strip_html(title_match.group(1))
+    if (not description or description.lower().startswith("abstract page for arxiv paper")):
+        abstract_match = _ARXIV_ABSTRACT_PATTERN.search(markup or "")
+        if abstract_match:
+            abstract = _strip_html(abstract_match.group(1))
+            abstract = re.sub(r"^Abstract:\s*", "", abstract, flags=re.IGNORECASE).strip()
+            if len(abstract) >= 40:
+                description = abstract
     return {"description": description, "title": title}
 
 
@@ -475,19 +500,44 @@ def _substantive_excerpt(item: dict[str, Any], *, raw_title: str) -> str:
 
 
 def _url_quality(url: str) -> int:
-    lower = url.lower().replace("&amp;", "&")
+    lower = _sanitize_public_url(url).lower().replace("&amp;", "&")
     score = 0
     if any(host in lower for host in ("arxiv.org", "openreview.net", "doi.org", "microsoft.com/en-us/research", "deepmind.google", "openai.com", "anthropic.com", "ai.googleblog.com")):
         score += 8
-    if re.search(r"medium\.com/[^?]+/[^?]+", lower) and not re.search(r"medium\.com/(?:@[^/?]+|tag|topic|blog/newsletters)(?:[/?]|$)", lower):
+    if re.search(r"medium\.com/(?:@[^/?]+/[^?]+|[^@?][^?]+/[^?]+)", lower) and not re.search(r"medium\.com/(?:tag|topic|blog/newsletters)(?:[/?]|$)", lower):
         score += 6
+    elif re.search(r"medium\.com/(?:@[^/?]+|[^/?]+)(?:[?#]|$)", lower):
+        score -= 6
     if any(token in lower for token in ("/publication/", "/research/", "/blog/", "/paper", "/pulse/")):
         score += 3
     if any(token in lower for token in ("/feed", "/messaging", "/mynetwork", "cardreceipt", "sendgrid.net", "unsubscribe", "preferences")):
         score -= 12
+    if re.search(r"https?://[^/]+/?(?:[?#].*)?$", lower):
+        score -= 10
     if any(token in lower for token in ("midtoken", "midsig", "trktrk", "trkemail", "lipi=", "utm_", "source=email")):
         score -= 2
     return score
+
+
+def _is_non_article_item(item: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        [
+            _clean(item.get("article_title") or item.get("title")),
+            _clean(item.get("source_name") or item.get("sender") or item.get("newsletter_name")),
+            _sanitize_public_url(_clean(item.get("url"))),
+        ]
+    ).lower()
+    return any(term.lower() in haystack for term in _NON_ARTICLE_TERMS)
+
+
+def _has_card_evidence(item: dict[str, Any]) -> bool:
+    raw_title = _raw_title(item)
+    if _summary_lines(item) or _substantive_excerpt(item, raw_title=raw_title):
+        return True
+    return any(
+        _clean(item.get(field))
+        for field in ("hook", "why_now", "core_change", "claim", "thesis", "why_matters", "evidence")
+    )
 
 
 def _item_quality_score(item: dict[str, Any]) -> int:
@@ -505,7 +555,20 @@ def _item_quality_score(item: dict[str, Any]) -> int:
         score -= 4
     if _clean(item.get("primary_topic_display") or GENERIC_TOPIC) == GENERIC_TOPIC:
         score -= 2
+    if _is_non_article_item(item):
+        score -= 30
     return score
+
+
+def _publishable_card(item: dict[str, Any]) -> bool:
+    score = _item_quality_score(item)
+    if _is_non_article_item(item):
+        return False
+    if _has_card_evidence(item):
+        return score >= -2
+    # Allow only highly trusted research/publication URLs through without a
+    # public excerpt; otherwise the card becomes a title-only shell.
+    return score >= 9
 
 
 def _sort_by_quality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -532,7 +595,7 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
             key = title_key or url
             if not url or not key or key in seen_titles:
                 continue
-            if _item_quality_score(item) < -2:
+            if not _publishable_card(item):
                 continue
             seen_titles.add(key)
             selected.append(item)
@@ -546,10 +609,27 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
             key = title_key or url
             if not url or not key or key in seen_titles:
                 continue
-            if _item_quality_score(item) < -2:
+            if not _publishable_card(item):
                 continue
             seen_titles.add(key)
             selected.append(item)
+            if len(selected) >= max_cards:
+                break
+    if not selected:
+        # Preserve a minimal fallback for synthetic/unit-test payloads and true
+        # edge cases where the archive has no publishable evidence at all.  In
+        # real mixed archives, the stricter path above prevents title-only
+        # shells from crowding out article-backed cards.
+        for _topic, topic_items in _topic_groups(items).items():
+            for item in _sort_by_quality(topic_items):
+                title_key = _canonical_title_key(item)
+                url = _clean(item.get("url"))
+                key = title_key or url
+                if not url or not key or key in seen_titles:
+                    continue
+                seen_titles.add(key)
+                selected.append(item)
+                break
             if len(selected) >= max_cards:
                 break
     return selected
