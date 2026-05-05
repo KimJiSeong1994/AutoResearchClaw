@@ -18,6 +18,8 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _create_forum_card_news_thread,
     _is_card_news_bot_message,
     _purge_previous_card_news_messages,
+    _sanitize_public_url,
+    enrich_public_metadata,
     render_card_news_messages,
 )
 
@@ -801,3 +803,78 @@ def test_footer_strips_sensitive_url_query_params() -> None:
     assert "token=secret" not in card
     assert "utm_source" not in card
     assert "https://example.com/post?id=7" in card
+
+
+def test_sanitizer_strips_newsletter_tracking_query_params() -> None:
+    url = (
+        "https://www.linkedin.com/comm/pulse/post"
+        "?midToken=secret&midSig=sig&trkEmail=mail&lipi=abc&id=7&utm_medium=email"
+    )
+
+    assert _sanitize_public_url(url) == "https://www.linkedin.com/comm/pulse/post?id=7"
+
+
+def test_selection_prefers_substantive_article_over_tracking_profile_link() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Same Article",
+                "url": "https://medium.com/@author?source=email-tracking",
+                "primary_topic_display": "LLM/에이전트",
+                "public_excerpt": "Same Article",
+            },
+            {
+                "article_title": "Same Article",
+                "url": "https://medium.com/ai-advances/same-article-123",
+                "primary_topic_display": "LLM/에이전트",
+                "public_excerpt": "이 글은 에이전트 메모리 구조가 검색 방식과 장기 실행 품질에 미치는 차이를 비교합니다.",
+            },
+        ]
+    }
+
+    messages = render_card_news_messages(payload, max_cards=1)
+    joined = "\n".join(messages)
+
+    assert "https://medium.com/ai-advances/same-article-123" in joined
+    assert "source=email-tracking" not in joined
+    assert "에이전트 메모리 구조" in joined
+
+
+def test_public_metadata_enrichment_adds_article_description_before_render() -> None:
+    import httpx
+
+    payload = {
+        "items": [
+            {
+                "article_title": "Thin Paper Card",
+                "url": "https://example.com/paper?utm_source=newsletter&token=secret",
+                "primary_topic_display": "논문/리서치",
+                "public_excerpt": "Thin Paper Card",
+            }
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "token=secret" not in str(request.url)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=(
+                "<html><head>"
+                "<meta name=\"description\" content=\"이 논문은 검색 증강 생성 시스템에서 그래프 구조가 근거 선택과 평가 안정성에 미치는 영향을 실험으로 비교합니다.\">"
+                "<title>Thin Paper Card</title>"
+                "</head></html>"
+            ),
+            request=request,
+        )
+
+    async def scenario() -> dict[str, object]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await enrich_public_metadata(payload, client, max_items=1)
+
+    enriched = asyncio.run(scenario())
+    joined = "\n".join(render_card_news_messages(enriched, max_cards=1))
+
+    assert "그래프 구조가 근거 선택" in joined
+    assert "token=secret" not in joined
+    assert "utm_source" not in joined

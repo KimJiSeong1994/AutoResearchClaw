@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -114,6 +115,46 @@ _SENSITIVE_QUERY_KEYS = {
     "sig",
     "token",
 }
+_TRACKING_QUERY_KEYS = {
+    "eid",
+    "fbclid",
+    "gclid",
+    "igshid",
+    "li",
+    "lipi",
+    "mc_cid",
+    "mc_eid",
+    "mid",
+    "midsig",
+    "midtoken",
+    "mkt_tok",
+    "ref",
+    "source",
+    "t",
+    "trk",
+    "trkemail",
+    "utm",
+    "utm_campaign",
+    "utm_content",
+    "utm_medium",
+    "utm_source",
+    "utm_term",
+}
+_META_DESC_PATTERN = re.compile(
+    r"<meta\b(?=[^>]*(?:name|property)\s*=\s*['\"](?:description|og:description|twitter:description)['\"])[^>]*\bcontent\s*=\s*(['\"])(.*?)\1[^>]*>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_TITLE_PATTERN = re.compile(r"<title\b[^>]*>(.*?)</title>", flags=re.IGNORECASE | re.DOTALL)
+_TAG_PATTERN = re.compile(r"<[^>]+>")
+_SKIP_FETCH_URL_PATTERNS = (
+    "linkedin.com/comm/",
+    "linkedin.com/feed",
+    "linkedin.com/mynetwork",
+    "linkedin.com/messaging",
+    "cardreceipt",
+    "unsubscribe",
+    "preferences",
+)
 
 
 def _clean(value: object, *, limit: int | None = None) -> str:
@@ -245,11 +286,109 @@ def _sanitize_public_url(url: str) -> str:
         return ""
     for key in _SENSITIVE_QUERY_KEYS:
         text = re.sub(rf"([?&]){re.escape(key)}=[^&#]*", r"\1", text, flags=re.IGNORECASE)
-    text = re.sub(r"([?&])(?:utm_[^=&]+|fbclid|gclid|igshid|mc_cid|mc_eid|ref)=[^&#]*", r"\1", text, flags=re.IGNORECASE)
-    text = re.sub(r"\?&+", "?", text)
-    text = re.sub(r"&&+", "&", text)
-    text = re.sub(r"[?&](#|$)", r"\1", text)
-    return text
+    tracking_keys = "|".join(re.escape(key) for key in sorted(_TRACKING_QUERY_KEYS, key=len, reverse=True))
+    text = re.sub(rf"([?&])(?:utm_[^=&]+|{tracking_keys})=[^&#]*", r"\1", text, flags=re.IGNORECASE)
+    while True:
+        compacted = re.sub(r"\?&+", "?", text)
+        compacted = re.sub(r"&&+", "&", compacted)
+        compacted = re.sub(r"[?&](#|$)", r"\1", compacted)
+        compacted = re.sub(r"\?&", "?", compacted)
+        if compacted == text:
+            return text
+        text = compacted
+
+
+def _strip_html(value: str) -> str:
+    text = html.unescape(value or "")
+    text = _TAG_PATTERN.sub(" ", text)
+    return _clean(text)
+
+
+def _extract_public_metadata(markup: str) -> dict[str, str]:
+    description = ""
+    for match in _META_DESC_PATTERN.finditer(markup or ""):
+        candidate = _strip_html(match.group(2))
+        if len(candidate) >= 40:
+            description = candidate
+            break
+    title = ""
+    title_match = _TITLE_PATTERN.search(markup or "")
+    if title_match:
+        title = _strip_html(title_match.group(1))
+    return {"description": description, "title": title}
+
+
+def _should_fetch_public_metadata(url: str) -> bool:
+    lower = _sanitize_public_url(url).lower()
+    if not lower.startswith(("http://", "https://")):
+        return False
+    return not any(pattern in lower for pattern in _SKIP_FETCH_URL_PATTERNS)
+
+
+def _metadata_is_better(item: dict[str, Any], description: str) -> bool:
+    if not description:
+        return False
+    raw_title = _raw_title(item)
+    current = _substantive_excerpt(item, raw_title=raw_title)
+    if not current:
+        return True
+    # Public page metadata is preferred over archived newsletter snippets when
+    # it gives materially more context, but keep existing curated summaries.
+    return len(description) > len(current) + 40
+
+
+async def enrich_public_metadata(
+    payload: dict[str, Any],
+    client: httpx.AsyncClient,
+    *,
+    max_items: int = 24,
+) -> dict[str, Any]:
+    """Fill thin archive items with public page metadata before card selection.
+
+    The newsletter archive can contain only titles/profile tracking links.  We
+    do not scrape long article bodies; we only add short public meta
+    descriptions/titles from the URL that will be shown as the source link.
+    """
+    raw_items = payload.get("items", [])
+    if not isinstance(raw_items, list):
+        return payload
+    candidates = [
+        item
+        for item in _sort_by_quality([item for item in raw_items if isinstance(item, dict)])
+        if _should_fetch_public_metadata(_clean(item.get("url")))
+    ][:max_items]
+    if not candidates:
+        return payload
+
+    async def fetch_one(item: dict[str, Any]) -> None:
+        url = _sanitize_public_url(_clean(item.get("url")))
+        if not url:
+            return
+        try:
+            response = await client.get(
+                url,
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; OpenClawCardNews/1.0)"},
+            )
+        except httpx.HTTPError:
+            return
+        if response.status_code >= 400:
+            return
+        content_type = response.headers.get("content-type", "")
+        if "text/html" not in content_type and "application/xhtml" not in content_type and content_type:
+            return
+        meta = _extract_public_metadata(response.text[:160_000])
+        description = _clean(meta.get("description"), limit=320)
+        if _metadata_is_better(item, description):
+            item["article_description"] = description
+            item["public_excerpt"] = description
+            item["metadata_enriched"] = True
+        title = _clean_title(meta.get("title"), limit=120)
+        if title and not _clean(item.get("article_title") or item.get("title")):
+            item["article_title"] = title
+
+    await asyncio.gather(*(fetch_one(item) for item in candidates))
+    return payload
 
 
 def _format_footer(
@@ -309,6 +448,70 @@ def _richness(item: dict[str, Any], *, raw_title: str) -> str:
     return "skeletal"
 
 
+
+
+def _canonical_title_key(item: dict[str, Any]) -> str:
+    title = _clean(item.get("article_title") or item.get("title"), limit=140).lower()
+    return re.sub(r"[^0-9a-z가-힣]+", " ", title).strip()
+
+
+def _visible_signal(text: str) -> str:
+    cleaned = _clean_title(text, limit=500)
+    cleaned = re.sub(r"[​-‏⁠﻿͏]+", "", cleaned)
+    return cleaned.strip()
+
+
+def _substantive_excerpt(item: dict[str, Any], *, raw_title: str) -> str:
+    excerpt = _visible_signal(str(item.get("public_excerpt") or item.get("article_description") or ""))
+    if not excerpt:
+        return ""
+    title_key = _canonical_title_key({"title": raw_title})
+    excerpt_key = re.sub(r"[^0-9a-z가-힣]+", " ", excerpt.lower()).strip()
+    if not excerpt_key or excerpt_key == title_key:
+        return ""
+    if len(excerpt_key) < 5:
+        return ""
+    return excerpt
+
+
+def _url_quality(url: str) -> int:
+    lower = url.lower().replace("&amp;", "&")
+    score = 0
+    if any(host in lower for host in ("arxiv.org", "openreview.net", "doi.org", "microsoft.com/en-us/research", "deepmind.google", "openai.com", "anthropic.com", "ai.googleblog.com")):
+        score += 8
+    if re.search(r"medium\.com/[^?]+/[^?]+", lower) and not re.search(r"medium\.com/(?:@[^/?]+|tag|topic|blog/newsletters)(?:[/?]|$)", lower):
+        score += 6
+    if any(token in lower for token in ("/publication/", "/research/", "/blog/", "/paper", "/pulse/")):
+        score += 3
+    if any(token in lower for token in ("/feed", "/messaging", "/mynetwork", "cardreceipt", "sendgrid.net", "unsubscribe", "preferences")):
+        score -= 12
+    if any(token in lower for token in ("midtoken", "midsig", "trktrk", "trkemail", "lipi=", "utm_", "source=email")):
+        score -= 2
+    return score
+
+
+def _item_quality_score(item: dict[str, Any]) -> int:
+    raw_title = _raw_title(item)
+    score = _url_quality(_clean(item.get("url")))
+    if _summary_lines(item):
+        score += 20
+    for field in ("hook", "why_now", "core_change", "claim", "thesis", "why_matters", "evidence"):
+        if _clean(item.get(field)):
+            score += 8
+    excerpt = _substantive_excerpt(item, raw_title=raw_title)
+    if excerpt:
+        score += min(14, max(5, len(excerpt) // 60))
+    elif _clean(item.get("public_excerpt") or item.get("article_description")):
+        score -= 4
+    if _clean(item.get("primary_topic_display") or GENERIC_TOPIC) == GENERIC_TOPIC:
+        score -= 2
+    return score
+
+
+def _sort_by_quality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(items, key=lambda item: (_item_quality_score(item), _url_quality(_clean(item.get("url")))), reverse=True)
+
+
 def _topic_groups(items: list[dict[str, Any]]) -> OrderedDict[str, list[dict[str, Any]]]:
     groups: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
     for item in items:
@@ -323,11 +526,13 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
     selected: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     for _topic, topic_items in _topic_groups(items).items():
-        for item in topic_items:
-            title = _clean(item.get("article_title") or item.get("title"), limit=140).lower()
+        for item in _sort_by_quality(topic_items):
+            title_key = _canonical_title_key(item)
             url = _clean(item.get("url"))
-            key = title or url
+            key = title_key or url
             if not url or not key or key in seen_titles:
+                continue
+            if _item_quality_score(item) < -2:
                 continue
             seen_titles.add(key)
             selected.append(item)
@@ -335,11 +540,13 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
         if len(selected) >= max_cards:
             return selected
     if len(selected) < max_cards:
-        for item in items:
-            title = _clean(item.get("article_title") or item.get("title"), limit=140).lower()
+        for item in _sort_by_quality(items):
+            title_key = _canonical_title_key(item)
             url = _clean(item.get("url"))
-            key = title or url
+            key = title_key or url
             if not url or not key or key in seen_titles:
+                continue
+            if _item_quality_score(item) < -2:
                 continue
             seen_titles.add(key)
             selected.append(item)
@@ -376,6 +583,10 @@ def _theme_sentence(cards: list[dict[str, Any]]) -> str:
         summary = _summary_lines(item)
         if summary:
             return _normalize_register(summary[0])
+    for item in cards:
+        excerpt = _substantive_excerpt(item, raw_title=_raw_title(item))
+        if excerpt:
+            return _normalize_register(_first_sentence(excerpt))
     return "오늘은 본문 근거가 얇은 읽기 후보 중심입니다."
 
 
@@ -411,7 +622,13 @@ def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
 def _argument_structure(cards: list[dict[str, Any]], theme: str) -> list[str]:
     topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
     topic_text = ", ".join(topics[:3]) if topics else "여러 기술 후보"
-    evidence_count = sum(1 for item in cards if _clean(item.get("evidence") or item.get("why_matters")))
+    evidence_count = sum(
+        1
+        for item in cards
+        if _clean(item.get("evidence") or item.get("why_matters"))
+        or bool(_summary_lines(item))
+        or bool(_substantive_excerpt(item, raw_title=_raw_title(item)))
+    )
     return [
         f"관찰: {theme}",
         f"메커니즘: {topic_text}에서 공개 원문·요약·토픽 단서가 같은 변화 방향을 가리키는지 본다.",
@@ -691,9 +908,7 @@ def _render_lean_card(
     bucket: str,
     reasons: list[str] | None = None,
 ) -> str:
-    excerpt = _normalize_register(
-        _clean_title(item.get("public_excerpt") or item.get("article_description"), limit=320)
-    )
+    excerpt = _normalize_register(_substantive_excerpt(item, raw_title=title)[:320])
     disclaimer = LEAN_DISCLAIMER_WITH_EXCERPT if excerpt else LEAN_DISCLAIMER_WITHOUT_EXCERPT
     body_parts = [
         CARD_SEPARATOR,
@@ -754,6 +969,7 @@ def _publication_summary_lines(cards: list[dict[str, Any]]) -> list[str]:
             str(item.get("claim") or ""),
             str(item.get("thesis") or ""),
             *(_summary_lines(item)[:1]),
+            _substantive_excerpt(item, raw_title=_raw_title(item)),
         ])
         if claim:
             break
@@ -1005,9 +1221,18 @@ async def run() -> None:
         "off",
     }
     payload = _load_archive(source)
-    messages = render_card_news_messages(payload, max_cards=max_cards)
+    enrich_public_urls = os.environ.get("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    enrich_limit = int(os.environ.get("DISCORD_CARD_NEWS_ENRICH_LIMIT", "24"))
     headers = {"Authorization": f"Bot {token}"}
     async with httpx.AsyncClient(timeout=30) as client:
+        if enrich_public_urls:
+            payload = await enrich_public_metadata(payload, client, max_items=enrich_limit)
+        messages = render_card_news_messages(payload, max_cards=max_cards)
         channel_response = await client.get(f"https://discord.com/api/v10/channels/{channel_id}", headers=headers)
         channel_response.raise_for_status()
         channel_data = channel_response.json()
