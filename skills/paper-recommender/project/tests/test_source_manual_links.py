@@ -62,3 +62,53 @@ def test_manual_links_adapter_rejects_symlink(tmp_path: Path) -> None:
     items = asyncio.run(adapter.fetch(["agentic"], SourceLimits()))
 
     assert items == []
+
+
+def test_manual_links_rejects_pending_miner_review_queue(tmp_path: Path) -> None:
+    path = tmp_path / "pending.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "title": "Pending Miner Link",
+                "url": "https://example.com/pending",
+                "source": "discord_miner",
+                "status": "pending_claw_review",
+                "review": {"required": True, "decision": "pending", "newsletter_reflection": "blocked_until_approved"},
+                "tags": ["discord-link", "jiphyeonjeon-miner", "pending_claw_review"],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "title": "Approved Miner Link",
+                "url": "https://example.com/approved",
+                "source": "discord_miner",
+                "review": {"decision": "approved", "source_decision": "approve"},
+                "tags": ["manual-link", "approved-by-jiphyeonjeon-claw"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter = ManualLinksAdapter(ManualLinkSettings(paths=[str(path)]))
+
+    items = asyncio.run(adapter.fetch([], SourceLimits(max_per_source=10)))
+
+    assert [item.title for item in items] == ["Approved Miner Link"]
+
+
+def test_manual_links_adapter_rejects_private_and_credentialed_urls(tmp_path: Path) -> None:
+    path = tmp_path / "links.jsonl"
+    rows = [
+        {"title": "Localhost", "url": "http://localhost:8000/a", "summary": "agentic ai"},
+        {"title": "Loopback", "url": "http://127.0.0.1/a", "summary": "agentic ai"},
+        {"title": "Private", "url": "https://10.0.0.1/a", "summary": "agentic ai"},
+        {"title": "Creds", "url": "https://user:pass@example.com/a", "summary": "agentic ai"},
+        {"title": "Public", "url": "https://example.com/a", "summary": "agentic ai"},
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    adapter = ManualLinksAdapter(ManualLinkSettings(paths=[str(path)]))
+    items = asyncio.run(adapter.fetch(["agentic ai"], SourceLimits(max_per_source=10)))
+
+    assert [it.title for it in items] == ["Public"]

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback keeps API importable.
+    fcntl = None  # type: ignore[assignment]
 
 AGENT_ID = "jiphyeonjeon-miner"
 REVIEWER_ID = "jiphyeonjeon-claw"
@@ -29,6 +37,9 @@ _SENSITIVE_QUERY_KEYS = {
     "sig",
     "token",
 }
+_PRIVATE_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0"}
+_PRIVATE_HOST_SUFFIXES = (".local", ".localhost", ".internal", ".lan")
+
 _TRACKING_QUERY_KEYS = {
     "eid",
     "fbclid",
@@ -54,6 +65,8 @@ _TRACKING_QUERY_KEYS = {
     "utm_source",
     "utm_term",
 }
+_BLOCKED_HOSTS = {"localhost", "localhost.localdomain"}
+_BLOCKED_HOST_SUFFIXES = (".local", ".localhost")
 
 
 @dataclass(frozen=True)
@@ -100,6 +113,8 @@ def sanitize_url(raw_url: object) -> str:
     parsed = urlsplit(text)
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         return ""
+    if parsed.username or parsed.password or not _public_host(parsed.hostname):
+        return ""
 
     filtered_query = []
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
@@ -111,7 +126,11 @@ def sanitize_url(raw_url: object) -> str:
         filtered_query.append((key, value))
 
     safe_query = urlencode(filtered_query, doseq=True)
-    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, safe_query, ""))
+    host = parsed.hostname.lower() if parsed.hostname else ""
+    netloc = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunsplit((parsed.scheme.lower(), netloc, parsed.path, safe_query, ""))
 
 
 def extract_urls(text: object) -> list[str]:
@@ -138,7 +157,7 @@ def record_miner_link(
 ) -> MinerRecordResult:
     safe_url = sanitize_url(url)
     if not safe_url:
-        raise ValueError("집현전-광부는 http/https 링크만 수집합니다.")
+        raise ValueError("집현전-광부는 공개 http/https 링크만 수집합니다.")
 
     intake_id = _intake_id(safe_url)
     safe_title = clean_text(title, limit=180) or _fallback_title(safe_url)
@@ -151,13 +170,19 @@ def record_miner_link(
         created_at=created_at,
     )
 
-    existed = _jsonl_contains_id(intake_path, intake_id) or _jsonl_contains_id(review_queue_path, intake_id)
-    if not existed:
-        _append_jsonl(intake_path, record)
-        _append_jsonl(review_queue_path, record)
+    wrote = False
+    with locked_jsonl_paths(intake_path, review_queue_path):
+        in_intake = _jsonl_contains_id(intake_path, intake_id)
+        in_review = _jsonl_contains_id(review_queue_path, intake_id)
+        if not in_intake:
+            _append_jsonl_unlocked(intake_path, record)
+            wrote = True
+        if not in_review:
+            _append_jsonl_unlocked(review_queue_path, record)
+            wrote = True
 
     return MinerRecordResult(
-        status="duplicate" if existed else "accepted",
+        status="accepted" if wrote else "duplicate",
         intake_id=intake_id,
         url=safe_url,
         title=safe_title,
@@ -196,6 +221,41 @@ def render_ack(results: list[MinerRecordResult]) -> str:
         parts.append(f"중복 {duplicates}개는 기존 검토 큐를 유지했습니다.")
     parts.append("검토 전에는 뉴스레터 아카이브/뉴스레터에 자동 반영하지 않습니다.")
     return " ".join(parts)
+
+
+@contextmanager
+def locked_jsonl_paths(*paths: Path) -> Iterator[None]:
+    """Serialize JSONL readers/writers that share review-workflow state."""
+
+    lock_path = _lock_path(paths)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_fh:
+        if fcntl is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        raw = json.loads(line)
+        if isinstance(raw, dict):
+            rows.append(raw)
+    return rows
+
+
+def append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    with locked_jsonl_paths(path):
+        _append_jsonl_unlocked(path, record)
 
 
 def _build_record(
@@ -239,6 +299,26 @@ def _build_record(
     }
 
 
+def _public_host(host: str | None) -> bool:
+    if not host:
+        return False
+    host_lc = host.rstrip(".").lower()
+    if host_lc in _PRIVATE_HOSTS or host_lc.endswith(_PRIVATE_HOST_SUFFIXES):
+        return False
+    try:
+        ip = ipaddress.ip_address(host_lc.strip("[]"))
+    except ValueError:
+        return True
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
 def _intake_id(url: str) -> str:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
     return f"miner_{digest}"
@@ -257,22 +337,29 @@ def _jsonl_contains_id(path: Path, intake_id: str) -> bool:
     if not path.exists():
         return False
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict) and row.get("intake_id") == intake_id:
+        for row in read_jsonl(path):
+            if row.get("intake_id") == intake_id:
                 return True
-    except OSError:
+    except (OSError, json.JSONDecodeError):
         return False
     return False
 
 
-def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+def _append_jsonl_unlocked(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        fh.write(line)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _lock_path(paths: tuple[Path, ...]) -> Path:
+    if not paths:
+        return Path(".jiphyeonjeon-miner-jsonl.lock")
+    resolved = [path.expanduser() for path in paths]
+    try:
+        common = Path(os.path.commonpath([str(path.parent) for path in resolved]))
+    except ValueError:
+        common = resolved[0].parent
+    return common / ".jiphyeonjeon-miner-jsonl.lock"

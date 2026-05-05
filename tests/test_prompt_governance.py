@@ -38,6 +38,18 @@ class PromptGovernanceTest(unittest.TestCase):
         fields = set(registry["status_schema"]["required_fields"])
         self.assertTrue(checker.REQUIRED_STATUS_FIELDS.issubset(fields))
 
+    def test_jiphyeonjeon_miner_review_contract_is_registered(self) -> None:
+        registry = json.loads((ROOT / "workspace" / "PROMPT_REGISTRY.json").read_text())
+        prompts = {prompt["prompt_id"]: prompt for prompt in registry["prompts"]}
+        miner = prompts["jiphyeonjeon_miner_link_intake"]
+
+        self.assertIn("discord-jiphyeonjeon-miner-review", miner["source"]["anchors"])
+        self.assertIn("approved-manual-links", " ".join(miner["source"]["anchors"]))
+        self.assertIn("private_or_userinfo_url", miner["forbidden_data"])
+        self.assertIn("approved-only manual_links export", miner["output_contract"])
+        self.assertIn("skills/discord-openclaw-bridge/project/tests/test_miner_review.py", miner["validation"])
+        self.assertIn("approved_only_export_gate", miner["validation"])
+
 
 if __name__ == "__main__":
     unittest.main()

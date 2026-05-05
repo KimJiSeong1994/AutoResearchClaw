@@ -50,14 +50,33 @@
       "purpose": "Define the OpenClaw EC2 workspace mission, safety boundaries, and operational discipline.",
       "source": {
         "path": "workspace/AGENTS.md",
-        "anchors": ["Mission", "Operating rules", "Karpathy-inspired execution discipline"]
+        "anchors": [
+          "Mission",
+          "Operating rules",
+          "Karpathy-inspired execution discipline"
+        ]
       },
       "service_surface": "openclaw_workspace",
-      "input_classes": ["operator_request", "gateway_state", "repo_context"],
-      "forbidden_data": ["raw_gateway_token", "unredacted_secret_file", "destructive_auth_change_without_approval"],
+      "input_classes": [
+        "operator_request",
+        "gateway_state",
+        "repo_context"
+      ],
+      "forbidden_data": [
+        "raw_gateway_token",
+        "unredacted_secret_file",
+        "destructive_auth_change_without_approval"
+      ],
       "output_contract": "Concise operational response with current state, concrete evidence, changes, and verification path.",
-      "validation": ["workspace_prompt_governance_check", "manual_safety_boundary_review"],
-      "metrics": ["secret_scan_pass", "health_status", "delivery_target"],
+      "validation": [
+        "workspace_prompt_governance_check",
+        "manual_safety_boundary_review"
+      ],
+      "metrics": [
+        "secret_scan_pass",
+        "health_status",
+        "delivery_target"
+      ],
       "rollback": "Revert workspace/AGENTS.md and redeploy with scripts/deploy-openclaw-workspace.sh."
     },
     {
@@ -66,31 +85,83 @@
       "purpose": "Route allowlisted Discord prompts to the loopback OpenClaw gateway.",
       "source": {
         "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/openclaw.py",
-        "anchors": ["chat payload", "system prompt", "loopback gateway"]
+        "anchors": [
+          "chat payload",
+          "system prompt",
+          "loopback gateway"
+        ]
       },
       "service_surface": "discord_openclaw_bridge",
-      "input_classes": ["discord_command_text", "allowlisted_channel", "openclaw_gateway_response"],
-      "forbidden_data": ["discord_bot_token", "openclaw_gateway_token", "full_private_prompt_log"],
+      "input_classes": [
+        "discord_command_text",
+        "allowlisted_channel",
+        "openclaw_gateway_response"
+      ],
+      "forbidden_data": [
+        "discord_bot_token",
+        "openclaw_gateway_token",
+        "full_private_prompt_log"
+      ],
       "output_contract": "Discord-safe text response from OpenClaw without printing secrets or gateway internals.",
-      "validation": ["discord_bridge_unit_tests", "secret_name_only_check", "loopback_gateway_review"],
-      "metrics": ["prompt_version", "model_primary", "fallback_used", "delivery_message_count", "health_status"],
+      "validation": [
+        "discord_bridge_unit_tests",
+        "secret_name_only_check",
+        "loopback_gateway_review"
+      ],
+      "metrics": [
+        "prompt_version",
+        "model_primary",
+        "fallback_used",
+        "delivery_message_count",
+        "health_status"
+      ],
       "rollback": "Revert openclaw.py and restart discord-openclaw-bridge.service after deployment."
     },
     {
       "prompt_id": "jiphyeonjeon_miner_link_intake",
       "owner": "Jiphyeonjeon-Claw",
-      "purpose": "Collect Discord-requested links as pending newsletter candidates without deciding content inclusion.",
+      "purpose": "Collect Discord-requested links as pending candidates and route inclusion decisions through 집현전-클로 review.",
       "source": {
         "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/miner.py",
-        "anchors": ["record_miner_link", "pending_claw_review", "newsletter_reflection"]
+        "anchors": [
+          "record_miner_link",
+          "pending_claw_review",
+          "discord-jiphyeonjeon-miner-review",
+          "approved-manual-links"
+        ]
       },
       "service_surface": "discord_openclaw_bridge",
-      "input_classes": ["discord_link_request", "discord_channel_metadata", "operator_supplied_title_or_note"],
-      "forbidden_data": ["discord_bot_token", "full_discord_message_body", "secret_query_param", "pre_review_newsletter_inclusion"],
-      "output_contract": "JSONL intake and review-queue records marked pending_claw_review for 집현전-클로 approval before newsletter reflection.",
-      "validation": ["skills/discord-openclaw-bridge/project/tests/test_miner.py", "skills/discord-openclaw-bridge/project/tests/test_miner_bot.py", "url_secret_stripping", "pending_review_gate"],
-      "metrics": ["source_stats", "candidate_count", "secret_scan_pass", "health_status"],
-      "rollback": "Disable DISCORD_MINER_ENABLE_CHANNEL_COLLECTION, remove /jiphyeonjeon_mine registration, and preserve pending queue files for review."
+      "input_classes": [
+        "discord_link_request",
+        "discord_channel_metadata",
+        "operator_supplied_title_or_note"
+      ],
+      "forbidden_data": [
+        "discord_bot_token",
+        "full_discord_message_body",
+        "secret_query_param",
+        "pre_review_newsletter_inclusion",
+        "pending_queue_as_manual_links_input",
+        "private_or_userinfo_url"
+      ],
+      "output_contract": "Locked JSONL intake/review-queue records marked pending_claw_review, append-only decision audit rows, and approved-only manual_links export for 집현전-클로-approved items.",
+      "validation": [
+        "skills/discord-openclaw-bridge/project/tests/test_miner.py",
+        "skills/discord-openclaw-bridge/project/tests/test_miner_bot.py",
+        "url_secret_stripping",
+        "pending_review_gate",
+        "skills/discord-openclaw-bridge/project/tests/test_miner_review.py",
+        "approved_only_export_gate",
+        "locked_jsonl_append",
+        "private_host_rejection"
+      ],
+      "metrics": [
+        "source_stats",
+        "candidate_count",
+        "secret_scan_pass",
+        "health_status"
+      ],
+      "rollback": "Disable DISCORD_MINER_ENABLE_CHANNEL_COLLECTION, stop using approved-manual-links export, remove /jiphyeonjeon_mine registration, and preserve queue/decision JSONL files for audit."
     },
     {
       "prompt_id": "discord_briefing_renderer",
@@ -98,14 +169,35 @@
       "purpose": "Render the latest Jiphyeonjeon-Claw briefing into concise Discord markdown.",
       "source": {
         "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/briefing.py",
-        "anchors": ["briefing source", "markdown rendering", "message limits"]
+        "anchors": [
+          "briefing source",
+          "markdown rendering",
+          "message limits"
+        ]
       },
       "service_surface": "discord_openclaw_bridge",
-      "input_classes": ["daily_trend_markdown", "report_metadata"],
-      "forbidden_data": ["raw_email_body", "oauth_token", "webhook_url", "gateway_token"],
+      "input_classes": [
+        "daily_trend_markdown",
+        "report_metadata"
+      ],
+      "forbidden_data": [
+        "raw_email_body",
+        "oauth_token",
+        "webhook_url",
+        "gateway_token"
+      ],
       "output_contract": "One or more Discord-safe markdown messages under platform limits with evidence separated from interpretation.",
-      "validation": ["skills/discord-openclaw-bridge/project/tests/test_briefing.py", "discord_message_length_check", "secret_scan"],
-      "metrics": ["delivery_message_count", "prompt_output_valid_json", "secret_scan_pass", "health_status"],
+      "validation": [
+        "skills/discord-openclaw-bridge/project/tests/test_briefing.py",
+        "discord_message_length_check",
+        "secret_scan"
+      ],
+      "metrics": [
+        "delivery_message_count",
+        "prompt_output_valid_json",
+        "secret_scan_pass",
+        "health_status"
+      ],
       "rollback": "Revert briefing.py or set DISCORD_BRIEFING_SOURCE to the last known-good report."
     },
     {
@@ -114,14 +206,35 @@
       "purpose": "Generate weekly research and industry trend search queries.",
       "source": {
         "path": "skills/paper-recommender/project/src/paper_recommender/trend_queries.py",
-        "anchors": ["query generation", "topic axes", "JSON contract"]
+        "anchors": [
+          "query generation",
+          "topic axes",
+          "JSON contract"
+        ]
       },
       "service_surface": "paper_recommender_weekly",
-      "input_classes": ["topic_axis", "recent_signal_summary", "persona_context"],
-      "forbidden_data": ["private_mail_body", "oauth_token", "unbounded_user_secret"],
+      "input_classes": [
+        "topic_axis",
+        "recent_signal_summary",
+        "persona_context"
+      ],
+      "forbidden_data": [
+        "private_mail_body",
+        "oauth_token",
+        "unbounded_user_secret"
+      ],
       "output_contract": "Strict JSON query set with bounded count and topic rationale.",
-      "validation": ["strict_json_fixture", "query_count_limit", "source_policy_review"],
-      "metrics": ["query_count", "prompt_output_valid_json", "fallback_used", "health_status"],
+      "validation": [
+        "strict_json_fixture",
+        "query_count_limit",
+        "source_policy_review"
+      ],
+      "metrics": [
+        "query_count",
+        "prompt_output_valid_json",
+        "fallback_used",
+        "health_status"
+      ],
       "rollback": "Disable weekly query expansion or revert trend_queries.py."
     },
     {
@@ -130,14 +243,35 @@
       "purpose": "Synthesize weekly trend reports from validated source evidence.",
       "source": {
         "path": "skills/paper-recommender/project/src/paper_recommender/trend_report.py",
-        "anchors": ["validate_trend_report", "report generation", "evidence ids"]
+        "anchors": [
+          "validate_trend_report",
+          "report generation",
+          "evidence ids"
+        ]
       },
       "service_surface": "paper_recommender_weekly",
-      "input_classes": ["validated_paper_ids", "cluster_evidence", "trend_candidates"],
-      "forbidden_data": ["unknown_paper_id", "unvalidated_claim", "secret_url"],
+      "input_classes": [
+        "validated_paper_ids",
+        "cluster_evidence",
+        "trend_candidates"
+      ],
+      "forbidden_data": [
+        "unknown_paper_id",
+        "unvalidated_claim",
+        "secret_url"
+      ],
       "output_contract": "Markdown report with source-backed claims and rejected unknown evidence ids.",
-      "validation": ["validate_trend_report", "min_evidence_per_cluster", "unknown_id_rejection"],
-      "metrics": ["cluster_count", "evidence_coverage_pct", "min_evidence_per_cluster", "health_status"],
+      "validation": [
+        "validate_trend_report",
+        "min_evidence_per_cluster",
+        "unknown_id_rejection"
+      ],
+      "metrics": [
+        "cluster_count",
+        "evidence_coverage_pct",
+        "min_evidence_per_cluster",
+        "health_status"
+      ],
       "rollback": "Revert trend_report.py or publish the previous weekly report artifact."
     },
     {
@@ -146,14 +280,35 @@
       "purpose": "Maintain compact research persona and SOUL state for recommendations.",
       "source": {
         "path": "skills/paper-recommender/project/src/paper_recommender/soul.py",
-        "anchors": ["SOUL_SYSTEM", "evolve", "compact"]
+        "anchors": [
+          "SOUL_SYSTEM",
+          "evolve",
+          "compact"
+        ]
       },
       "service_surface": "paper_recommender_persona",
-      "input_classes": ["research_history", "feedback_summary", "recommendation_context"],
-      "forbidden_data": ["private_secret", "raw_token", "unredacted_personal_data"],
+      "input_classes": [
+        "research_history",
+        "feedback_summary",
+        "recommendation_context"
+      ],
+      "forbidden_data": [
+        "private_secret",
+        "raw_token",
+        "unredacted_personal_data"
+      ],
       "output_contract": "Compact persona state that preserves useful preference signal without private secret material.",
-      "validation": ["skills/paper-recommender/project/tests/test_weekly_soul_governance.py", "soul_fallback_check", "secret_scan"],
-      "metrics": ["soul_source", "soul_fallback_used", "soul_card_sha256", "health_status"],
+      "validation": [
+        "skills/paper-recommender/project/tests/test_weekly_soul_governance.py",
+        "soul_fallback_check",
+        "secret_scan"
+      ],
+      "metrics": [
+        "soul_source",
+        "soul_fallback_used",
+        "soul_card_sha256",
+        "health_status"
+      ],
       "rollback": "Use configured fallback/static SOUL snapshot and revert soul.py."
     },
     {
@@ -162,14 +317,35 @@
       "purpose": "Rerank candidate papers or articles using relevance and diversity scoring prompts.",
       "source": {
         "path": "skills/paper-recommender/project/src/paper_recommender/rerank.py",
-        "anchors": ["listwise", "pointwise", "score_stats"]
+        "anchors": [
+          "listwise",
+          "pointwise",
+          "score_stats"
+        ]
       },
       "service_surface": "paper_recommender_selection",
-      "input_classes": ["candidate_metadata", "persona_summary", "topic_context"],
-      "forbidden_data": ["full_private_document", "secret_env_value", "raw_token"],
+      "input_classes": [
+        "candidate_metadata",
+        "persona_summary",
+        "topic_context"
+      ],
+      "forbidden_data": [
+        "full_private_document",
+        "secret_env_value",
+        "raw_token"
+      ],
       "output_contract": "Bounded score output with parseable ranking and drift-visible score statistics.",
-      "validation": ["skills/paper-recommender/project/tests/test_rerank_and_artifacts.py", "score_stats_check", "jaccard_drift_review"],
-      "metrics": ["score_stats", "fallback_used", "prompt_output_valid_json", "health_status"],
+      "validation": [
+        "skills/paper-recommender/project/tests/test_rerank_and_artifacts.py",
+        "score_stats_check",
+        "jaccard_drift_review"
+      ],
+      "metrics": [
+        "score_stats",
+        "fallback_used",
+        "prompt_output_valid_json",
+        "health_status"
+      ],
       "rollback": "Set rerank mode to disabled or previous scoring mode in config."
     },
     {
@@ -178,14 +354,36 @@
       "purpose": "Render Gmail newsletter archive items into sanitized card-news briefing text.",
       "source": {
         "path": "integrations/google-apps-script/newsletter_archive_to_discord.gs",
-        "anchors": ["card-news renderer", "relay_pull", "sensitive URL stripping"]
+        "anchors": [
+          "card-news renderer",
+          "relay_pull",
+          "sensitive URL stripping"
+        ]
       },
       "service_surface": "google_apps_script_relay",
-      "input_classes": ["gmail_metadata", "public_article_excerpt", "source_url"],
-      "forbidden_data": ["raw_email_body_in_output", "relay_read_token", "discord_webhook_url", "bot_token"],
+      "input_classes": [
+        "gmail_metadata",
+        "public_article_excerpt",
+        "source_url"
+      ],
+      "forbidden_data": [
+        "raw_email_body_in_output",
+        "relay_read_token",
+        "discord_webhook_url",
+        "bot_token"
+      ],
       "output_contract": "Card-news markdown containing public metadata and source URLs only.",
-      "validation": ["node_syntax_check_copy", "cardnews_contract_smoke", "secret_property_name_only_check"],
-      "metrics": ["delivery_message_count", "secret_scan_pass", "source_stats", "health_status"],
+      "validation": [
+        "node_syntax_check_copy",
+        "cardnews_contract_smoke",
+        "secret_property_name_only_check"
+      ],
+      "metrics": [
+        "delivery_message_count",
+        "secret_scan_pass",
+        "source_stats",
+        "health_status"
+      ],
       "rollback": "Disable the daily Apps Script trigger or redeploy the previous Code.gs."
     },
     {
@@ -194,14 +392,37 @@
       "purpose": "Render sanitized newsletter archive items into Discord card-news messages.",
       "source": {
         "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/post_card_news.py",
-        "anchors": ["render_card_news_messages", "privacy boundary", "message limit"]
+        "anchors": [
+          "render_card_news_messages",
+          "privacy boundary",
+          "message limit"
+        ]
       },
       "service_surface": "discord_openclaw_bridge",
-      "input_classes": ["sanitized_newsletter_item", "topic_label", "public_source_url"],
-      "forbidden_data": ["raw_gmail_body", "oauth_token", "script_property_value", "webhook_url", "gateway_token"],
+      "input_classes": [
+        "sanitized_newsletter_item",
+        "topic_label",
+        "public_source_url"
+      ],
+      "forbidden_data": [
+        "raw_gmail_body",
+        "oauth_token",
+        "script_property_value",
+        "webhook_url",
+        "gateway_token"
+      ],
       "output_contract": "Compact Discord messages with no embeds and no private email or secret material.",
-      "validation": ["skills/discord-openclaw-bridge/project/tests/test_post_card_news.py", "secret_scan", "message_count_limit"],
-      "metrics": ["delivery_message_count", "secret_scan_pass", "source_stats", "health_status"],
+      "validation": [
+        "skills/discord-openclaw-bridge/project/tests/test_post_card_news.py",
+        "secret_scan",
+        "message_count_limit"
+      ],
+      "metrics": [
+        "delivery_message_count",
+        "secret_scan_pass",
+        "source_stats",
+        "health_status"
+      ],
       "rollback": "Revert post_card_news.py or disable scheduled card-news posting."
     }
   ]

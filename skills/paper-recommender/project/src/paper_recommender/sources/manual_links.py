@@ -8,6 +8,7 @@ metadata into the candidate pipeline.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 from dataclasses import dataclass, field
@@ -117,7 +118,7 @@ def _to_item(raw: object, max_summary_chars: int) -> CandidateItem | None:
         return None
     title = clean_text(raw.get("title"))
     url = clean_text(raw.get("url"))
-    if not title or not _safe_http_url(url):
+    if not title or not _safe_http_url(url) or not _approved_miner_row(raw):
         return None
     summary = clean_text(raw.get("summary") or raw.get("abstract"))
     authors = _authors(raw)
@@ -139,7 +140,46 @@ def _to_item(raw: object, max_summary_chars: int) -> CandidateItem | None:
 
 def _safe_http_url(url: str) -> bool:
     parsed = urlparse(url)
-    return parsed.scheme in {"https", "http"} and bool(parsed.netloc)
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        return False
+    if parsed.username or parsed.password or not parsed.hostname:
+        return False
+    host = parsed.hostname.rstrip(".").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".localhost", ".internal", ".lan")):
+        return False
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return True
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _approved_miner_row(raw: dict) -> bool:
+    source = clean_text(raw.get("source")).lower()
+    status = clean_text(raw.get("status")).lower()
+    review = raw.get("review")
+    if status == "pending_claw_review":
+        return False
+    if source != "discord_miner":
+        return True
+    if not isinstance(review, dict):
+        return False
+    decision = clean_text(review.get("decision")).lower()
+    source_decision = clean_text(review.get("source_decision")).lower()
+    tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+    clean_tags = {clean_text(tag).lower() for tag in tags}
+    return (
+        decision == "approved"
+        and source_decision in {"", "approve", "approved"}
+        and "approved-by-jiphyeonjeon-claw" in clean_tags
+    )
 
 
 def _source(value: object, url: str) -> str:

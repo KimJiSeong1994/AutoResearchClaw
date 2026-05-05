@@ -30,12 +30,40 @@ Flow:
    - `JIPHYEONJEON_MINER_INTAKE_PATH`
    - `JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH`
 4. Each record is marked `status=pending_claw_review`, `agent=jiphyeonjeon-miner`, and `reviewer=jiphyeonjeon-claw`.
-5. Only after 집현전-클로 approval should an operator or review automation copy approved metadata into the newsletter manual-link/archive ingestion path.
+5. 집현전-클로 records an append-only decision in `link-review-decisions.jsonl` with `approve`, `reject`, or `hold`.
+6. Only the approved-only export `approved-manual-links.jsonl` may be used as a paper-recommender `manual_links` input; pending queue files are never newsletter inputs.
+
+Deep build plan for the review workflow:
+
+- Keep Miner intake collection-only: sanitize URL risk, append the original pending record to intake and review queue, and leave all inclusion decisions to 집현전-클로.
+- Make JSONL writes repairable and locked: every append uses a sidecar lock and `fsync`; duplicate checks repair a missing intake or queue row instead of suppressing it.
+- Store decisions as audit events: `discord-jiphyeonjeon-miner-review approve|reject|hold <intake_id>` appends to `link-review-decisions.jsonl` without mutating the pending queue.
+- Export only after approval: `discord-jiphyeonjeon-miner-review export` joins the queue with latest decisions and writes `approved-manual-links.jsonl` atomically for `manual_links` compatibility.
+- Verify the boundary with tests before pointing downstream jobs at the export path.
+
+Operator CLI:
+
+```bash
+cd skills/discord-openclaw-bridge/project
+uv run discord-jiphyeonjeon-miner-review list
+uv run discord-jiphyeonjeon-miner-review show miner_<id>
+uv run discord-jiphyeonjeon-miner-review approve miner_<id> --reason "source checked"
+uv run discord-jiphyeonjeon-miner-review reject miner_<id> --reason "off-topic or unsafe"
+uv run discord-jiphyeonjeon-miner-review hold miner_<id> --reason "needs source verification"
+uv run discord-jiphyeonjeon-miner-review export
+```
+
+Default paths:
+
+- Queue: `~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl`
+- Decision audit log: `~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl`
+- Approved export: `~/.openclaw/workspace/manual_links/approved-manual-links.jsonl`
 
 Operational controls:
 
 - `DISCORD_MINER_CHANNEL_ID` defaults to `DISCORD_ALLOWED_CHANNEL_ID` when unset.
 - `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires Discord `MESSAGE_CONTENT` intent.
+- `JIPHYEONJEON_MINER_DECISIONS_PATH` and `JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH` control the review audit log and approved-only `manual_links` export path.
 - For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue; use an approved-only JSONL file after 집현전-클로 review.
