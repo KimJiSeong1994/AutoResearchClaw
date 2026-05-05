@@ -868,30 +868,75 @@ def _cardnews_cta(title: str, topic: str) -> str:
     return f"저장 후 {target}의 방법·평가·적용 조건을 원문에서 재확인하세요."
 
 
+def _representative_item(items: list[dict[str, str]]) -> dict[str, str]:
+    for item in items:
+        if item.get("url"):
+            return item
+    return items[0] if items else {}
 
 
-def _blog_summary_lines(items: list[dict[str, str]]) -> list[str]:
-    overview = _topic_overview(items)
-    first = items[0] if items else {}
-    first_summary = item_summary_lines(first) if first else []
+def _blog_post_contract_lines(*, items: list[dict[str, str]]) -> list[str]:
+    """Render the blog-style publication contract from public/sanitized fields only."""
+    if not items:
+        return [
+            "",
+            "## 블로그 포스팅 구조",
+            "",
+            "![대표 이미지 설명: 비어 있는 수집 보드 앞에서 공개 링크 입력 경로를 점검하는 데이터 편집 데스크](이미지_프롬프트)",
+            "",
+            "> 3줄 요약",
+            "> 1. 오늘 공개 근거 기반 후보가 수집되지 않았습니다.",
+            "> 2. 발행 품질보다 allowlist·쿼리·공개 URL 추출 경로 점검이 우선입니다.",
+            "> 3. 다음 실행에서 수집 조건과 원문 접근 가능성을 확인해야 합니다.",
+            "",
+            "## 왜 지금 이 이슈인가",
+            "- 수집 공백은 자동 발행 파이프라인의 입력 품질을 점검해야 한다는 신호입니다.",
+            "",
+            "## 핵심 주장",
+            "- 주장: 공개 근거가 없으면 블로그형 해석보다 수집 조건 검증을 먼저 해야 합니다.",
+            "- 근거: 현재 렌더링 가능한 공개 링크가 없습니다.",
+            "- 현장 사례 또는 적용 장면: Discord 발행 전 raw archive 생성 상태를 확인합니다.",
+            "",
+            "## 논증 구조",
+            "1. 관찰: 수집 후보가 없습니다.",
+            "2. 메커니즘: allowlist, 검색 쿼리, 공개 URL 필터 중 하나가 후보를 제한했을 수 있습니다.",
+            "3. 긴장: 자동 발행 속도와 근거 품질 사이의 균형이 필요합니다.",
+            "4. 반론: 단기 수집 공백일 수 있어 설정 변경은 신중해야 합니다.",
+            "5. 판단: 다음 실행 전 입력 경로를 점검합니다.",
+            "",
+            "## 산업사회학적·현장기반 해석",
+            "- 자동 브리핑은 생성 모델보다 수집·검증·게시 권한의 조직적 경계가 품질을 좌우합니다.",
+            "",
+            "## 앞으로 볼 질문",
+            "- 어떤 수집 조건이 공개 근거 후보를 가장 많이 누락시키는가?",
+            "",
+            "## 카드뉴스 재사용안",
+            "1. 카드 1: 오늘은 공개 근거 후보가 없습니다.",
+            "2. 카드 2: 수집 조건을 먼저 점검합니다.",
+            "3. 카드 3: 원문 링크와 raw archive 생성을 확인합니다.",
+            "",
+            "## 디스코드 브리핑 재사용안",
+            "- 한 줄 제목: 공개 근거 후보 없음",
+            "- 3줄 요약: 수집 공백 / 설정 점검 / 다음 실행 확인",
+            "- 핵심 링크: 없음",
+            "- 토론 질문: 어떤 수집 조건을 조정해야 하는가?",
+            "",
+            "## 출처",
+            "- 공개 출처 없음 — 수집 후보 없음",
+        ]
+
+    primary = _representative_item(items)
+    title = _safe_title(primary.get("article_title") or primary.get("title") or "대표 후보")
+    url = primary.get("url") or ""
+    classification = classify_topic_result(primary)
+    summary = item_summary_lines(primary)
+    topic_overview = _topic_overview(items) or classification.primary_display
+    source_line = f"[{title}]({url})" if url else "공개 외부 링크 없음"
     return [
-        f"오늘 브리핑은 {overview or '공개 기술 후보'}를 하나의 변화 흐름으로 묶어 읽습니다.",
-        first_summary[0] if first_summary else "핵심은 링크 나열이 아니라 문제의식, 근거 수준, 적용 조건을 분리하는 것입니다.",
-        first_summary[2] if first_summary else "출처가 약한 항목은 다음 수집에서 확인 필요로 남깁니다.",
-    ]
-
-
-def _blog_intro_lines(*, run_date: str, items: list[dict[str, str]], source_name: str) -> list[str]:
-    summary = _blog_summary_lines(items)
-    overview = _topic_overview(items) or "기술 브리핑 후보"
-    first_title = _safe_title((items[0] if items else {}).get("article_title") or (items[0] if items else {}).get("title") or "수집 결과 없음")
-    return [
-        "**집현전-Claw 기술 블로그 브리핑**",
-        f"작성일: `{run_date}`",
-        f"수집 경로: {source_name}",
-        "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
         "",
-        f"대표 이미지 설명: {overview}를 데이터 흐름, 연구 노트, 현장 의사결정 보드로 은유한 추상 일러스트",
+        "## 블로그 포스팅 구조",
+        "",
+        f"![대표 이미지 설명: {classification.primary_display} 흐름을 공개 근거 보드와 현장 의사결정 테이블로 함께 보여주는 장면](이미지_프롬프트)",
         "",
         "> 3줄 요약",
         f"> 1. {summary[0]}",
@@ -899,43 +944,46 @@ def _blog_intro_lines(*, run_date: str, items: list[dict[str, str]], source_name
         f"> 3. {summary[2]}",
         "",
         "## 왜 지금 이 이슈인가",
-        f"- {overview} 신호가 같은 날 수집된 공개 링크에서 반복됩니다.",
-        "- 단일 링크 소개보다 어떤 평가·비용·운영 조건이 바뀌는지 함께 읽어야 합니다.",
+        f"- {classification.primary_display} 관련 공개 후보 {len(items)}개가 같은 발행 묶음에 들어왔습니다.",
+        f"- 토픽 인덱스: {topic_overview}",
         "",
         "## 핵심 주장",
-        f"- 주장: {summary[1]}",
+        f"- 주장: `{title}`는 {classification.primary_display} 흐름에서 후속 검토할 변화 신호입니다.",
         f"- 근거: {summary[2]}",
-        f"- 적용 장면: {first_title} 같은 항목을 원문 조건과 함께 검토합니다.",
+        "- 현장 사례 또는 적용 장면: 연구자·운영자가 원문의 방법, 평가 조건, 적용 범위를 확인해야 합니다.",
         "",
         "## 논증 구조",
-        "1. 관찰: 공개 아티클/논문 후보가 토픽별로 모입니다.",
-        "2. 메커니즘: 방법, 평가, 적용 조건의 차이가 기술 선택을 좌우합니다.",
-        "3. 긴장: 조직은 정확도, 비용, 지연시간, 검증 가능성을 함께 부담합니다.",
-        "4. 반론: 공개 요약만으로는 결론을 일반화하기 어렵습니다.",
-        "5. 판단: 확인된 출처 링크 중심으로 좁게 읽고 약한 문장은 확인 필요로 둡니다.",
+        f"1. 관찰: {summary[0]}",
+        f"2. 메커니즘: {summary[1]}",
+        f"3. 긴장: 자동 수집은 속도를 높이지만 공개 근거와 private context 경계를 분리해야 합니다.",
+        "4. 반론: 공개 요약만으로는 원문의 한계와 평가 조건을 충분히 판단하기 어렵습니다.",
+        f"5. 판단: {classification.primary_display} 축의 후속 읽기 후보로 저장하되 원문 확인을 전제로 봅니다.",
         "",
         "## 산업사회학적·현장기반 해석",
-        "- 개인이나 기업의 홍보 문구보다 조직 인센티브, 도구 선택 비용, 평가 체계의 변화로 읽습니다.",
+        "- 이 브리핑은 모델 성능보다 조직의 수집·검증·공유 루틴이 지식 확산 속도를 어떻게 바꾸는지 보여줍니다.",
+        "- 누가 검증 비용을 부담하고 어떤 팀이 원문 해석을 운영 의사결정으로 연결하는지가 핵심입니다.",
         "",
         "## 앞으로 볼 질문",
-        "- 원문이 제시한 방법·평가 조건은 실제 운영 환경에서도 유지되는가?",
-        "- 누가 도입 이익을 얻고 누가 검증·비용 부담을 지는가?",
+        "- 원문이 제시한 방법과 평가 지표가 실제 운영 환경에서도 유지되는가?",
+        "- 공개 근거만으로 판단할 수 없는 비용·리스크·적용 조건은 무엇인가?",
         "",
         "## 카드뉴스 재사용안",
-        "1. 카드 1: 오늘의 문제의식",
-        "2. 카드 2: 핵심 변화",
-        "3. 카드 3: 왜 중요한가",
-        "4. 카드 4: 현장의 쟁점",
-        "5. 카드 5: 남는 질문과 출처",
+        f"1. 카드 1: {classification.primary_display}에서 지금 볼 변화",
+        f"2. 카드 2: {summary[0]}",
+        f"3. 카드 3: {summary[1]}",
+        "4. 카드 4: 현장의 쟁점은 검증 비용과 적용 조건",
+        f"5. 카드 5: 남는 질문과 출처 — {source_line}",
         "",
         "## 디스코드 브리핑 재사용안",
-        f"- 한 줄 제목: {overview} 기술 블로그 브리핑",
+        f"- 한 줄 제목: {title}",
         f"- 3줄 요약: {summary[0]} / {summary[1]} / {summary[2]}",
-        "- 핵심 링크: 아래 출처 링크 참조",
-        "- 토론 질문: 운영 환경에서도 같은 효과가 유지되는가?",
+        f"- 핵심 링크: {source_line}",
+        "- 토론 질문: 이 변화가 우리 운영 환경에서도 같은 효과를 내는가?",
         "",
         "## 출처",
+        f"- {source_line} — 공개 원문/요약 기반 핵심 후보",
     ]
+
 
 def render_topic_briefing(
     *,
@@ -966,6 +1014,7 @@ def render_topic_briefing(
         "- 기준: 허용된 수집 경로의 메타데이터와 공개 아티클 원문/요약만 사용",
         "- 플랫폼 메모: Discord Markdown에서도 카드 단위로 읽히도록 compact하게 렌더링",
     ]
+    lines += _blog_post_contract_lines(items=items)
     if not items:
         lines += [
             "",

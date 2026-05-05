@@ -702,3 +702,104 @@ def test_apps_script_renderer_keeps_cardnews_contract_labels_in_parity() -> None
     for label in expected_labels:
         assert label in text
     assert "메일 본문/비밀값은 게시하지 않고" in text
+
+
+def test_topic_briefing_renders_blog_research_post_contract() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-05",
+        items=[
+            {
+                "title": "Private digest subject",
+                "article_title": "GraphRAG benchmark release",
+                "kind": "post",
+                "url": "https://example.com/graphrag",
+                "sender": "Digest <digest@example.com>",
+                "received_at": "Mon, 04 May 2026 07:00:00 +0900",
+                "summary_lines": [
+                    "The public article introduces a retrieval benchmark for graph-grounded agents.",
+                    "It compares GraphRAG indexing, query planning, and answer grounding across datasets.",
+                    "The results help researchers track accuracy and latency trade-offs for RAG systems.",
+                ],
+                "classification_text": "PRIVATE paid newsletter note token=secret",
+            }
+        ],
+        source_name="newsletters.jsonl",
+    )
+
+    expected_sections = [
+        "## 블로그 포스팅 구조",
+        "![대표 이미지 설명:",
+        "> 3줄 요약",
+        "## 왜 지금 이 이슈인가",
+        "## 핵심 주장",
+        "## 논증 구조",
+        "## 산업사회학적·현장기반 해석",
+        "## 앞으로 볼 질문",
+        "## 카드뉴스 재사용안",
+        "## 디스코드 브리핑 재사용안",
+        "## 출처",
+    ]
+    cursor = -1
+    for section in expected_sections:
+        found = briefing.find(section)
+        assert found > cursor, section
+        cursor = found
+
+    assert "GraphRAG benchmark release" in briefing
+    assert "https://example.com/graphrag" in briefing
+    assert "The public article introduces" in briefing
+    assert "PRIVATE paid newsletter" not in briefing
+    assert "token=secret" not in briefing
+
+
+def test_topic_briefing_blog_contract_mentions_privacy_and_derivative_reuse_blocks() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-05",
+        items=[
+            {
+                "title": "Agent workflow report",
+                "kind": "post",
+                "url": "https://example.com/agent-workflow",
+                "public_excerpt": "Public article discusses LLM agent workflow evaluation.",
+                "classification_text": "SECRET mailbox-only body with token=abc123",
+            }
+        ],
+        source_name="sanitized.jsonl",
+    )
+
+    assert "메일 본문/비밀값은 저장·게시하지" in briefing
+    assert "## 카드뉴스 재사용안" in briefing
+    assert "## 디스코드 브리핑 재사용안" in briefing
+    assert "- 핵심 링크: [Agent workflow report](https://example.com/agent-workflow)" in briefing
+    assert "SECRET mailbox-only" not in briefing
+    assert "token=abc123" not in briefing
+
+
+def test_apps_script_renderer_mentions_blog_research_post_contract_in_parity() -> None:
+    script = (
+        Path(__file__).resolve().parents[3]
+        / ".."
+        / "integrations"
+        / "google-apps-script"
+        / "newsletter_archive_to_discord.gs"
+    ).resolve()
+    text = script.read_text(encoding="utf-8")
+
+    expected_markers = [
+        "## 블로그 포스팅 구조",
+        "![대표 이미지 설명:",
+        "> 3줄 요약",
+        "## 왜 지금 이 이슈인가",
+        "## 핵심 주장",
+        "## 논증 구조",
+        "## 산업사회학적·현장기반 해석",
+        "## 앞으로 볼 질문",
+        "## 카드뉴스 재사용안",
+        "## 디스코드 브리핑 재사용안",
+        "## 출처",
+        "공개 URL만 사용",
+    ]
+    for marker in expected_markers:
+        assert marker in text
+    assert "메일 본문/비밀값은 게시하지 않고" in text
+
