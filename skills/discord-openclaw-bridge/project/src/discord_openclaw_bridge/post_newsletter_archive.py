@@ -7,6 +7,7 @@ from collections import OrderedDict
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -73,6 +74,34 @@ def _source_meta(item: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _canonical_dedupe_url(url: str) -> str:
+    text = _sanitize_public_url(_clean(url))
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text.lower().rstrip("/")
+    path = parts.path.rstrip("/") or parts.path
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
+
+
+def _dedupe_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    deduped: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    duplicate_count = 0
+    for item in items:
+        url_key = _canonical_dedupe_url(_clean(item.get("url")))
+        if not url_key:
+            continue
+        if url_key in seen_urls:
+            duplicate_count += 1
+            continue
+        seen_urls.add(url_key)
+        deduped.append(item)
+    return deduped, duplicate_count
+
+
 def _group_items_by_topic(items: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
     grouped: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
     for item in items:
@@ -122,7 +151,8 @@ def render_newsletter_archive_messages(
     max_items_per_topic: int = 12,
 ) -> list[str]:
     run_date = _clean(payload.get("date") or date.today().isoformat())
-    items = [item for item in payload.get("items") or [] if isinstance(item, dict)]
+    raw_items = [item for item in payload.get("items") or [] if isinstance(item, dict)]
+    items, duplicate_count = _dedupe_items(raw_items)
     grouped = _group_items_by_topic(items)
     total_rendered = sum(min(len(topic_items), max_items_per_topic) for _topic, topic_items in grouped)
     total_links = sum(len(topic_items) for _topic, topic_items in grouped)
@@ -135,6 +165,8 @@ def render_newsletter_archive_messages(
         f"- 토픽: {len(grouped)}개",
         f"- 공개 원본 링크: {total_links}개",
     ]
+    if duplicate_count:
+        lines.append(f"- 중복 제거: {duplicate_count}개")
     if total_rendered != total_links:
         lines.append(f"- 표시: 토픽당 최대 {max_items_per_topic}개, 추가 링크는 raw archive에 보존")
     lines.append("")
@@ -193,13 +225,18 @@ async def _purge_previous_archive_threads(
     active_threads_url: str,
     *,
     headers: dict[str, str],
+    parent_channel_id: int,
+    thread_name: str,
 ) -> int:
     response = await client.get(active_threads_url, headers=headers)
     response.raise_for_status()
     purged = 0
+    target_name = _clean(thread_name, limit=90)
     for thread in response.json().get("threads") or []:
         name = str(thread.get("name") or "")
-        if not any(marker in name for marker in NEWSLETTER_ARCHIVE_THREAD_NAME_MARKERS):
+        if str(thread.get("parent_id") or "") != str(parent_channel_id):
+            continue
+        if name != target_name or not any(marker in name for marker in NEWSLETTER_ARCHIVE_THREAD_NAME_MARKERS):
             continue
         thread_id = str(thread.get("id") or "")
         if not thread_id:
@@ -252,7 +289,7 @@ async def run() -> None:
     channel_id = _required_snowflake("DISCORD_NEWSLETTER_ARCHIVE_CHANNEL_ID")
     source = Path(os.environ.get("NEWSLETTER_ARCHIVE_SOURCE", str(_latest_archive_path()))).expanduser()
     max_items_per_topic = int(os.environ.get("NEWSLETTER_ARCHIVE_MAX_ITEMS_PER_TOPIC", "12"))
-    purge_previous = os.environ.get("DISCORD_PURGE_PREVIOUS_NEWSLETTER_ARCHIVE", "0").strip().lower() in {
+    purge_previous = os.environ.get("DISCORD_PURGE_PREVIOUS_NEWSLETTER_ARCHIVE", "1").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -271,18 +308,21 @@ async def run() -> None:
         target_channel_id = channel_id
         thread_id = ""
         if channel_type in FORUM_CHANNEL_TYPES:
+            thread_name = f"{_clean(payload.get('date') or date.today().isoformat())} 뉴스레타 아카이브"
             if purge_previous and guild_id:
                 purged = await _purge_previous_archive_threads(
                     client,
                     f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
                     headers=headers,
+                    parent_channel_id=channel_id,
+                    thread_name=thread_name,
                 )
             header_chunks = _split_discord_messages(messages[0])
             thread_id = await _create_forum_archive_thread(
                 client,
                 f"https://discord.com/api/v10/channels/{channel_id}",
                 headers=headers,
-                name=f"{_clean(payload.get('date') or date.today().isoformat())} 뉴스레타 아카이브",
+                name=thread_name,
                 content=header_chunks[0],
             )
             target_channel_id = int(thread_id)
