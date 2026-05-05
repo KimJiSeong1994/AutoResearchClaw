@@ -636,9 +636,17 @@ def test_header_synthesizes_cross_topic_theme_when_diverse() -> None:
     }
     header = render_card_news_messages(payload, max_cards=2)[0]
 
-    assert "오늘의 축" in header
+    assert "오늘의 축" not in header
+    assert "무엇을 기억하고" in header
     assert "검색/RAG/지식그래프" in header
     assert "LLM/에이전트" in header
+    for boilerplate in (
+        "공개 링크를 한 번에 소비하기보다",
+        "토픽 간 연결과 검증 질문",
+        "같은 변화 방향을 가리키는지",
+        "후속 검토를 좁힌다",
+    ):
+        assert boilerplate not in header
 
 
 def test_lean_disclaimer_variant_for_excerpt_present() -> None:

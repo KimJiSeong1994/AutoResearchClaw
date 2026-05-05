@@ -32,8 +32,8 @@ CARD_NEWS_THREAD_NAME_MARKERS = (
 
 CARD_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━"
 GENERIC_TOPIC = "기타 테크 리포트"
-LEAN_DISCLAIMER_WITH_EXCERPT = "공개 본문만으로는 추가 근거를 확인하지 못했습니다."
-LEAN_DISCLAIMER_WITHOUT_EXCERPT = "현재 카드에는 원문 발췌가 포함되지 않았습니다."
+LEAN_DISCLAIMER_WITH_EXCERPT = "확인 한계: 위 문장은 공개 페이지 요약/초록 기준입니다. 세부 실험 조건은 원문에서 확인해야 합니다."
+LEAN_DISCLAIMER_WITHOUT_EXCERPT = "확인 한계: 공개 요약/초록을 확보하지 못했습니다. 제목만으로 결론을 내리지 않습니다."
 CONNECTIVES = ("따라서", "다만", "구체적으로", "한편")
 TOPIC_PRIORITY: dict[str, int] = {
     "검색/RAG/지식그래프": 10,
@@ -715,23 +715,91 @@ def _distinct_topics_in_order(cards: list[dict[str, Any]]) -> list[str]:
     return sorted(seen, key=lambda t: TOPIC_PRIORITY.get(t, 800))
 
 
+def _evidence_snippet(item: dict[str, Any], *, limit: int = 220) -> str:
+    raw_title = _raw_title(item)
+    candidates: list[str] = [
+        _clean(item.get("hook") or item.get("why_now")),
+        _clean(item.get("core_change") or item.get("claim") or item.get("thesis")),
+        *_summary_lines(item),
+        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism")),
+        _clean(item.get("why_matters") or item.get("evidence")),
+        _substantive_excerpt(item, raw_title=raw_title),
+    ]
+    for candidate in candidates:
+        text = _first_sentence(_normalize_register(_clean(candidate, limit=limit)))
+        if text:
+            return text
+    return ""
+
+
+def _evidence_records(cards: list[dict[str, Any]], *, limit: int = 4) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for item in cards:
+        snippet = _evidence_snippet(item, limit=240)
+        if not snippet:
+            continue
+        records.append(
+            {
+                "title": _title(item),
+                "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
+                "snippet": snippet,
+            }
+        )
+        if len(records) >= limit:
+            break
+    return records
+
+
+def _strip_sentence_end(text: str) -> str:
+    return _clean(text).rstrip(".!?。")
+
+
+def _decision_axis(topics: list[str], records: list[dict[str, str]]) -> str:
+    topic_text = " ".join(topics)
+    title_text = " ".join(record["title"] for record in records).lower()
+    if "검색/RAG/지식그래프" in topic_text and "LLM/에이전트" in topic_text:
+        return "에이전트가 무엇을 기억하고, 어떤 검색 근거를 신뢰하며, 그 결과를 어떻게 평가할지"
+    if "검색/RAG/지식그래프" in topic_text:
+        return "RAG를 단순 벡터 검색이 아니라 그래프 구조·키워드 검색·재랭킹을 결합한 근거 파이프라인으로 설계할지"
+    if "LLM/에이전트" in topic_text:
+        return "장기 실행 에이전트의 메모리, 도구 호출, 비용 통제를 제품 구조 안에 어떻게 넣을지"
+    if "멀티모달/비전" in topic_text or "vision-language" in title_text:
+        return "범용 비전-언어 모델을 도메인 데이터와 평가 조건에 맞게 정렬할지"
+    if "오픈소스/코드" in topic_text:
+        return "논문 구현체를 재현 가능한 코드와 운영 가능한 실험 자산으로 전환할지"
+    return "새 기술 신호를 제품 의사결정, 평가 조건, 운영 책임으로 번역할지"
+
+
+def _evidence_count(cards: list[dict[str, Any]]) -> int:
+    return sum(1 for item in cards if _evidence_snippet(item))
+
+
+def _thin_titles(cards: list[dict[str, Any]], *, limit: int = 2) -> list[str]:
+    titles: list[str] = []
+    for item in cards:
+        if _evidence_snippet(item):
+            continue
+        title = _title(item)
+        if title and title not in titles:
+            titles.append(title)
+        if len(titles) >= limit:
+            break
+    return titles
+
+
 def _theme_sentence(cards: list[dict[str, Any]]) -> str:
     distinct = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
-    if len(distinct) >= 2:
-        return f"{distinct[0]}와 {distinct[1]}가 오늘의 축입니다."
+    records = _evidence_records(cards, limit=2)
+    axis = _decision_axis(distinct, records)
+    if len(records) >= 2:
+        return f"{records[0]['title']}와 {records[1]['title']}를 함께 읽으면 쟁점은 {axis}입니다."
+    if records:
+        return f"{records[0]['title']}가 던지는 질문은 {axis}입니다."
     for item in cards:
         why_now = _clean(item.get("why_now"), limit=240)
         if why_now:
             return _normalize_register(_first_sentence(why_now))
-    for item in cards:
-        summary = _summary_lines(item)
-        if summary:
-            return _normalize_register(summary[0])
-    for item in cards:
-        excerpt = _substantive_excerpt(item, raw_title=_raw_title(item))
-        if excerpt:
-            return _normalize_register(_first_sentence(excerpt))
-    return "오늘은 본문 근거가 얇은 읽기 후보 중심입니다."
+    return f"오늘 수집분은 {axis}를 확인해야 하는 후보로 남았습니다."
 
 
 def _hero_image_description(topics: list[str]) -> str:
@@ -744,68 +812,140 @@ def _hero_image_description(topics: list[str]) -> str:
 
 def _three_line_summary(cards: list[dict[str, Any]], theme: str) -> list[str]:
     topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
-    first_title = _title(cards[0]) if cards else "공개 기술 후보"
-    topic_text = "·".join(topics[:2]) if topics else "기술 후보"
-    return [
-        _clean(theme, limit=120),
-        f"{first_title} 등 {len(cards)}개 공개 출처를 {topic_text} 변화 축으로 묶었습니다.",
-        "각 카드는 원문 링크에서 확인 가능한 근거만 남기고, 메일 본문·토큰·비밀값은 제외합니다.",
-    ]
+    records = _evidence_records(cards, limit=2)
+    axis = _decision_axis(topics, records)
+    evidence_count = _evidence_count(cards)
+    if records:
+        first = f"{records[0]['title']}: {records[0]['snippet']}"
+    else:
+        first = theme
+    if len(records) >= 2:
+        second = f"{records[1]['title']}까지 함께 보면 관건은 {axis}입니다."
+    else:
+        second = f"관건은 {axis}입니다."
+    third = f"공개 요약·초록이 있는 {evidence_count}/{len(cards)}건만 본문 근거로 쓰고, 메일 본문·토큰·비밀값은 제외했습니다."
+    return [_clean(first, limit=170), _clean(second, limit=170), _clean(third, limit=170)]
 
 
 def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    records = _evidence_records(cards, limit=2)
+    axis = _decision_axis(topics, records)
+    if records:
+        basis = "; ".join(
+            f"{record['title']}는 “{_strip_sentence_end(record['snippet'])}”라고 말합니다"
+            for record in records
+        )
+        return _clean(f"핵심은 {axis}입니다. 근거는 {basis}.", limit=420)
     for item in cards:
         claim = _normalize_register(
             _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=180)
         )
         if claim:
-            return f"{claim} 이 흐름은 단일 링크 묶음보다 문제의식-근거-현장 질문으로 읽어야 합니다."
-    return f"{theme} 단순 링크 나열보다 토픽 간 연결과 검증 질문을 함께 읽어야 합니다."
+            return claim
+    return theme
 
 
 def _argument_structure(cards: list[dict[str, Any]], theme: str) -> list[str]:
     topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
-    topic_text = ", ".join(topics[:3]) if topics else "여러 기술 후보"
-    evidence_count = sum(
-        1
-        for item in cards
-        if _clean(item.get("evidence") or item.get("why_matters"))
-        or bool(_summary_lines(item))
-        or bool(_substantive_excerpt(item, raw_title=_raw_title(item)))
+    records = _evidence_records(cards, limit=3)
+    axis = _decision_axis(topics, records)
+    evidence_count = _evidence_count(cards)
+    if records:
+        observation = "관찰: " + "; ".join(
+            f"{record['title']}는 “{_strip_sentence_end(record['snippet'])}”라고 말합니다"
+            for record in records[:2]
+        )
+    else:
+        observation = f"관찰: {theme}"
+    thin = _thin_titles(cards)
+    tension_tail = (
+        f" 다만 {', '.join(thin)}는 공개 요약이 얇아 제목 신호로만 다룹니다."
+        if thin
+        else ""
     )
     return [
-        f"관찰: {theme}",
-        f"메커니즘: {topic_text}에서 공개 원문·요약·토픽 단서가 같은 변화 방향을 가리키는지 본다.",
-        f"긴장: 연구 성능, 운영 비용, 제품 적용 조건이 같은 속도로 움직이지 않을 수 있다.",
-        f"반론: 근거가 얇은 후보는 홍보 문구나 제목 신호일 수 있어 원문 조건 확인이 필요하다.",
-        f"판단: 현재 렌더링은 {len(cards)}개 후보 중 근거 문장 {evidence_count}개를 우선 노출해 후속 검토를 좁힌다.",
+        _clean(observation, limit=520),
+        f"메커니즘: {axis} 때문에 도입자는 모델 성능뿐 아니라 인덱스 구조, 메모리 저장 방식, 평가 로그를 함께 설계해야 합니다.",
+        f"긴장: 공개 근거가 있는 항목은 {evidence_count}/{len(cards)}건입니다.{tension_tail} 기술 선택을 서두르면 성능 수치보다 운영 비용과 검증 책임이 먼저 누락됩니다.",
+        "반론: 공개 요약·초록은 저자나 매체가 제공한 1차 설명이므로, 성능 우위나 제품 효과는 원문 실험 조건을 확인하기 전까지 보류해야 합니다.",
+        f"판단: 현재 확실히 말할 수 있는 결론은 {axis}가 반복 쟁점이라는 점입니다. 채택 여부는 원문 링크의 데이터셋, 지연시간, 재현 코드, 보안 조건을 확인한 뒤 판단합니다.",
     ]
 
 
 def _industry_interpretation(cards: list[dict[str, Any]]) -> str:
     topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    records = _evidence_records(cards, limit=1)
+    axis = _decision_axis(topics, records)
+    lead = records[0]["title"] if records else "이번 브리핑"
     if not topics:
-        return "현장에서는 후보 링크를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 합니다."
+        return f"{lead}는 기술 후보를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 함을 보여줍니다."
     return (
-        f"{topics[0]} 흐름은 모델 성능만의 문제가 아니라 데이터 흐름, 평가 지표, 운영 조직의 "
-        "책임 배분을 함께 바꾸는 신호입니다."
+        f"{lead}의 쟁점은 연구 성과 자체보다 {axis}를 조직이 어떻게 책임질지에 가깝습니다. "
+        "현장에서는 데이터 소유권, 인덱스 갱신 주기, 실패 로그, 비용 배분을 정하지 않으면 좋은 모델도 운영 리스크로 바뀝니다."
     )
 
 
 def _future_questions(cards: list[dict[str, Any]]) -> list[str]:
     questions: list[str] = []
-    for item in cards:
-        for seed in [*_summary_lines(item), _clean(item.get("why_now")), _clean(item.get("evidence"))]:
-            qtext = _question_or_transform(_normalize_register(seed))
-            if qtext and qtext not in questions:
-                questions.append(qtext)
-            if len(questions) >= 2:
-                break
+    for record in _evidence_records(cards, limit=4):
+        title = _clean(record["title"], limit=70)
+        topic = record["topic"]
+        if topic == "검색/RAG/지식그래프":
+            qtext = f"{title}의 검색 구조는 우리 문서 권한, 최신성, 지연시간 조건에서도 같은 이득을 내는가?"
+        elif topic == "LLM/에이전트":
+            qtext = f"{title}의 에이전트 설계는 장기 실행 비용과 실패 복구 책임을 어디에 배치하는가?"
+        elif topic == "멀티모달/비전":
+            qtext = f"{title}의 평가 결과는 특정 도메인 이미지와 텍스트 분포가 바뀌어도 유지되는가?"
+        elif topic == "논문/리서치":
+            qtext = f"{title}의 데이터셋·비교군·재현 코드는 실제 도입 판단에 충분한가?"
+        else:
+            qtext = f"{title}가 제시한 변화는 제품 지표, 운영 비용, 사용자 신뢰 중 무엇을 먼저 바꾸는가?"
+        if qtext not in questions:
+            questions.append(qtext)
         if len(questions) >= 2:
             break
     while len(questions) < 2:
-        questions.append("원문이 제시한 평가 조건과 실제 운영 환경의 제약은 어디에서 달라지는가?")
+        fallback = (
+            "공개 요약이 없는 항목은 원문 실험 조건을 확인했을 때 같은 주장으로 유지되는가?"
+            if not questions
+            else "이 기술을 제품에 넣을 때 정확도, 비용, 보안 책임 중 어느 항목이 병목이 되는가?"
+        )
+        if fallback not in questions:
+            questions.append(fallback)
     return questions[:2]
+
+
+def _why_now_paragraph(cards: list[dict[str, Any]], theme: str) -> str:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    records = _evidence_records(cards, limit=2)
+    axis = _decision_axis(topics, records)
+    if len(records) >= 2:
+        return _clean(
+            f"{records[0]['title']}는 “{_strip_sentence_end(records[0]['snippet'])}”라는 문제를 제기하고, "
+            f"{records[1]['title']}는 “{_strip_sentence_end(records[1]['snippet'])}”라는 다른 근거를 보탭니다. "
+            f"두 항목을 같은 화면에 놓으면 지금의 질문은 새 도구가 나왔다는 소식이 아니라 {axis}입니다.",
+            limit=650,
+        )
+    if records:
+        return _clean(
+            f"{records[0]['title']}의 공개 요약은 “{_strip_sentence_end(records[0]['snippet'])}”라고 말합니다. "
+            f"그래서 이번 이슈는 단일 링크 소개가 아니라 {axis}라는 운영 질문으로 읽어야 합니다.",
+            limit=520,
+        )
+    return theme
+
+
+def _source_basis_sentence(cards: list[dict[str, Any]], *, item_count: int) -> str:
+    records = _evidence_records(cards, limit=3)
+    evidence_count = _evidence_count(cards)
+    if records:
+        titles = ", ".join(record["title"] for record in records)
+        return (
+            f"근거: 선별 {len(cards)}건 / 수집 {item_count}건 중 공개 요약·초록이 확인된 "
+            f"{evidence_count}건을 본문 근거로 사용했습니다. 대표 근거는 {titles}입니다."
+        )
+    return f"근거: 선별 {len(cards)}건 / 수집 {item_count}건 중 공개 요약이 부족해 제목과 원문 링크만 남겼습니다."
 
 
 def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_count: int) -> str:
@@ -826,11 +966,11 @@ def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_c
         f"> 3. {summary[2]}",
         "",
         "## 왜 지금 이 이슈인가",
-        f"{topic_text}에서 나온 공개 링크를 한 번에 소비하기보다, 지금 어떤 문제가 반복되는지 읽어야 합니다.",
+        _why_now_paragraph(cards, theme),
         "",
         "## 핵심 주장",
         f"- 주장: {_article_thesis(cards, theme)}",
-        f"- 근거: 선별 {len(cards)}건 / 수집 {item_count}건의 공개 URL과 토픽 근거만 사용했습니다.",
+        f"- {_source_basis_sentence(cards, item_count=item_count)}",
         "",
         "## 논증 구조",
     ]
@@ -845,7 +985,7 @@ def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_c
         f"- {questions[1]}",
         "",
         "## 카드뉴스·Discord 재사용안",
-        "아래 메시지들은 이 글의 섹션을 훅-맥락-핵심 변화-근거-CTA 카드로 쪼갠 재사용 블록입니다.",
+        "아래 카드는 핵심 쟁점, 공개 근거, 확인 한계를 분리해 Discord에서 바로 토론할 수 있게 나눈 블록입니다.",
         "",
         "## 출처",
         "각 카드 하단의 공개 URL만 사용합니다.",
