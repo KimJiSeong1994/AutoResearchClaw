@@ -577,10 +577,13 @@ def _is_tech_relevant_item(item: dict[str, Any]) -> bool:
             _clean(item.get("source_name") or item.get("sender") or item.get("newsletter_name")),
             _clean(item.get("primary_topic_display")),
             _clean(item.get("public_excerpt") or item.get("article_description")),
-            _sanitize_public_url(_clean(item.get("url"))),
         ]
     ).lower()
-    return any(term in haystack for term in _TECH_RELEVANCE_TERMS)
+    for term in _TECH_RELEVANCE_TERMS:
+        escaped = re.escape(term)
+        if re.search(rf"(?<![0-9a-z]){escaped}(?![0-9a-z])", haystack):
+            return True
+    return False
 
 
 def _item_quality_score(item: dict[str, Any]) -> int:
@@ -1359,7 +1362,7 @@ async def run() -> None:
         "no",
         "off",
     }
-    enrich_limit = int(os.environ.get("DISCORD_CARD_NEWS_ENRICH_LIMIT", "24"))
+    enrich_limit = int(os.environ.get("DISCORD_CARD_NEWS_ENRICH_LIMIT", "80"))
     headers = {"Authorization": f"Bot {token}"}
     async with httpx.AsyncClient(timeout=30) as client:
         if enrich_public_urls:
