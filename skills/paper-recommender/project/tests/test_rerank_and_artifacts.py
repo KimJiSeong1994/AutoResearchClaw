@@ -359,7 +359,16 @@ def test_trend_report_validation_drops_unknown_paper_ids() -> None:
         {"p1"},
         1,
     )
-    assert report["clusters"] == [{"title": "A", "summary": "S", "why_it_matters": "W", "paper_ids": ["p1"]}]
+    assert report["clusters"] == [
+        {
+            "title": "A",
+            "summary": "S",
+            "technical_point": "",
+            "researcher_action": "",
+            "why_it_matters": "W",
+            "paper_ids": ["p1"],
+        }
+    ]
     assert report["weak_signals"] == ["&lt;unsafe&gt;"]
 
 
