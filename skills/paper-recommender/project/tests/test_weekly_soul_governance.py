@@ -251,3 +251,32 @@ def test_fallback_queries_skip_soul_governance_noise() -> None:
     assert "heterogeneous temporal graph neural networks" in joined
     assert "Changelog" not in joined
     assert "suppress generic" not in joined
+
+
+def test_fallback_queries_skip_explicit_provenance_and_korean_noise_labels() -> None:
+    settings = SimpleNamespace(
+        profile=SimpleNamespace(seed_topics=[]),
+        weekly_report=SimpleNamespace(max_queries=10),
+    )
+    queries = fallback_trend_queries(
+        settings,
+        "\n".join(
+            [
+                "graph retrieval augmented generation",
+                "provenance: compact card source",
+                "last updated: 2026-05-04",
+                "운영 메모: 브리핑 포맷 변경",
+                "변경 로그: suppress generic AI product news",
+                "temporal graph benchmark evaluation",
+            ]
+        ),
+        {"keywords": []},
+    )
+
+    joined = "\n".join(q["query"] for q in queries)
+    assert "graph retrieval augmented generation" in joined
+    assert "temporal graph benchmark evaluation" in joined
+    assert "provenance" not in joined
+    assert "last updated" not in joined
+    assert "운영" not in joined
+    assert "변경" not in joined
