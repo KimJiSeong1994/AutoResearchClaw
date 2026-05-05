@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-label="현장 데이터가 모델을 다시 설계한다: VLM 도메인 정렬, 제품 피드백, 사용자 신뢰를 설명하는 기술 카드뉴스 대표 이미지">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070B18"/>
+      <stop offset="0.46" stop-color="#0B1020"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <radialGradient id="cyanGlow" cx="48%" cy="42%" r="54%">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.45"/>
+      <stop offset="0.42" stop-color="#14B8A6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violetGlow" cx="77%" cy="38%" r="42%">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.36"/>
+      <stop offset="0.55" stop-color="#8B5CF6" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="0.52" stop-color="#14B8A6"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1F2937" stop-opacity="0.80"/>
+      <stop offset="1" stop-color="#0F172A" stop-opacity="0.92"/>
+    </linearGradient>
+    <filter id="blur" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="softShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="nodeGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M 64 0 L 0 0 0 64" fill="none" stroke="#E5E7EB" stroke-width="1" stroke-opacity="0.055"/>
+    </pattern>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M 1 1 L 12 7 L 1 13 Z" fill="#F59E0B"/>
+    </marker>
+    <style>
+      .title { font-family: 'Apple SD Gothic Neo','Noto Sans CJK KR','Pretendard','Arial Unicode MS',sans-serif; font-weight: 800; fill: #F8FAFC; letter-spacing: -2px; }
+      .subtitle { font-family: 'Apple SD Gothic Neo','Noto Sans CJK KR','Pretendard','Arial Unicode MS',sans-serif; font-weight: 600; fill: #BFEFFF; letter-spacing: -0.3px; }
+      .label { font-family: 'Apple SD Gothic Neo','Noto Sans CJK KR','Pretendard','Arial Unicode MS',sans-serif; font-weight: 700; fill: #E5E7EB; }
+      .small { font-family: 'Apple SD Gothic Neo','Noto Sans CJK KR','Pretendard','Arial Unicode MS',sans-serif; font-weight: 600; fill: #9CA3AF; }
+      .hair { stroke: #94A3B8; stroke-opacity: 0.22; stroke-width: 2; fill: none; }
+      .thin { stroke: #22D3EE; stroke-opacity: 0.45; stroke-width: 2.2; fill: none; }
+      .amber { stroke: #F59E0B; stroke-opacity: 0.82; stroke-width: 5; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  <rect x="0" y="0" width="1920" height="1080" fill="url(#cyanGlow)"/>
+  <rect x="0" y="0" width="1920" height="1080" fill="url(#violetGlow)"/>
+
+  <!-- abstract topology-aware model manifold -->
+  <g transform="translate(565 435)" filter="url(#softShadow)">
+    <ellipse cx="0" cy="0" rx="320" ry="210" fill="#020617" fill-opacity="0.52" stroke="#22D3EE" stroke-opacity="0.34" stroke-width="2"/>
+    <ellipse cx="0" cy="0" rx="250" ry="152" fill="none" stroke="#22D3EE" stroke-opacity="0.34" stroke-width="4"/>
+    <path d="M-260,-34 C-188,-152 -52,-156 20,-82 C92,-8 208,-52 275,54" class="thin"/>
+    <path d="M-238,80 C-128,6 -78,138 24,82 C130,22 184,132 274,64" class="thin"/>
+    <path d="M-185,-118 C-92,-32 -162,84 -52,118 C68,154 108,46 212,112" class="thin"/>
+    <path d="M-300,8 C-198,36 -164,-72 -54,-36 C68,4 104,-118 246,-76" stroke="#8B5CF6" stroke-opacity="0.42" stroke-width="2.4" fill="none"/>
+
+    <g opacity="0.62">
+      <ellipse cx="-126" cy="-28" rx="96" ry="58" fill="none" stroke="#8B5CF6" stroke-width="4"/>
+      <ellipse cx="76" cy="18" rx="114" ry="68" fill="none" stroke="#14B8A6" stroke-width="4"/>
+      <ellipse cx="-16" cy="-8" rx="214" ry="126" fill="none" stroke="#22D3EE" stroke-width="2.4" stroke-dasharray="10 16"/>
+    </g>
+
+    <g filter="url(#nodeGlow)">
+      <circle cx="-260" cy="-34" r="9" fill="#22D3EE"/>
+      <circle cx="-198" cy="36" r="8" fill="#14B8A6"/>
+      <circle cx="-128" cy="-116" r="8" fill="#8B5CF6"/>
+      <circle cx="-52" cy="118" r="10" fill="#22D3EE"/>
+      <circle cx="20" cy="-82" r="9" fill="#14B8A6"/>
+      <circle cx="76" cy="18" r="12" fill="#F59E0B"/>
+      <circle cx="154" cy="-44" r="8" fill="#22D3EE"/>
+      <circle cx="212" cy="112" r="10" fill="#8B5CF6"/>
+      <circle cx="275" cy="54" r="8" fill="#F59E0B"/>
+    </g>
+    <text x="-192" y="252" class="label" font-size="24">도메인 표현 공간</text>
+  </g>
+
+  <!-- domain evidence clusters -->
+  <g transform="translate(185 610)">
+    <rect x="0" y="0" width="250" height="130" rx="32" fill="url(#panel)" stroke="#22D3EE" stroke-opacity="0.28"/>
+    <path d="M34 83 C70 40 102 110 138 64 C164 31 192 58 216 32" fill="none" stroke="#22D3EE" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="70" cy="43" r="15" fill="#F59E0B" opacity="0.88"/>
+    <text x="32" y="108" class="small" font-size="21">현장 이미지 신호</text>
+  </g>
+  <g transform="translate(462 765)">
+    <rect x="0" y="0" width="250" height="130" rx="32" fill="url(#panel)" stroke="#8B5CF6" stroke-opacity="0.34"/>
+    <path d="M72 34 L108 28 L138 52 L128 98 L80 102 L58 55 Z" fill="#8B5CF6" fill-opacity="0.32" stroke="#C4B5FD" stroke-width="5"/>
+    <path d="M151 36 C190 52 202 91 166 101 C138 109 124 84 144 56" fill="none" stroke="#22D3EE" stroke-width="5"/>
+    <text x="32" y="108" class="small" font-size="21">전문 도메인 조건</text>
+  </g>
+  <g transform="translate(180 780)">
+    <rect x="0" y="0" width="238" height="118" rx="30" fill="url(#panel)" stroke="#14B8A6" stroke-opacity="0.30"/>
+    <rect x="35" y="30" width="74" height="52" rx="10" fill="#14B8A6" fill-opacity="0.22" stroke="#5EEAD4" stroke-width="4"/>
+    <path d="M126 76 C150 22 196 24 212 76" fill="none" stroke="#F59E0B" stroke-width="5" stroke-linecap="round"/>
+    <text x="32" y="100" class="small" font-size="20">평가 환경</text>
+  </g>
+
+  <!-- bridge from model to product -->
+  <g>
+    <path d="M850 503 C1018 448 1110 424 1240 424" stroke="url(#lineGrad)" stroke-width="10" fill="none" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <path d="M852 592 C1017 696 1115 724 1270 666" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="14 18"/>
+    <g transform="translate(912 462)">
+      <rect x="0" y="0" width="248" height="62" rx="31" fill="#020617" fill-opacity="0.72" stroke="#F59E0B" stroke-opacity="0.55"/>
+      <text x="28" y="40" class="label" font-size="23">정렬 → 피드백 → 신뢰</text>
+    </g>
+  </g>
+
+  <!-- product feedback dashboard -->
+  <g transform="translate(1232 226)" filter="url(#softShadow)">
+    <rect x="0" y="0" width="512" height="564" rx="44" fill="url(#panel)" stroke="#E5E7EB" stroke-opacity="0.15"/>
+    <rect x="34" y="34" width="444" height="72" rx="22" fill="#020617" fill-opacity="0.54"/>
+    <circle cx="72" cy="70" r="13" fill="#22D3EE"/>
+    <circle cx="112" cy="70" r="13" fill="#14B8A6"/>
+    <circle cx="152" cy="70" r="13" fill="#F59E0B"/>
+    <text x="202" y="78" class="label" font-size="25">AI-native 운영 루프</text>
+
+    <g transform="translate(40 150)">
+      <rect x="0" y="0" width="198" height="128" rx="26" fill="#0B1220" stroke="#22D3EE" stroke-opacity="0.26"/>
+      <text x="24" y="43" class="small" font-size="21">사용 맥락</text>
+      <path d="M25 91 H164" stroke="#22D3EE" stroke-width="8" stroke-linecap="round" opacity="0.78"/>
+      <path d="M25 66 H128" stroke="#14B8A6" stroke-width="8" stroke-linecap="round" opacity="0.58"/>
+    </g>
+    <g transform="translate(274 150)">
+      <rect x="0" y="0" width="198" height="128" rx="26" fill="#0B1220" stroke="#8B5CF6" stroke-opacity="0.30"/>
+      <text x="24" y="43" class="small" font-size="21">성과 신호</text>
+      <path d="M28 91 C60 54 92 100 122 62 C143 36 166 48 178 32" fill="none" stroke="#8B5CF6" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(40 312)">
+      <rect x="0" y="0" width="198" height="128" rx="26" fill="#0B1220" stroke="#F59E0B" stroke-opacity="0.34"/>
+      <text x="24" y="43" class="small" font-size="21">비용 변동</text>
+      <path d="M28 88 L66 62 L104 75 L146 42 L176 62" fill="none" stroke="#F59E0B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="translate(274 312)">
+      <rect x="0" y="0" width="198" height="128" rx="26" fill="#0B1220" stroke="#14B8A6" stroke-opacity="0.34"/>
+      <text x="24" y="43" class="small" font-size="21">신뢰 보정</text>
+      <path d="M100 34 L152 55 V88 C152 111 127 125 100 132 C73 125 48 111 48 88 V55 Z" transform="scale(.72) translate(38 30)" fill="#14B8A6" fill-opacity="0.22" stroke="#5EEAD4" stroke-width="7"/>
+      <path d="M74 85 L96 106 L136 64" transform="scale(.72) translate(38 30)" fill="none" stroke="#F8FAFC" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <path d="M88 508 C185 585 335 584 428 506" class="amber" marker-end="url(#arrow)"/>
+    <text x="126" y="512" class="small" font-size="22">제품에서 다시 데이터로</text>
+  </g>
+
+  <!-- large feedback loop accents -->
+  <g opacity="0.92">
+    <path d="M1196 836 C946 966 574 944 346 790" stroke="#22D3EE" stroke-width="5" stroke-opacity="0.36" fill="none" stroke-linecap="round" stroke-dasharray="20 18"/>
+    <path d="M1392 184 C1110 58 770 78 548 215" stroke="#8B5CF6" stroke-width="5" stroke-opacity="0.31" fill="none" stroke-linecap="round" stroke-dasharray="20 18"/>
+  </g>
+
+  <!-- crisp title overlay kept above topology lines for Discord preview legibility -->
+  <g transform="translate(92 94)">
+    <rect x="-22" y="-22" width="770" height="302" rx="34" fill="#020617" fill-opacity="0.58" stroke="#22D3EE" stroke-opacity="0.10"/>
+    <rect x="0" y="0" width="145" height="42" rx="21" fill="#22D3EE" fill-opacity="0.18" stroke="#22D3EE" stroke-opacity="0.52"/>
+    <text x="22" y="28" class="small" font-size="20" fill="#A5F3FC">TECH BRIEFING</text>
+    <text x="0" y="108" class="title" font-size="72">현장 데이터가</text>
+    <text x="0" y="188" class="title" font-size="72">모델을 다시 설계한다</text>
+    <text x="2" y="248" class="subtitle" font-size="31">VLM 도메인 정렬 · 제품 피드백 · 사용자 신뢰</text>
+    <path d="M0 286 H720" stroke="url(#lineGrad)" stroke-width="5" stroke-linecap="round" opacity="0.75"/>
+  </g>
+
+  <!-- footer reading frame -->
+  <g transform="translate(112 965)">
+    <rect x="0" y="0" width="946" height="54" rx="27" fill="#020617" fill-opacity="0.56" stroke="#94A3B8" stroke-opacity="0.15"/>
+    <text x="28" y="36" class="small" font-size="23">벤치마크 숫자보다 중요한 것: 도메인 근거, 피드백 루프, 신뢰 가능한 운영 조건</text>
+  </g>
+</svg>
