@@ -849,6 +849,10 @@ def _strip_sentence_end(text: str) -> str:
 def _decision_axis(topics: list[str], records: list[dict[str, str]]) -> str:
     topic_text = " ".join(topics)
     title_text = " ".join([record["title"] + " " + record.get("takeaway", "") for record in records]).lower()
+    if ("vision-language" in title_text or "비전-언어" in title_text) and (
+        "ai-native" in title_text or "ai native" in title_text
+    ):
+        return "모델 성능을 현장 데이터, 제품 피드백, 사용자 신뢰 구조에 맞게 다시 설계할지"
     if "검색/RAG/지식그래프" in topic_text and "LLM/에이전트" in topic_text:
         return "에이전트가 무엇을 기억하고, 어떤 검색 근거를 신뢰하며, 그 결과를 어떻게 평가할지"
     if "검색/RAG/지식그래프" in topic_text:
