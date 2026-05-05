@@ -296,15 +296,11 @@ def merge_manual_link_items(
     relay_items: list[dict[str, object]],
     manual_items: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    merged = list(relay_items)
-    seen = {
-        (
-            str(item.get("article_title") or item.get("title") or "").lower(),
-            str(item.get("url") or "").lower(),
-        )
-        for item in merged
-    }
-    for item in manual_items:
+    merged: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    # Claw-approved Miner links are explicit operator selections, so keep them
+    # ahead of bulk relay items; otherwise topic/card limits can hide them.
+    for item in [*manual_items, *relay_items]:
         key = (
             str(item.get("article_title") or item.get("title") or "").lower(),
             str(item.get("url") or "").lower(),

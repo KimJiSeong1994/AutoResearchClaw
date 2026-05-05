@@ -616,10 +616,10 @@ def test_apps_script_relay_ingest_merges_approved_miner_manual_links(tmp_path: P
     raw = json.loads((tmp_path / "wiki" / "raw" / "newsletters" / "2026-05-05" / "items.json").read_text())
     titles = [item["article_title"] for item in raw["items"]]
     assert titles == [
-        "RAG relay item",
         "Ranking Engineer Agent (REA): The Autonomous AI Agent",
+        "RAG relay item",
     ]
-    manual_item = raw["items"][1]
+    manual_item = raw["items"][0]
     assert manual_item["kind"] == "manual-link"
     assert manual_item["sender"] == "집현전-광부 승인 큐"
     assert manual_item["primary_topic_display"] == "LLM/에이전트"
