@@ -13,8 +13,30 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 - `/openclaw prompt:<text>` — ask OpenClaw from the allowlisted channel
 - `/openclaw_status` — lightweight OpenClaw health check
 - `/jiphyeonjeon_briefing` — post the latest Jiphyeonjeon-Claw AI briefing from `DISCORD_BRIEFING_SOURCE`
+- `/jiphyeonjeon_mine url:<link> [title] [note]` — register a Discord-requested link for 집현전-광부 intake and 집현전-클로 content review
 - one-shot newsletter/card-news publishers from the installed project scripts
 - mention replies, only if `DISCORD_ENABLE_MENTION_RESPONSES=1`
+
+## 집현전-광부 link-intake path
+
+집현전-광부 is a collection-only sub-agent for Discord link requests. It does not decide newsletter inclusion. The content-review owner remains 집현전-클로.
+
+Flow:
+
+1. A user runs `/jiphyeonjeon_mine` in `DISCORD_MINER_CHANNEL_ID`, or a dedicated intake channel is enabled with `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION=1`.
+2. The bridge extracts and sanitizes HTTP(S) links, stripping secret/tracking query keys such as tokens and `utm_*`.
+3. Pending records are appended to both:
+   - `JIPHYEONJEON_MINER_INTAKE_PATH`
+   - `JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH`
+4. Each record is marked `status=pending_claw_review`, `agent=jiphyeonjeon-miner`, and `reviewer=jiphyeonjeon-claw`.
+5. Only after 집현전-클로 approval should an operator or review automation copy approved metadata into the newsletter manual-link/archive ingestion path.
+
+Operational controls:
+
+- `DISCORD_MINER_CHANNEL_ID` defaults to `DISCORD_ALLOWED_CHANNEL_ID` when unset.
+- `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires Discord `MESSAGE_CONTENT` intent.
+- The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
+- Do not point the paper-recommender `manual_links` source at the pending intake/review queue; use an approved-only JSONL file after 집현전-클로 review.
 
 ## Setup on EC2
 

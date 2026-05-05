@@ -77,6 +77,22 @@
       "rollback": "Revert openclaw.py and restart discord-openclaw-bridge.service after deployment."
     },
     {
+      "prompt_id": "jiphyeonjeon_miner_link_intake",
+      "owner": "Jiphyeonjeon-Claw",
+      "purpose": "Collect Discord-requested links as pending newsletter candidates without deciding content inclusion.",
+      "source": {
+        "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/miner.py",
+        "anchors": ["record_miner_link", "pending_claw_review", "newsletter_reflection"]
+      },
+      "service_surface": "discord_openclaw_bridge",
+      "input_classes": ["discord_link_request", "discord_channel_metadata", "operator_supplied_title_or_note"],
+      "forbidden_data": ["discord_bot_token", "full_discord_message_body", "secret_query_param", "pre_review_newsletter_inclusion"],
+      "output_contract": "JSONL intake and review-queue records marked pending_claw_review for 집현전-클로 approval before newsletter reflection.",
+      "validation": ["skills/discord-openclaw-bridge/project/tests/test_miner.py", "url_secret_stripping", "pending_review_gate"],
+      "metrics": ["source_stats", "candidate_count", "secret_scan_pass", "health_status"],
+      "rollback": "Disable DISCORD_MINER_ENABLE_CHANNEL_COLLECTION, remove /jiphyeonjeon_mine registration, and preserve pending queue files for review."
+    },
+    {
       "prompt_id": "discord_briefing_renderer",
       "owner": "Jiphyeonjeon-Claw",
       "purpose": "Render the latest Jiphyeonjeon-Claw briefing into concise Discord markdown.",

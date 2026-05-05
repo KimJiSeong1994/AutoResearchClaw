@@ -32,6 +32,16 @@ def _required_int(name: str) -> int:
         raise ConfigError(f"{name} must be a Discord snowflake integer") from exc
 
 
+def _optional_int(name: str, default: int | None = None) -> int | None:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a Discord snowflake integer") from exc
+
+
 def _bool_env(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -52,6 +62,10 @@ class BridgeConfig:
     max_prompt_chars: int
     max_response_chars: int
     briefing_source_path: Path
+    miner_channel_id: int
+    miner_intake_path: Path
+    miner_review_queue_path: Path
+    miner_enable_channel_collection: bool
 
 
 def load_config() -> BridgeConfig:
@@ -74,10 +88,13 @@ def load_config() -> BridgeConfig:
     if not (base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:")):
         raise ConfigError("OPENCLAW_BASE_URL must remain loopback for this bridge")
 
+    allowed_channel_id = _required_int("DISCORD_ALLOWED_CHANNEL_ID")
+    miner_channel_id = _optional_int("DISCORD_MINER_CHANNEL_ID", allowed_channel_id)
+
     return BridgeConfig(
         discord_bot_token=discord_bot_token,
         guild_id=_required_int("DISCORD_GUILD_ID"),
-        allowed_channel_id=_required_int("DISCORD_ALLOWED_CHANNEL_ID"),
+        allowed_channel_id=allowed_channel_id,
         openclaw_base_url=base_url,
         openclaw_gateway_token=token,
         openclaw_model=os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip(),
@@ -91,4 +108,25 @@ def load_config() -> BridgeConfig:
                 str(Path.home() / ".openclaw" / "workspace" / "reports" / "daily-trends-latest.md"),
             )
         ).expanduser(),
+        miner_channel_id=miner_channel_id,
+        miner_intake_path=Path(
+            os.environ.get(
+                "JIPHYEONJEON_MINER_INTAKE_PATH",
+                str(Path.home() / ".openclaw" / "workspace" / "intake" / "jiphyeonjeon-miner" / "links.jsonl"),
+            )
+        ).expanduser(),
+        miner_review_queue_path=Path(
+            os.environ.get(
+                "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
+                str(
+                    Path.home()
+                    / ".openclaw"
+                    / "workspace"
+                    / "review"
+                    / "jiphyeonjeon-claw"
+                    / "link-review-queue.jsonl"
+                ),
+            )
+        ).expanduser(),
+        miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
     )

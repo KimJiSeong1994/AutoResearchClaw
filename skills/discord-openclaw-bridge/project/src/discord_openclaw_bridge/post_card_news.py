@@ -1052,7 +1052,6 @@ def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_c
     summary = _three_line_summary(cards, theme)
     argument = _argument_structure(cards, theme)
     questions = _future_questions(cards)
-    topic_text = " · ".join(topics[:3]) if topics else "공개 기술 후보"
     lines = [
         f"**{CARD_NEWS_TITLE} — 기술 블로그 브리핑 — {run_date}**",
         "",
