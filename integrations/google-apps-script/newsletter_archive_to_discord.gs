@@ -37,6 +37,8 @@ const MIN_CONTEXT_SENTENCE_CHARS = 45;
 const URL_CONTEXT_WINDOW = 260;
 const DISCORD_SAFE_CHAR_LIMIT = 1850;
 const BRIEFING_RENDER_CHAR_LIMIT = 7600;
+const BRIEFING_MAX_TOPICS = 8;
+const BRIEFING_MAX_ITEMS_PER_TOPIC = 2;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -124,8 +126,9 @@ function runNewsletterArchive() {
   }
 
   const items = collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls, fetchArticleDetails);
-  const briefing = renderBriefing_(items, query);
-  saveLatestBriefing_(briefing, items.length, query);
+  const rendered = renderBriefingWithTelemetry_(items, query);
+  const briefing = rendered.briefing;
+  saveLatestBriefing_(briefing, rendered.telemetry);
   if (deliveryMode !== 'relay_pull') {
     postDiscord_(channelId, token, briefing, webhookUrl);
   }
