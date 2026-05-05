@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import email.utils
+import hashlib
 import html
 import json
 import mailbox
@@ -79,6 +80,104 @@ class TopicClassification:
     def evidence(self) -> tuple[str, ...]:
         """Backward-compatible sanitized match reasons."""
         return self.reasons
+
+
+@dataclass(frozen=True)
+class ContentEvidence:
+    evidence_id: str
+    source_type: str
+    title: str
+    url: str
+    kind: str
+    sender_or_source: str
+    received_or_published_at: str
+    public_excerpt: str
+    context_digest: str
+    private_context_used: bool
+    privacy_class: str
+    provenance: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "evidence_id": self.evidence_id,
+            "source_type": self.source_type,
+            "title": self.title,
+            "url": self.url,
+            "kind": self.kind,
+            "sender_or_source": self.sender_or_source,
+            "received_or_published_at": self.received_or_published_at,
+            "public_excerpt": self.public_excerpt,
+            "context_digest": self.context_digest,
+            "private_context_used": self.private_context_used,
+            "privacy_class": self.privacy_class,
+            "provenance": self.provenance,
+        }
+
+
+@dataclass(frozen=True)
+class ContextDossier:
+    evidence_ids: tuple[str, ...]
+    claims: tuple[dict[str, str], ...]
+    source_diversity: int
+    coverage_gaps: tuple[str, ...]
+    persistence_policy: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "evidence_ids": list(self.evidence_ids),
+            "claims": list(self.claims),
+            "source_diversity": self.source_diversity,
+            "coverage_gaps": list(self.coverage_gaps),
+            "persistence_policy": self.persistence_policy,
+        }
+
+
+@dataclass(frozen=True)
+class TopicCandidate:
+    topic_id: str
+    canonical_primary: str
+    primary_display: str
+    secondary_topics: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+    summary_ko: str
+    novelty_score: float
+    reader_fit_score: float
+    evidence_strength: float
+    quality_flags: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "topic_id": self.topic_id,
+            "canonical_primary": self.canonical_primary,
+            "primary_display": self.primary_display,
+            "secondary_topics": list(self.secondary_topics),
+            "evidence_ids": list(self.evidence_ids),
+            "summary_ko": self.summary_ko,
+            "novelty_score": self.novelty_score,
+            "reader_fit_score": self.reader_fit_score,
+            "evidence_strength": self.evidence_strength,
+            "quality_flags": list(self.quality_flags),
+        }
+
+
+@dataclass(frozen=True)
+class TopicSelectionRun:
+    mode: str
+    selected_topics: tuple[dict[str, object], ...]
+    rejected_topics: tuple[dict[str, object], ...]
+    coverage: dict[str, object]
+    telemetry: dict[str, object]
+    fallback_used: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "selected_topics": list(self.selected_topics),
+            "rejected_topics": list(self.rejected_topics),
+            "coverage": self.coverage,
+            "telemetry": self.telemetry,
+            "fallback_used": self.fallback_used,
+        }
 
 
 _TOPIC_RULES: tuple[TopicRule, ...] = (
@@ -159,6 +258,19 @@ def _clean_text(value: str | None) -> str:
 def _safe_title(value: str) -> str:
     value = _clean_text(value)
     return value.replace("[[", "[ [").replace("]]", "] ]").replace("|", "\\|")
+
+
+def _short_hash(value: str, *, prefix: str = "") -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}{digest}" if prefix else digest
+
+
+def _public_excerpt(item: dict[str, str], *, limit: int = 220) -> str:
+    return _clean_text(item.get("summary") or item.get("snippet") or item.get("title") or "")[:limit]
+
+
+def _private_context(item: dict[str, str]) -> str:
+    return _clean_text(item.get("classification_text") or item.get("body") or item.get("text") or "")
 
 
 def _decode_header(value: str | None) -> str:
@@ -404,7 +516,8 @@ def publish_items(
         "date": run_date,
         "source_file": source_path.name,
         "privacy": "metadata-and-extracted-urls-only; full email bodies omitted",
-        "items": items,
+        "topic_selection_mode": os.environ.get("TOPIC_SELECTOR_MODE", "legacy"),
+        "items": [_item_for_publish(item) for item in items],
     }
     _atomic_write_text(raw_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     _atomic_write_text(
@@ -504,6 +617,161 @@ def classify_topic_detail(item: dict[str, str]) -> TopicClassification:
 
 def classify_topic(item: dict[str, str]) -> str:
     return classify_topic_result(item).primary_display
+
+
+def build_content_evidence(item: dict[str, str], *, source_type: str = "newsletter") -> ContentEvidence:
+    """Build a privacy-preserving evidence record for topic selection.
+
+    Private body/classification text may influence the context digest, but it is
+    never copied into the evidence payload.
+    """
+    title = _clean_text(item.get("title") or "(untitled newsletter item)")
+    url = _clean_text(item.get("url") or "")
+    kind = _clean_text(item.get("kind") or "post")
+    sender = _clean_text(item.get("sender") or "")
+    received = _clean_text(item.get("received_at") or "")
+    public_excerpt = _public_excerpt(item)
+    private_context = _private_context(item)
+    digest_basis = "\n".join([title, url, kind, public_excerpt, private_context])
+    evidence_id = _short_hash("\n".join([source_type, title, url, kind]), prefix="ev_")
+    private_used = bool(private_context)
+    return ContentEvidence(
+        evidence_id=evidence_id,
+        source_type=source_type,
+        title=title,
+        url=url,
+        kind=kind,
+        sender_or_source=sender,
+        received_or_published_at=received,
+        public_excerpt=public_excerpt,
+        context_digest=_short_hash(digest_basis),
+        private_context_used=private_used,
+        privacy_class="private_context_used_not_persisted" if private_used else "metadata_and_public_excerpt",
+        provenance="newsletter_ingest",
+    )
+
+
+def build_context_dossier(evidence: ContentEvidence, classification: TopicClassification) -> ContextDossier:
+    claims = (
+        {"role": "core", "text": evidence.title},
+        {"role": "technical", "text": ", ".join(classification.reasons) or "fallback"},
+        {"role": "limitation", "text": "Full private email body is not persisted."},
+    )
+    gaps: list[str] = []
+    if not evidence.public_excerpt:
+        gaps.append("missing_public_excerpt")
+    if classification.primary == "other_tech_report":
+        gaps.append("weak_topic_signal")
+    return ContextDossier(
+        evidence_ids=(evidence.evidence_id,),
+        claims=claims,
+        source_diversity=1,
+        coverage_gaps=tuple(gaps),
+        persistence_policy="metadata-and-extracted-urls-only; private context digest only",
+    )
+
+
+def build_topic_candidate(
+    evidence: ContentEvidence,
+    dossier: ContextDossier,
+    classification: TopicClassification,
+) -> TopicCandidate:
+    quality_flags: list[str] = []
+    if evidence.private_context_used:
+        quality_flags.append("private_context_used_not_persisted")
+    if classification.primary == "other_tech_report":
+        quality_flags.append("weak_topic_signal")
+    topic_id = f"{classification.primary}:{evidence.evidence_id}"
+    return TopicCandidate(
+        topic_id=topic_id,
+        canonical_primary=classification.primary,
+        primary_display=classification.primary_display,
+        secondary_topics=classification.secondary,
+        evidence_ids=dossier.evidence_ids,
+        summary_ko=f"{classification.primary_display} 후보: {evidence.title}",
+        novelty_score=0.0,
+        reader_fit_score=0.0,
+        evidence_strength=classification.confidence,
+        quality_flags=tuple(quality_flags),
+    )
+
+
+def analyze_topic_context(item: dict[str, str], *, mode: str | None = None) -> dict[str, object]:
+    """Return canonical shadow topic-selection telemetry for one item.
+
+    This is intentionally deterministic for Phase 0/1. It creates the schema
+    seam where an agent selector can later replace or augment the candidate
+    scoring while preserving privacy and renderer contracts.
+    """
+    selected_mode = (mode or os.environ.get("TOPIC_SELECTOR_MODE") or "legacy").strip().lower()
+    if selected_mode not in {"legacy", "shadow", "dual", "agent"}:
+        selected_mode = "legacy"
+    classification = classify_topic_result(item)
+    evidence = build_content_evidence(item)
+    dossier = build_context_dossier(evidence, classification)
+    candidate = build_topic_candidate(evidence, dossier, classification)
+    selection = TopicSelectionRun(
+        mode=selected_mode,
+        selected_topics=(
+            {
+                "rank": 1,
+                "topic_id": candidate.topic_id,
+                "canonical_primary": candidate.canonical_primary,
+                "primary_display": candidate.primary_display,
+                "secondary_topics": list(candidate.secondary_topics),
+                "rationale_ko": "Phase 1 shadow selector uses deterministic classifier output as the baseline.",
+                "technical_point": ", ".join(classification.reasons) or "fallback",
+                "researcher_action": "관련 원문을 확인하고 후속 읽기/아카이브 우선순위를 정한다.",
+                "evidence_ids": list(candidate.evidence_ids),
+                "confidence": classification.confidence,
+                "flags": list(candidate.quality_flags),
+            },
+        ),
+        rejected_topics=(),
+        coverage={
+            "topic_counts": {classification.primary: 1},
+            "source_counts": {evidence.source_type: 1},
+            "missing_axes": list(dossier.coverage_gaps),
+            "max_topic_share": 1.0,
+        },
+        telemetry={
+            "privacy_violation_count": 0,
+            "parity_mismatch_count": 0,
+            "agent_fallback_used": selected_mode in {"legacy", "shadow", "dual"},
+            "private_context_used": evidence.private_context_used,
+        },
+        fallback_used=classification.primary in {"research_paper_general", "other_tech_report"},
+    )
+    return {
+        "evidence": evidence.to_dict(),
+        "context_dossier": dossier.to_dict(),
+        "topic_candidate": candidate.to_dict(),
+        "topic_selection": selection.to_dict(),
+    }
+
+
+def _item_for_publish(item: dict[str, str]) -> dict[str, object]:
+    allowed = {
+        "title",
+        "url",
+        "kind",
+        "sender",
+        "received_at",
+        "primary_topic",
+        "primary_topic_display",
+        "secondary_topics",
+        "topic_confidence",
+        "topic_reasons",
+    }
+    out: dict[str, object] = {key: value for key, value in item.items() if key in allowed}
+    classification = classify_topic_result(item)
+    out.setdefault("primary_topic", classification.primary)
+    out.setdefault("primary_topic_display", classification.primary_display)
+    out.setdefault("secondary_topics", list(classification.secondary))
+    out.setdefault("topic_confidence", classification.confidence)
+    out.setdefault("topic_reasons", list(classification.reasons))
+    out["topic_context"] = analyze_topic_context(item, mode="shadow")
+    return out
 
 
 def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:

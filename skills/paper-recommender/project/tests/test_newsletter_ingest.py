@@ -312,6 +312,56 @@ def test_topic_classifier_paper_and_default_fallback_details() -> None:
     assert weak.secondary == ()
 
 
+def test_content_evidence_context_schema_omits_private_body() -> None:
+    item = {
+        "title": "RAG agent report",
+        "kind": "post",
+        "url": "https://example.com/rag-agent",
+        "sender": "digest@example.com",
+        "received_at": "Mon, 04 May 2026 07:00:00 +0900",
+        "classification_text": "PRIVATE subscriber-only detail with token=secret",
+    }
+
+    context = newsletter_ingest.analyze_topic_context(item, mode="shadow")
+
+    assert context["evidence"]["private_context_used"] is True
+    assert context["evidence"]["privacy_class"] == "private_context_used_not_persisted"
+    dumped = json.dumps(context, ensure_ascii=False)
+    assert "PRIVATE subscriber-only" not in dumped
+    assert "token=secret" not in dumped
+    assert context["topic_candidate"]["canonical_primary"] == "data_retrieval_knowledge"
+    assert context["topic_selection"]["selected_topics"][0]["researcher_action"]
+
+
+def test_publish_items_adds_shadow_topic_context_without_private_text(tmp_path: Path) -> None:
+    item = {
+        "title": "RAG agent report",
+        "kind": "post",
+        "url": "https://example.com/rag-agent",
+        "sender": "digest@example.com",
+        "received_at": "Mon, 04 May 2026 07:00:00 +0900",
+        "classification_text": "PRIVATE body that must not persist",
+    }
+
+    raw_path, _page_path = newsletter_ingest.publish_items(
+        wiki_root=tmp_path / "wiki",
+        run_date="2026-05-04",
+        source_path=tmp_path / "newsletters.jsonl",
+        items=[item],
+    )
+
+    payload = json.loads(raw_path.read_text(encoding="utf-8"))
+    stored = payload["items"][0]
+    assert payload["topic_selection_mode"] == "legacy"
+    assert stored["primary_topic"] == "data_retrieval_knowledge"
+    assert stored["primary_topic_display"] == "검색/RAG/지식그래프"
+    assert "topic_context" in stored
+    assert stored["topic_context"]["topic_selection"]["mode"] == "shadow"
+    dumped = json.dumps(payload, ensure_ascii=False)
+    assert "PRIVATE body" not in dumped
+    assert "classification_text" not in dumped
+
+
 def test_topic_briefing_renders_sanitized_primary_secondary_metadata() -> None:
     briefing = newsletter_ingest.render_topic_briefing(
         run_date="2026-05-04",
