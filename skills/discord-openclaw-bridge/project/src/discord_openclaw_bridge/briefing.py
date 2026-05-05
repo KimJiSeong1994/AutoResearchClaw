@@ -263,7 +263,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
             links = _cluster_source_links(cluster, candidates_by_id, fallback_candidates)
             source_lines = [_link_line(label, url) for label, url in links] or ["  - 원문 raw.json 참고"]
             lines += [
-                f"",
+                "",
                 f"### {rendered_clusters + 1}. {_shorten(title_text, 72)}",
                 f"- **핵심 요약**: {_shorten(cluster.get('summary'), 155)}",
                 f"- **기술 포인트**: {_shorten(cluster.get('why_it_matters'), 155)}",
