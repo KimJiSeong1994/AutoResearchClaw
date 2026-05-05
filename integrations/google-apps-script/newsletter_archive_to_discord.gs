@@ -241,25 +241,28 @@ function renderBriefing_(items, query) {
 function renderBriefingWithTelemetry_(items, query) {
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   const lines = [
-    '**집현전-Claw 뉴스레터 수집 브리핑**',
+    '**집현전-Claw 기술 브리핑 카드뉴스**',
     '_date: ' + today + '_',
     '_source: GmailApp search `' + sanitizeInline_(query) + '`_',
-    '_privacy: 메일 본문/개인정보는 게시하지 않고 메타데이터와 추출 URL만 사용_',
+    '_privacy: 메일 본문/비밀값은 게시하지 않고 공개 아티클 근거와 출처 링크만 사용_',
     '',
     '━━━━━━━━━━━━━━━━━━━━',
-    '## 토픽별 기술 리포트/뉴스레터 요약',
+    '## 오늘의 카드뉴스 흐름',
     '',
-    '- 수집 항목: ' + items.length + '개',
-    '- 기준: Gmail 검색 조건에 맞는 최근 메일 전체를 수집 후 토픽별 정리',
-    '- 운영 메모: Google Apps Script 내부에서 실행되며 Discord에는 요약과 출처 링크만 게시'
+    '- 훅: ' + items.length + '개 공개 링크에서 연구자에게 바로 읽을 변화 신호를 선별',
+    '- 구조: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트',
+    '- 운영: Google Apps Script 내부에서 실행되며 Discord에는 compact Markdown 카드만 게시'
   ];
 
   if (items.length === 0) {
-    lines.push('', '### 수집 결과 없음');
-    lines.push('- 핵심 요약: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.');
-    lines.push('- 기술 포인트: SENDER_ALLOWLIST, GMAIL_QUERY, 메일 수신 상태를 점검해야 합니다.');
-    lines.push('- 의미/근거: 수집 후보가 없어 토픽 다양성 및 요약 품질을 산출하지 않았습니다.');
-    lines.push('- 출처 링크: 없음');
+    lines.push('', '### 카드 0 · 수집 결과 없음');
+    lines.push('- 훅: 오늘 카드로 만들 공개 연구/기술 링크가 없습니다.');
+    lines.push('- 맥락: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.');
+    lines.push('- 핵심 변화: 새로운 후보가 없어 토픽 다양성 및 요약 품질을 산출하지 않았습니다.');
+    lines.push('- 왜 중요한가: 수집 경계가 너무 좁거나 최근 메일 수신이 없을 수 있습니다.');
+    lines.push('- 근거: 공개 출처 링크 없음');
+    lines.push('- 시사점: SENDER_ALLOWLIST, GMAIL_QUERY, 메일 수신 상태를 점검해야 합니다.');
+    lines.push('- CTA/저장 포인트: 다음 실행 전 수집 조건을 재검토');
     return { briefing: lines.join('\n'), telemetry: buildBriefingTelemetry_(items, query, [], 0, false) };
   }
 
@@ -272,43 +275,53 @@ function renderBriefingWithTelemetry_(items, query) {
   const selectedTopics = topics.slice(0, BRIEFING_MAX_TOPICS);
   const topicOverview = selectedTopics.map(entry => entry.topic + ' ' + entry.detailed.length + '/' + entry.total).join(' · ');
   if (topicOverview) {
-    appendWithinLimit_(lines, ['', '- 토픽 분포: ' + topicOverview], BRIEFING_RENDER_CHAR_LIMIT);
+    appendWithinLimit_(lines, ['', '토픽 인덱스: ' + topicOverview], BRIEFING_RENDER_CHAR_LIMIT);
   }
 
   let renderedItems = 0;
   let renderTruncated = false;
+  let cardNo = 0;
   const renderedTopicCounts = {};
-  selectedTopics.forEach(entry => {
-    const topicHeader = ['', '### ' + entry.topic];
+  selectedTopics.forEach((entry, topicIdx) => {
+    const topicHeader = ['', '━━━━━━━━━━━━━━━━━━━━', '### 섹션 ' + (topicIdx + 1) + '. ' + entry.topic, '- 토픽 내 후보: ' + entry.total + '개'];
     if (!appendWithinLimit_(lines, topicHeader, BRIEFING_RENDER_CHAR_LIMIT)) {
       renderTruncated = true;
       return;
     }
     const itemsToRender = entry.detailed.slice(0, BRIEFING_MAX_ITEMS_PER_TOPIC);
     itemsToRender.forEach(item => {
+      cardNo += 1;
       const title = truncate_(plain_(item.articleTitle || item.title), 90);
       const summary = buildSummaryLines_(item);
+      const evidence = summarizeTechnicalTerms_((item.articleText || item.articleDescription || item.snippet || item.title || '') + ' ' + item.url, entry.topic);
+      const sourceMeta = sanitizeInline_(item.sender || 'unknown') + ' · ' + sanitizeInline_(item.receivedAt || 'unknown') + ' · `' + sanitizeInline_(item.kind || 'post') + '`';
       const block = [
-        '- 주요 아티클/논문: ' + title,
-        '  - 핵심 요약: ' + summary[0],
-        '  - 기술 포인트: ' + summary[1],
-        '  - 의미/근거: ' + summary[2]
+        '',
+        '**카드 ' + cardNo + ' · ' + title + '**',
+        '  - 훅: ' + summary[0],
+        '  - 맥락: ' + entry.topic + ' 흐름에서 `' + evidence + '` 신호가 포착됨',
+        '  - 핵심 변화: ' + summary[1],
+        '  - 왜 중요한가: ' + summary[2]
       ];
       if (item.url) {
-        block.push('  - 출처 링크: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
+        block.push('  - 근거/출처: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
       } else {
-        block.push('  - 출처 링크: 메일 본문 내 외부 링크 없음');
+        block.push('  - 근거/출처: 메일 본문 내 공개 외부 링크 없음');
       }
+      block.push('  - 시사점: compact 카드로 저장하고 원문에서 방법·평가·적용 범위를 확인');
+      block.push('  - CTA/저장 포인트: ' + entry.topic + ' 후속 읽기 후보로 저장');
+      block.push('  - 수집 메타: ' + sourceMeta);
       if (appendWithinLimit_(lines, block, BRIEFING_RENDER_CHAR_LIMIT)) {
         renderedItems += 1;
         renderedTopicCounts[entry.topic] = (renderedTopicCounts[entry.topic] || 0) + 1;
       } else {
         renderTruncated = true;
+        cardNo -= 1;
       }
     });
     const remaining = entry.detailed.length - itemsToRender.length;
     if (remaining > 0) {
-      appendWithinLimit_(lines, ['- 추가 항목: ' + remaining + '개는 raw archive 및 다음 실행에서 재검토'], BRIEFING_RENDER_CHAR_LIMIT);
+      appendWithinLimit_(lines, ['- raw archive 추가 보존: ' + remaining + '개'], BRIEFING_RENDER_CHAR_LIMIT);
     }
   });
 
@@ -317,7 +330,7 @@ function renderBriefingWithTelemetry_(items, query) {
     appendWithinLimit_(lines, ['- 추가 토픽: ' + (topics.length - selectedTopics.length) + '개는 다음 실행에서 재검토'], BRIEFING_RENDER_CHAR_LIMIT);
   }
 
-  appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.'], BRIEFING_RENDER_CHAR_LIMIT);
+  appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '운영 메모: 카드뉴스는 Discord Markdown/캐러셀 초안용 구조이며, 원문 메일 본문은 Discord에 게시하지 않습니다.'], BRIEFING_RENDER_CHAR_LIMIT);
   return {
     briefing: lines.join('\n'),
     telemetry: buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated, renderedTopicCounts)
