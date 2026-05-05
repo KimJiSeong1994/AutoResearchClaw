@@ -26,9 +26,11 @@ is blocked by app verification, Workspace policy, or test-user restrictions.
 
 ## Privacy boundary
 
-The script posts only metadata and extracted source URLs. Full email bodies are
-used in memory for URL extraction and public article-page summaries but are not
-posted to Discord.
+The script posts only metadata, compact cardnews copy, and extracted source URLs.
+Full email bodies are used in memory for URL extraction and public article-page
+summaries but are not posted to Discord. The renderer mirrors
+`skills/paper-recommender/docs/newsletter-cardnews-template-20260505.md`: 훅 →
+맥락 → 핵심 변화 → 왜 중요한가 → 근거/출처 → 시사점 → CTA/저장 포인트.
 
 Treat `RELAY_READ_TOKEN` as a secret. The web app `doGet` endpoint returns the
 latest stored briefing and Gmail query to callers that provide this token, so
@@ -51,11 +53,14 @@ Before pasting or deploying updates:
    to catch parser-visible JavaScript syntax errors. Node does not parse `.gs`
    paths directly.
 2. Smoke-test pure rendering helpers with sample public article text and verify
-   that each item renders the Korean output contract:
-   - `핵심`
-   - `기술 포인트`
-   - `의미/근거`
-   - `출처 링크`
+   that each item renders the shared cardnews output contract:
+   - `훅`
+   - `맥락`
+   - `핵심 변화`
+   - `왜 중요한가`
+   - `근거/출처`
+   - `시사점`
+   - `CTA/저장 포인트`
 3. Smoke-test taxonomy helpers against the Python fixture intent before
    deployment. At minimum, verify:
    - `research paper` falls back to `논문/리서치` instead of matching `search`
