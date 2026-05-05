@@ -92,6 +92,50 @@ def test_rich_card_uses_essay_paragraphs_with_connective() -> None:
     assert len(paragraphs) >= 3, paragraphs
 
 
+def test_header_frames_cards_as_blog_publication_contract() -> None:
+    payload = {
+        "date": "2026-05-05",
+        "items": [
+            {
+                "article_title": "GraphRAG systems benchmark",
+                "url": "https://example.com/graphrag",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.92,
+                "topic_reasons": ["rag", "knowledge graph"],
+                "why_now": "지식그래프 기반 검색 평가가 빠르게 표준화되고 있다.",
+                "claim": "그래프 기반 검색은 시스템 설계 선택지로 평가되어야 한다.",
+                "mechanism": "인덱싱과 쿼리 플래닝이 생성기에 전달되는 근거 풀을 결정한다.",
+                "evidence": "다섯 도메인에서 hop 수와 정확도 trade-off가 측정되었다.",
+                "summary_lines": [
+                    "그래프 기반 검색 에이전트의 비교 연구다.",
+                    "운영 환경에서 인덱싱 비용이 어떻게 변하는지 검증한다.",
+                    "정확도와 지연시간 trade-off를 함께 제시한다.",
+                ],
+                "source_name": "Newsletter A",
+            }
+        ],
+    }
+
+    header = render_card_news_messages(payload, max_cards=1)[0]
+
+    expected_sections = [
+        "기술 블로그 브리핑",
+        "대표 이미지(설명):",
+        "> 3줄 요약",
+        "## 왜 지금 이 이슈인가",
+        "## 핵심 주장",
+        "## 논증 구조",
+        "## 산업사회학적·현장기반 해석",
+        "## 앞으로 볼 질문",
+        "## 카드뉴스·Discord 재사용안",
+        "## 출처",
+    ]
+    for section in expected_sections:
+        assert section in header
+    assert "메일 본문·토큰·비밀값은 제외" in header
+    assert "선별 1건 / 수집 1건" in header
+
+
 
 def test_card_news_renderer_accepts_briefing_template_alias_fields() -> None:
     payload = {

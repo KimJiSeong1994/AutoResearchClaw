@@ -354,6 +354,119 @@ def _theme_sentence(cards: list[dict[str, Any]]) -> str:
     return "오늘은 본문 근거가 얇은 읽기 후보 중심입니다."
 
 
+def _hero_image_description(topics: list[str]) -> str:
+    topic_text = " · ".join(topics[:3]) if topics else "기술 브리핑"
+    return (
+        f"{topic_text} 변화가 연구 현장, 제품 조직, 운영 대시보드로 이어지는 장면을 "
+        "추상적으로 표현한 대표 이미지. 읽을 수 있는 텍스트·로고·실존 인물 초상은 제외."
+    )
+
+
+def _three_line_summary(cards: list[dict[str, Any]], theme: str) -> list[str]:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    first_title = _title(cards[0]) if cards else "공개 기술 후보"
+    topic_text = "·".join(topics[:2]) if topics else "기술 후보"
+    return [
+        _clean(theme, limit=120),
+        f"{first_title} 등 {len(cards)}개 공개 출처를 {topic_text} 변화 축으로 묶었습니다.",
+        "각 카드는 원문 링크에서 확인 가능한 근거만 남기고, 메일 본문·토큰·비밀값은 제외합니다.",
+    ]
+
+
+def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
+    for item in cards:
+        claim = _normalize_register(
+            _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=180)
+        )
+        if claim:
+            return f"{claim} 이 흐름은 단일 링크 묶음보다 문제의식-근거-현장 질문으로 읽어야 합니다."
+    return f"{theme} 단순 링크 나열보다 토픽 간 연결과 검증 질문을 함께 읽어야 합니다."
+
+
+def _argument_structure(cards: list[dict[str, Any]], theme: str) -> list[str]:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    topic_text = ", ".join(topics[:3]) if topics else "여러 기술 후보"
+    evidence_count = sum(1 for item in cards if _clean(item.get("evidence") or item.get("why_matters")))
+    return [
+        f"관찰: {theme}",
+        f"메커니즘: {topic_text}에서 공개 원문·요약·토픽 단서가 같은 변화 방향을 가리키는지 본다.",
+        f"긴장: 연구 성능, 운영 비용, 제품 적용 조건이 같은 속도로 움직이지 않을 수 있다.",
+        f"반론: 근거가 얇은 후보는 홍보 문구나 제목 신호일 수 있어 원문 조건 확인이 필요하다.",
+        f"판단: 현재 렌더링은 {len(cards)}개 후보 중 근거 문장 {evidence_count}개를 우선 노출해 후속 검토를 좁힌다.",
+    ]
+
+
+def _industry_interpretation(cards: list[dict[str, Any]]) -> str:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    if not topics:
+        return "현장에서는 후보 링크를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 합니다."
+    return (
+        f"{topics[0]} 흐름은 모델 성능만의 문제가 아니라 데이터 흐름, 평가 지표, 운영 조직의 "
+        "책임 배분을 함께 바꾸는 신호입니다."
+    )
+
+
+def _future_questions(cards: list[dict[str, Any]]) -> list[str]:
+    questions: list[str] = []
+    for item in cards:
+        for seed in [*_summary_lines(item), _clean(item.get("why_now")), _clean(item.get("evidence"))]:
+            qtext = _question_or_transform(_normalize_register(seed))
+            if qtext and qtext not in questions:
+                questions.append(qtext)
+            if len(questions) >= 2:
+                break
+        if len(questions) >= 2:
+            break
+    while len(questions) < 2:
+        questions.append("원문이 제시한 평가 조건과 실제 운영 환경의 제약은 어디에서 달라지는가?")
+    return questions[:2]
+
+
+def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_count: int) -> str:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    theme = _theme_sentence(cards)
+    summary = _three_line_summary(cards, theme)
+    argument = _argument_structure(cards, theme)
+    questions = _future_questions(cards)
+    topic_text = " · ".join(topics[:3]) if topics else "공개 기술 후보"
+    lines = [
+        f"**{CARD_NEWS_TITLE} — 기술 블로그 브리핑 — {run_date}**",
+        "",
+        f"대표 이미지(설명): {_hero_image_description(topics)}",
+        "",
+        "> 3줄 요약",
+        f"> 1. {summary[0]}",
+        f"> 2. {summary[1]}",
+        f"> 3. {summary[2]}",
+        "",
+        "## 왜 지금 이 이슈인가",
+        f"{topic_text}에서 나온 공개 링크를 한 번에 소비하기보다, 지금 어떤 문제가 반복되는지 읽어야 합니다.",
+        "",
+        "## 핵심 주장",
+        f"- 주장: {_article_thesis(cards, theme)}",
+        f"- 근거: 선별 {len(cards)}건 / 수집 {item_count}건의 공개 URL과 토픽 근거만 사용했습니다.",
+        "",
+        "## 논증 구조",
+    ]
+    lines.extend(f"{idx}. {line}" for idx, line in enumerate(argument, start=1))
+    lines += [
+        "",
+        "## 산업사회학적·현장기반 해석",
+        _industry_interpretation(cards),
+        "",
+        "## 앞으로 볼 질문",
+        f"- {questions[0]}",
+        f"- {questions[1]}",
+        "",
+        "## 카드뉴스·Discord 재사용안",
+        "아래 메시지들은 이 글의 섹션을 훅-맥락-핵심 변화-근거-CTA 카드로 쪼갠 재사용 블록입니다.",
+        "",
+        "## 출처",
+        "각 카드 하단의 공개 URL만 사용합니다.",
+    ]
+    return "\n".join(lines)
+
+
 def _is_interrogative(text: str) -> bool:
     if not text:
         return False
@@ -678,7 +791,7 @@ def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) ->
     cards = _select_cards(items, max_cards=max_cards)
     run_date = _clean(payload.get("date") or date.today().isoformat())
 
-    header = _publication_header(cards, run_date=run_date, total_count=len(items))
+    header = _render_article_header(cards, run_date=run_date, item_count=len(items))
     messages = [header]
     topic_index: dict[str, int] = {}
 
