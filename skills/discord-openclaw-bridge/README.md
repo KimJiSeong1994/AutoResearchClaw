@@ -40,6 +40,18 @@ bash project/scripts/post-newsletter-briefing.sh
 bash project/scripts/post-card-news.sh
 ```
 
+To schedule the card-news publisher on the same EC2 cron cadence as the AI
+newsletter archive publisher (23:00 UTC = 08:00 KST), install the idempotent
+cron runner from the repository root:
+
+```bash
+bash skills/discord-openclaw-bridge/install-card-news-cron.sh
+```
+
+The scheduled runner starts on the same cron minute and waits briefly before
+posting, so the newsletter archive job can finish writing the fresh
+`raw/newsletters/YYYY-MM-DD/items.json` first.
+
 ## Card-news publishing path
 
 `project/src/discord_openclaw_bridge/post_card_news.py` renders the newsletter raw archive into compact Discord messages shaped for a card-news/carousel read:
