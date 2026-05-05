@@ -266,3 +266,69 @@ def test_topic_classifier_uses_url_and_multimodal_signals() -> None:
 
     assert newsletter_ingest.classify_topic(github_item) == "오픈소스/코드"
     assert newsletter_ingest.classify_topic(video_item) == "멀티모달/비전"
+
+
+def test_topic_classification_detail_exposes_primary_secondary_confidence_and_reasons() -> None:
+    item = {
+        "title": "GraphRAG retrieval agents for knowledge graph search",
+        "kind": "post",
+        "url": "https://github.com/example/graphrag",
+    }
+
+    result = newsletter_ingest.classify_topic_detail(item)
+
+    assert result.primary == "data_retrieval_knowledge"
+    assert result.primary_display == "검색/RAG/지식그래프"
+    assert "rag" in result.secondary
+    assert "semantic_search" in result.secondary
+    assert result.confidence > 0
+    assert "retrieval" in result.reasons
+    assert result.label == result.primary_display
+    assert result.evidence == result.reasons
+
+
+def test_topic_classifier_paper_and_default_fallback_details() -> None:
+    paper = newsletter_ingest.classify_topic_detail(
+        {
+            "title": "Research roundup",
+            "kind": "paper:arxiv",
+            "url": "https://arxiv.org/abs/2605.00001",
+        }
+    )
+    weak = newsletter_ingest.classify_topic_detail(
+        {
+            "title": "Weekly notes",
+            "kind": "post",
+            "url": "https://example.com/notes",
+        }
+    )
+
+    assert paper.primary == "research_paper_general"
+    assert paper.primary_display == "논문/리서치"
+    assert paper.secondary == ("research",)
+    assert paper.reasons == ("paper-kind",)
+    assert weak.primary == "other_tech_report"
+    assert weak.primary_display == "기타 테크 리포트"
+    assert weak.secondary == ()
+
+
+def test_topic_briefing_renders_sanitized_primary_secondary_metadata() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-04",
+        items=[
+            {
+                "title": "RAG agent report",
+                "kind": "post",
+                "url": "https://example.com/rag-agent",
+                "sender": "digest@example.com",
+                "received_at": "Mon, 04 May 2026 07:00:00 +0900",
+                "classification_text": "Private body should never render. retrieval agent",
+            }
+        ],
+        source_name="newsletters.jsonl",
+    )
+
+    assert "primary=`data_retrieval_knowledge`" in briefing
+    assert "tags=`rag" in briefing
+    assert "confidence=" in briefing
+    assert "Private body should never render" not in briefing
