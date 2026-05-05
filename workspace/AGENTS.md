@@ -13,6 +13,8 @@ This workspace is the control plane for the OpenClaw gateway running on the EC2 
 - Use the `openclaw_ec2_ops` skill for gateway status, logs, restart, and workspace inspection.
 - Use the `researchclaw` skill for AutoResearchClaw setup, validation, and pipeline execution.
 - Use the `karpathy-guidelines` skill before non-trivial coding, refactoring, review, or workflow-design changes.
+- Use `PROMPT_GOVERNANCE.md` and `PROMPT_REGISTRY.json` before changing prompts,
+  report renderers, or briefing templates.
 - Prefer local OpenClaw CLI commands on the host over ad-hoc process poking.
 - Keep the gateway bound to `127.0.0.1` unless the human explicitly asks to expose it differently.
 - Do not print the gateway token unless the human explicitly asks for the secret value.

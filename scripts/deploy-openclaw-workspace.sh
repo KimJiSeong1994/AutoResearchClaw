@@ -9,6 +9,8 @@ SSH_CMD="ssh -i ${KEY_FILE}"
 
 cd "$ROOT_DIR"
 
+python3 scripts/check-prompt-governance.py
+
 ${SSH_CMD} "$REMOTE_HOST" "mkdir -p $REMOTE_WORKSPACE/skills"
 
 COPYFILE_DISABLE=1 rsync -az \
@@ -20,6 +22,8 @@ COPYFILE_DISABLE=1 rsync -az \
   workspace/USER.md \
   workspace/MEMORY.md \
   workspace/HEARTBEAT.md \
+  workspace/PROMPT_GOVERNANCE.md \
+  workspace/PROMPT_REGISTRY.json \
   "$REMOTE_HOST:$REMOTE_WORKSPACE/"
 
 COPYFILE_DISABLE=1 rsync -az --delete \

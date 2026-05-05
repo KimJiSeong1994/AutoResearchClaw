@@ -12,6 +12,8 @@ Local, version-controlled workspace for the OpenClaw agent running on the EC2 ga
   - `workspace/USER.md`
   - `workspace/MEMORY.md`
   - `workspace/HEARTBEAT.md`
+  - `workspace/PROMPT_GOVERNANCE.md`
+  - `workspace/PROMPT_REGISTRY.json`
 - Custom workspace skill:
   - `skills/openclaw-ec2-ops/`
   - `skills/karpathy-guidelines/`
@@ -44,7 +46,18 @@ claiming completion.
 bash scripts/deploy-openclaw-workspace.sh
 ```
 
-The deploy script maps `workspace/*.md` into the remote OpenClaw workspace root.
+The deploy script validates prompt governance first, then maps the workspace
+control files and prompt registry into the remote OpenClaw workspace root.
+
+## Validate prompt governance
+
+```bash
+python3 scripts/check-prompt-governance.py
+python3 -m unittest tests/test_prompt_governance.py
+```
+
+The validator enforces the Jiphyeonjeon-Claw prompt inventory, lifecycle,
+reporting status schema, source-file references, and secret-value guardrails.
 
 ## Deploy Discord OpenClaw bridge
 
