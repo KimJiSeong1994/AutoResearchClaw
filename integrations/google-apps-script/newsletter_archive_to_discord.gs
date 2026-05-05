@@ -39,6 +39,7 @@ const DISCORD_SAFE_CHAR_LIMIT = 1850;
 const BRIEFING_RENDER_CHAR_LIMIT = 7600;
 const BRIEFING_MAX_TOPICS = 8;
 const BRIEFING_MAX_ITEMS_PER_TOPIC = 2;
+const BRIEFING_MAX_TOPIC_SHARE = 0.4;
 
 const RESEARCH_HOST_HINTS = [
   'arxiv.org',
@@ -258,6 +259,7 @@ function renderBriefingWithTelemetry_(items, query) {
 
   let renderedItems = 0;
   let renderTruncated = false;
+  const renderedTopicCounts = {};
   selectedTopics.forEach(entry => {
     const topicHeader = ['', '### ' + entry.topic];
     if (!appendWithinLimit_(lines, topicHeader, BRIEFING_RENDER_CHAR_LIMIT)) {
@@ -281,6 +283,7 @@ function renderBriefingWithTelemetry_(items, query) {
       }
       if (appendWithinLimit_(lines, block, BRIEFING_RENDER_CHAR_LIMIT)) {
         renderedItems += 1;
+        renderedTopicCounts[entry.topic] = (renderedTopicCounts[entry.topic] || 0) + 1;
       } else {
         renderTruncated = true;
       }
@@ -299,7 +302,7 @@ function renderBriefingWithTelemetry_(items, query) {
   appendWithinLimit_(lines, ['', '━━━━━━━━━━━━━━━━━━━━', '원문 메일 본문은 Discord에 게시하지 않습니다.'], BRIEFING_RENDER_CHAR_LIMIT);
   return {
     briefing: lines.join('\n'),
-    telemetry: buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated)
+    telemetry: buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated, renderedTopicCounts)
   };
 }
 
@@ -311,25 +314,42 @@ function appendWithinLimit_(lines, block, limit) {
 }
 
 
-function buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated) {
+function buildBriefingTelemetry_(items, query, selectedTopics, renderedItems, renderTruncated, renderedTopicCounts) {
   const topicCounts = {};
+  const topicDetails = {};
+  const runId = Utilities.formatDate(new Date(), 'Etc/UTC', "yyyyMMdd'T'HHmmss'Z'");
+  renderedTopicCounts = renderedTopicCounts || {};
   items.forEach(item => {
     const topic = item.topic || '기타 테크 리포트';
     topicCounts[topic] = (topicCounts[topic] || 0) + 1;
   });
   const detailedItemCount = selectedTopics.reduce((sum, entry) => sum + entry.detailed.length, 0);
+  selectedTopics.forEach(entry => {
+    topicDetails[entry.topic] = {
+      total: entry.total,
+      detailed: entry.detailed.length,
+      rendered: renderedTopicCounts[entry.topic] || 0
+    };
+  });
+  const maxRenderedInTopic = Object.keys(renderedTopicCounts).reduce((max, topic) => Math.max(max, renderedTopicCounts[topic] || 0), 0);
+  const maxRenderedTopicShare = renderedItems > 0 ? maxRenderedInTopic / renderedItems : 0;
   return {
+    run_id: runId,
     generated_at: new Date().toISOString(),
     query: query,
     item_count: items.length,
+    url_candidate_count: items.filter(item => Boolean(item.url)).length,
     topic_count: Object.keys(topicCounts).length,
     rendered_topic_count: selectedTopics.length,
     rendered_item_count: renderedItems,
     detailed_item_count: detailedItemCount,
     max_topics: BRIEFING_MAX_TOPICS,
     max_items_per_topic: BRIEFING_MAX_ITEMS_PER_TOPIC,
+    max_topic_share_target: BRIEFING_MAX_TOPIC_SHARE,
+    max_rendered_topic_share: maxRenderedTopicShare,
     truncated: Boolean(renderTruncated),
-    topic_counts: topicCounts
+    topic_counts: topicCounts,
+    topic_details: topicDetails
   };
 }
 
