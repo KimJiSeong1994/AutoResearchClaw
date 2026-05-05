@@ -14,6 +14,13 @@ newsletter_ingest = importlib.util.module_from_spec(spec)
 sys.modules["newsletter_ingest"] = newsletter_ingest
 spec.loader.exec_module(newsletter_ingest)
 
+BRIDGE = Path(__file__).resolve().parents[2] / "apps_script_relay_ingest.py"
+bridge_spec = importlib.util.spec_from_file_location("apps_script_relay_ingest", BRIDGE)
+assert bridge_spec and bridge_spec.loader
+apps_script_relay_ingest = importlib.util.module_from_spec(bridge_spec)
+sys.modules["apps_script_relay_ingest"] = apps_script_relay_ingest
+bridge_spec.loader.exec_module(apps_script_relay_ingest)
+
 
 def test_jsonl_ingest_filters_sender_and_omits_email_body(tmp_path: Path) -> None:
     source = tmp_path / "newsletters.jsonl"
@@ -382,6 +389,86 @@ def test_topic_briefing_renders_sanitized_primary_secondary_metadata() -> None:
     assert "tags=`rag" in briefing
     assert "confidence=" in briefing
     assert "Private body should never render" not in briefing
+
+
+def test_topic_briefing_uses_public_article_summary_lines() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-04",
+        items=[
+            {
+                "title": "Digest subject",
+                "article_title": "GraphRAG benchmark release",
+                "kind": "post",
+                "url": "https://example.com/graphrag",
+                "summary_lines": [
+                    "The public article introduces a retrieval benchmark for graph-grounded agents.",
+                    "It compares GraphRAG indexing, query planning, and answer grounding across datasets.",
+                    "The results help researchers track accuracy and latency trade-offs for RAG systems.",
+                ],
+                "classification_text": "private subscriber context should not render",
+            }
+        ],
+        source_name="Apps Script relay",
+    )
+
+    assert "GraphRAG benchmark release" in briefing
+    assert "retrieval benchmark for graph-grounded agents" in briefing
+    assert "query planning" in briefing
+    assert "accuracy and latency trade-offs" in briefing
+    assert "private subscriber context" not in briefing
+
+
+def test_apps_script_relay_ingest_normalizes_public_payload_and_omits_private_context(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "query": "newer_than:7d",
+                "items": [
+                    {
+                        "title": "Private digest subject",
+                        "url": "https://example.com/rag-agent",
+                        "kind": "post",
+                        "sender": "Digest <digest@example.com>",
+                        "receivedAt": "2026-05-04 08:00",
+                        "articleTitle": "RAG agent systems",
+                        "articleDescription": "Public article describes retrieval agents for knowledge graph search.",
+                        "articleText": "Public article describes retrieval agents for knowledge graph search and evaluation.",
+                        "summaryLines": [
+                            "The article presents retrieval agents over knowledge graphs.",
+                            "It details RAG orchestration, search grounding, and evaluation signals.",
+                            "The result is useful for tracking agentic retrieval research.",
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = apps_script_relay_ingest.main(
+        [
+            "--payload",
+            str(payload_path),
+            "--wiki-root",
+            str(tmp_path / "wiki"),
+            "--date",
+            "2026-05-04",
+            "--briefing-path",
+            str(tmp_path / "briefing.md"),
+        ]
+    )
+
+    assert rc == 0
+    raw = json.loads((tmp_path / "wiki" / "raw" / "newsletters" / "2026-05-04" / "items.json").read_text())
+    stored = raw["items"][0]
+    assert stored["article_title"] == "RAG agent systems"
+    assert stored["summary_lines"][0].startswith("The article presents")
+    dumped = json.dumps(raw, ensure_ascii=False)
+    assert "articleText" not in dumped
+    assert "classification_text" not in dumped
+    briefing = (tmp_path / "briefing.md").read_text(encoding="utf-8")
+    assert "RAG orchestration" in briefing
 
 
 def test_topic_taxonomy_parity_fixture_matches_apps_script_smoke_intent() -> None:

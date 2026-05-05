@@ -107,10 +107,23 @@ const TOPIC_RULES = [
 ];
 
 function runNewsletterArchive() {
+  const payload = buildNewsletterArchivePayload_();
+  if (payload.delivery_mode !== 'relay_pull') {
+    const props = PropertiesService.getScriptProperties();
+    postDiscord_(
+      props.getProperty('DISCORD_CHANNEL_ID') || DEFAULT_DISCORD_CHANNEL_ID,
+      props.getProperty('DISCORD_BOT_TOKEN') || '',
+      payload.briefing,
+      props.getProperty('DISCORD_WEBHOOK_URL') || ''
+    );
+  }
+  return payload.briefing;
+}
+
+function buildNewsletterArchivePayload_() {
   const props = PropertiesService.getScriptProperties();
   const deliveryMode = props.getProperty('DELIVERY_MODE') || 'relay_pull';
   const webhookUrl = props.getProperty('DISCORD_WEBHOOK_URL') || '';
-  const channelId = props.getProperty('DISCORD_CHANNEL_ID') || DEFAULT_DISCORD_CHANNEL_ID;
   const token = props.getProperty('DISCORD_BOT_TOKEN') || '';
   const senderAllowlist = csv_(props.getProperty('SENDER_ALLOWLIST') || '');
   const collectAllMail = bool_(props.getProperty('COLLECT_ALL_MAIL'), DEFAULT_COLLECT_ALL_MAIL);
@@ -130,10 +143,15 @@ function runNewsletterArchive() {
   const rendered = renderBriefingWithTelemetry_(items, query);
   const briefing = rendered.briefing;
   saveLatestBriefing_(briefing, rendered.telemetry);
-  if (deliveryMode !== 'relay_pull') {
-    postDiscord_(channelId, token, briefing, webhookUrl);
-  }
-  return briefing;
+  return {
+    briefing: briefing,
+    generated_at: rendered.telemetry.generated_at,
+    item_count: items.length,
+    query: query,
+    telemetry: rendered.telemetry,
+    delivery_mode: deliveryMode,
+    items: sanitizeRelayItems_(items)
+  };
 }
 
 function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllMail, includeAllUrls, fetchArticleDetails) {
@@ -376,6 +394,26 @@ function readLatestBriefingTelemetry_(props) {
   }
 }
 
+function sanitizeRelayItems_(items) {
+  return items.map(item => {
+    const summaryLines = buildSummaryLines_(item);
+    return {
+      title: item.title || '',
+      url: item.url || '',
+      kind: item.kind || '',
+      sender: item.sender || '',
+      receivedAt: item.receivedAt || '',
+      topic: item.topic || '',
+      snippet: item.snippet || '',
+      articleTitle: item.articleTitle || '',
+      articleDescription: item.articleDescription || '',
+      articleText: truncate_(plain_(item.articleText || ''), MAX_ARTICLE_CHARS),
+      summaryLines: summaryLines,
+      hasPublicArticleText: Boolean(item.articleText)
+    };
+  });
+}
+
 function doGet(e) {
   const props = PropertiesService.getScriptProperties();
   const expected = props.getProperty('RELAY_READ_TOKEN') || '';
@@ -386,7 +424,12 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
   if (e && e.parameter && String(e.parameter.refresh || '') === 'true') {
-    runNewsletterArchive();
+    const payload = buildNewsletterArchivePayload_();
+    if (String(e.parameter.include_items || '') === 'true') {
+      return ContentService
+        .createTextOutput(JSON.stringify(payload))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
   }
   return ContentService
     .createTextOutput(JSON.stringify({

@@ -27,7 +27,19 @@ if [[ -x "$HOME/.openclaw/workspace/projects/paper-recommender/.venv/bin/python"
 fi
 
 if [[ "$NEWSLETTER_SOURCE_MODE" == "apps_script_pull" ]]; then
-  bash "$HOME/.openclaw/workspace/scripts/apps-script-newsletter-pull.sh"
+  : "${APPS_SCRIPT_BRIEFING_URL:?missing APPS_SCRIPT_BRIEFING_URL}"
+  : "${APPS_SCRIPT_RELAY_TOKEN:?missing APPS_SCRIPT_RELAY_TOKEN}"
+  TMP_JSON="$(mktemp)"
+  trap 'rm -f "$TMP_JSON"' EXIT
+  URL="$APPS_SCRIPT_BRIEFING_URL"
+  sep='?'
+  if [[ "$URL" == *\?* ]]; then sep='&'; fi
+  curl -fsSL "${URL}${sep}token=${APPS_SCRIPT_RELAY_TOKEN}&refresh=true&include_items=true" -o "$TMP_JSON"
+  "$PYTHON_BIN" "$SKILL_DIR/apps_script_relay_ingest.py" \
+    --payload "$TMP_JSON" \
+    --wiki-root "$NEWSLETTER_WIKI_ROOT" \
+    --date "$NEWSLETTER_DATE" \
+    --briefing-path "$NEWSLETTER_REPORT_PATH"
 elif [[ "$NEWSLETTER_SOURCE_MODE" == "gmail_api" ]]; then
   "$PYTHON_BIN" "$SKILL_DIR/gmail_newsletter_briefing.py" \
     --wiki-root "$NEWSLETTER_WIKI_ROOT" \

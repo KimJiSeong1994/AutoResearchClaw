@@ -266,7 +266,14 @@ def _short_hash(value: str, *, prefix: str = "") -> str:
 
 
 def _public_excerpt(item: dict[str, str], *, limit: int = 220) -> str:
-    return _clean_text(item.get("summary") or item.get("snippet") or item.get("title") or "")[:limit]
+    return _clean_text(
+        item.get("public_excerpt")
+        or item.get("summary")
+        or item.get("article_description")
+        or item.get("snippet")
+        or item.get("title")
+        or ""
+    )[:limit]
 
 
 def _private_context(item: dict[str, str]) -> str:
@@ -581,6 +588,9 @@ def classify_topic_result(item: dict[str, str]) -> TopicClassification:
             item.get("url", ""),
             item.get("snippet", ""),
             item.get("summary", ""),
+            item.get("public_excerpt", ""),
+            item.get("article_title", ""),
+            item.get("article_description", ""),
             item.get("classification_text", ""),
         ]
     )
@@ -757,6 +767,10 @@ def _item_for_publish(item: dict[str, str]) -> dict[str, object]:
         "kind",
         "sender",
         "received_at",
+        "article_title",
+        "article_description",
+        "public_excerpt",
+        "summary_lines",
         "primary_topic",
         "primary_topic_display",
         "secondary_topics",
@@ -774,13 +788,44 @@ def _item_for_publish(item: dict[str, str]) -> dict[str, object]:
     return out
 
 
+def item_summary_lines(item: dict[str, object]) -> list[str]:
+    raw = item.get("summary_lines") or item.get("summaryLines") or []
+    lines: list[str] = []
+    if isinstance(raw, list):
+        for value in raw:
+            text = _clean_text(str(value))
+            if text and text not in lines:
+                lines.append(text[:220])
+            if len(lines) == 3:
+                return lines
+    public_excerpt = _clean_text(
+        str(item.get("public_excerpt") or item.get("article_description") or item.get("snippet") or "")
+    )
+    title = _clean_text(str(item.get("article_title") or item.get("title") or ""))
+    classification = classify_topic_result(item)  # type: ignore[arg-type]
+    fallback = [
+        public_excerpt or title or "공개 원문 요약이 부족해 제목과 메타데이터 중심으로 추적합니다.",
+        f"{classification.primary_display} 신호: {', '.join(classification.reasons) or item.get('kind') or 'metadata'} 기준으로 분류했습니다.",
+        f"후속 검토 포인트: {title or item.get('url') or '원문'}의 기술 방법, 평가 지표, 적용 범위를 확인합니다.",
+    ]
+    for value in fallback:
+        text = _clean_text(str(value))
+        if text and text not in lines:
+            lines.append(text[:220])
+        if len(lines) == 3:
+            break
+    while len(lines) < 3:
+        lines.append("공개 원문 근거가 부족해 다음 수집에서 상세 내용을 재확인합니다.")
+    return lines[:3]
+
+
 def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
     grouped: dict[str, list[dict[str, str]]] = {}
     for item in items:
         grouped.setdefault(classify_topic(item), []).append(item)
     topic_priority = {rule.label: rule.priority for rule in _TOPIC_RULES}
     topic_priority.update({"논문/리서치": 900, "기타 테크 리포트": 1000})
-    return sorted(grouped.items(), key=lambda pair: (-len(pair[1]), topic_priority.get(pair[0], 999), pair[0]))
+    return sorted(grouped.items(), key=lambda pair: (topic_priority.get(pair[0], 999), -len(pair[1]), pair[0]))
 
 
 def render_topic_briefing(
@@ -800,8 +845,8 @@ def render_topic_briefing(
         "## 토픽별 기술 리포트/뉴스레터 요약",
         "",
         f"- 수집 항목: {len(items)}개",
-        "- 기준: allowlist로 허용한 발신자/도메인의 로컬 Gmail Takeout mbox 또는 sanitized JSONL",
-        "- 운영 메모: Gmail 웹/계정에 직접 접속하지 않으며, export 파일 기반으로만 처리",
+        "- 기준: 허용된 수집 경로에서 메일 메타데이터와 공개 아티클 원문/요약만 받아 토픽별 정리",
+        "- 운영 메모: 메일 본문/개인정보는 저장하지 않고 공개 URL의 기술 근거와 출처 링크만 게시",
     ]
     if not items:
         lines += [
@@ -816,7 +861,7 @@ def render_topic_briefing(
     for topic, topic_items in group_items_by_topic(items):
         lines += ["", f"### {topic}"]
         for item in topic_items[:max_items_per_topic]:
-            title = _safe_title(item.get("title") or "(untitled newsletter item)")
+            title = _safe_title(item.get("article_title") or item.get("title") or "(untitled newsletter item)")
             sender = _safe_title(item.get("sender") or "unknown")
             kind = item.get("kind") or "post"
             received = item.get("received_at") or "unknown"
@@ -824,9 +869,13 @@ def render_topic_briefing(
             classification = classify_topic_result(item)
             evidence = ", ".join(classification.reasons) or "fallback"
             tags = ", ".join(classification.secondary) or "none"
+            summary = item_summary_lines(item)
             lines += [
-                f"- 핵심 요약: {title}",
-                f"- 기술 포인트: `{kind}` 유형, primary=`{classification.primary}`, tags=`{tags}`, confidence={classification.confidence:.2f}, 토픽 근거 `{evidence}` 기준으로 분류. 발신자 `{sender}`, 수신일 `{received}` 기준으로 추적",
+                f"- 주요 아티클/논문: {title}",
+                f"  - 핵심 요약: {summary[0]}",
+                f"  - 기술 포인트: {summary[1]}",
+                f"  - 의미/근거: {summary[2]}",
+                f"  - 분류 근거: `{kind}` 유형, primary=`{classification.primary}`, tags=`{tags}`, confidence={classification.confidence:.2f}, 토픽 근거 `{evidence}`. 발신자 `{sender}`, 수신일 `{received}`",
                 f"- 출처 링크: [{title}]({url})",
             ]
         remaining = len(topic_items) - max_items_per_topic

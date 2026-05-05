@@ -89,6 +89,34 @@ def _split_newsletter_messages(text: str, *, max_chars: int) -> list[str]:
     return bounded
 
 
+async def _post_message_with_rate_limit(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict[str, str],
+    content: str,
+    max_retries: int = 4,
+) -> None:
+    for attempt in range(max_retries + 1):
+        response = await client.post(url, headers=headers, json={"content": content})
+        if response.status_code != 429:
+            response.raise_for_status()
+            return
+        retry_after = 1.0
+        try:
+            retry_after = float(response.json().get("retry_after") or retry_after)
+        except Exception:
+            header_value = response.headers.get("retry-after")
+            if header_value:
+                try:
+                    retry_after = float(header_value)
+                except ValueError:
+                    retry_after = 1.0
+        if attempt >= max_retries:
+            response.raise_for_status()
+        await asyncio.sleep(min(max(retry_after, 0.25), 10.0))
+
+
 async def run() -> None:
     _load_dotenv(Path.cwd() / ".env")
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
@@ -111,8 +139,7 @@ async def run() -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         for idx, message in enumerate(messages, start=1):
             suffix = f"\n\n({idx}/{len(messages)})" if len(messages) > 1 else ""
-            response = await client.post(url, headers=headers, json={"content": message + suffix})
-            response.raise_for_status()
+            await _post_message_with_rate_limit(client, url, headers=headers, content=message + suffix)
     print(f"posted newsletter briefing to channel={channel_id} source={source} messages={len(messages)}")
 
 

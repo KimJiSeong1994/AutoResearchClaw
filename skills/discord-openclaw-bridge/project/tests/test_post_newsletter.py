@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -10,6 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from discord_openclaw_bridge.post_newsletter import (  # noqa: E402
     NewsletterPostConfigError,
     _load_message,
+    _post_message_with_rate_limit,
     _required_snowflake,
     _split_newsletter_messages,
 )
@@ -55,3 +57,33 @@ def test_newsletter_splitter_preserves_topic_boundaries() -> None:
     assert all(len(chunk) <= 180 for chunk in chunks)
     assert any("### LLM/에이전트" in chunk for chunk in chunks)
     assert any("### 검색/RAG/지식그래프" in chunk for chunk in chunks)
+
+
+def test_newsletter_post_retries_discord_429(monkeypatch) -> None:
+    import httpx
+
+    calls: list[str] = []
+
+    async def fake_sleep(_seconds: float) -> None:
+        calls.append("sleep")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append("post")
+        if calls.count("post") == 1:
+            return httpx.Response(429, json={"retry_after": 0.01}, request=request)
+        return httpx.Response(200, json={"id": "1"}, request=request)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await _post_message_with_rate_limit(
+                client,
+                "https://discord.com/api/v10/channels/1/messages",
+                headers={"Authorization": "Bot test"},
+                content="hello",
+            )
+
+    asyncio.run(scenario())
+
+    assert calls == ["post", "sleep", "post"]
