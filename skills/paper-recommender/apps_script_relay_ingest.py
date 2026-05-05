@@ -121,7 +121,6 @@ def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
     article_title = _clean(raw.get("articleTitle") or raw.get("article_title"))
     article_description = _clean(raw.get("articleDescription") or raw.get("article_description"))
     article_text = _clean(raw.get("articleText") or raw.get("article_text"))
-    snippet = _clean(raw.get("snippet"))
     # Gmail snippets are mailbox body context, not public article evidence.
     # Keep them out of persisted/published excerpts; use only fetched/public
     # article metadata or title fallbacks.
@@ -211,6 +210,112 @@ def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[s
     return payload, normalized
 
 
+def _approved_manual_link(raw: dict[str, object]) -> bool:
+    review = raw.get("review")
+    if not isinstance(review, dict):
+        return False
+    tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+    clean_tags = {_clean(tag).lower() for tag in tags}
+    return (
+        _clean(raw.get("source")).lower() == "discord_miner"
+        and _clean(review.get("decision")).lower() == "approved"
+        and _clean(review.get("source_decision")).lower() in {"", "approve", "approved"}
+        and "approved-by-jiphyeonjeon-claw" in clean_tags
+    )
+
+
+def normalize_manual_link_item(raw: dict[str, object]) -> dict[str, object] | None:
+    if not _approved_manual_link(raw):
+        return None
+    title = _clean(raw.get("title"))
+    url = newsletter_ingest.sanitize_public_url(_clean(raw.get("url")))
+    if not title or not url or newsletter_ingest.is_private_utility_url(url):
+        return None
+    summary = _clean(raw.get("summary"))[:900]
+    review = raw.get("review") if isinstance(raw.get("review"), dict) else {}
+    approved_at = _clean(review.get("approved_at")) if isinstance(review, dict) else ""
+    published_at = _clean(raw.get("published_at"))
+    summary_lines = [summary] if summary else []
+    item: dict[str, object] = {
+        "title": title,
+        "article_title": title,
+        "article_description": summary,
+        "public_excerpt": summary or title,
+        "url": url,
+        "kind": "manual-link",
+        "sender": "집현전-광부 승인 큐",
+        "received_at": approved_at or published_at,
+        "snippet": "",
+        "summary_lines": summary_lines,
+        "classification_text": " ".join(
+            part
+            for part in [
+                title,
+                summary,
+                " ".join(_clean(tag) for tag in raw.get("tags", []) if _clean(tag))
+                if isinstance(raw.get("tags"), list)
+                else "",
+            ]
+            if part
+        ),
+    }
+    classification = newsletter_ingest.classify_topic_detail(item)  # type: ignore[arg-type]
+    item.update(
+        {
+            "primary_topic": classification.primary,
+            "primary_topic_display": classification.primary_display,
+            "secondary_topics": list(classification.secondary),
+            "topic_confidence": classification.confidence,
+            "topic_reasons": list(classification.reasons),
+        }
+    )
+    return item
+
+
+def load_manual_link_items(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    out: list[dict[str, object]] = []
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{line_no}: invalid approved manual link JSONL: {exc}") from exc
+        if not isinstance(raw, dict):
+            continue
+        item = normalize_manual_link_item(raw)
+        if item is not None:
+            out.append(item)
+    return out
+
+
+def merge_manual_link_items(
+    relay_items: list[dict[str, object]],
+    manual_items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    merged = list(relay_items)
+    seen = {
+        (
+            str(item.get("article_title") or item.get("title") or "").lower(),
+            str(item.get("url") or "").lower(),
+        )
+        for item in merged
+    }
+    for item in manual_items:
+        key = (
+            str(item.get("article_title") or item.get("title") or "").lower(),
+            str(item.get("url") or "").lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--payload", required=True, help="Apps Script relay JSON payload path")
@@ -218,13 +323,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", default=_date.today().isoformat(), help="Run date folder/page date")
     parser.add_argument("--briefing-path", required=True, help="Markdown path for Discord-ready topic briefing")
     parser.add_argument("--max-items-per-topic", type=int, default=3)
+    parser.add_argument(
+        "--manual-links-path",
+        default="",
+        help="Optional approved 집현전-광부 manual_links JSONL to merge after Claw review",
+    )
     args = parser.parse_args(argv)
 
     payload_path = Path(args.payload).expanduser()
     wiki_root = Path(args.wiki_root).expanduser()
     briefing_path = Path(args.briefing_path).expanduser()
+    manual_links_path = Path(args.manual_links_path).expanduser() if args.manual_links_path else None
     try:
         payload, items = load_relay_items(payload_path)
+        manual_items = load_manual_link_items(manual_links_path) if manual_links_path else []
+        items = merge_manual_link_items(items, manual_items)
         raw_path, page_path = newsletter_ingest.publish_items(
             wiki_root=wiki_root,
             run_date=args.date,
@@ -233,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         briefing_path.parent.mkdir(parents=True, exist_ok=True)
         source_name = f"Apps Script relay `{payload.get('query') or 'GmailApp search'}`"
+        if manual_items:
+            source_name += f" + 집현전-광부 승인 링크 {len(manual_items)}건"
         newsletter_ingest._atomic_write_text(  # noqa: SLF001 - shared atomic writer
             briefing_path,
             newsletter_ingest.render_topic_briefing(
@@ -248,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {raw_path}")
     print(f"wrote {page_path}")
     print(f"wrote {briefing_path}")
+    if manual_links_path:
+        print(f"manual_links: {len(manual_items)} from {manual_links_path}")
     print(f"items: {len(items)}")
     return 0
 

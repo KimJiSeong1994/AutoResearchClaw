@@ -19,6 +19,7 @@ NEWSLETTER_SENDER_ALLOWLIST="${NEWSLETTER_SENDER_ALLOWLIST:-}"
 NEWSLETTER_MAX_MESSAGES="${NEWSLETTER_MAX_MESSAGES:-500}"
 NEWSLETTER_MAX_SOURCE_BYTES="${NEWSLETTER_MAX_SOURCE_BYTES:-52428800}"
 NEWSLETTER_DATE="${NEWSLETTER_DATE:-$(date +%F)}"
+JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-$HOME/.openclaw/workspace/manual_links/approved-manual-links.jsonl}"
 
 mkdir -p "$(dirname "$NEWSLETTER_REPORT_PATH")"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -35,11 +36,17 @@ if [[ "$NEWSLETTER_SOURCE_MODE" == "apps_script_pull" ]]; then
   sep='?'
   if [[ "$URL" == *\?* ]]; then sep='&'; fi
   curl -fsSL "${URL}${sep}token=${APPS_SCRIPT_RELAY_TOKEN}&refresh=true&include_items=true" -o "$TMP_JSON"
-  "$PYTHON_BIN" "$SKILL_DIR/apps_script_relay_ingest.py" \
-    --payload "$TMP_JSON" \
-    --wiki-root "$NEWSLETTER_WIKI_ROOT" \
-    --date "$NEWSLETTER_DATE" \
+  args=(
+    "$PYTHON_BIN" "$SKILL_DIR/apps_script_relay_ingest.py"
+    --payload "$TMP_JSON"
+    --wiki-root "$NEWSLETTER_WIKI_ROOT"
+    --date "$NEWSLETTER_DATE"
     --briefing-path "$NEWSLETTER_REPORT_PATH"
+  )
+  if [[ -f "$JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH" ]]; then
+    args+=(--manual-links-path "$JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH")
+  fi
+  "${args[@]}"
 elif [[ "$NEWSLETTER_SOURCE_MODE" == "gmail_api" ]]; then
   "$PYTHON_BIN" "$SKILL_DIR/gmail_newsletter_briefing.py" \
     --wiki-root "$NEWSLETTER_WIKI_ROOT" \

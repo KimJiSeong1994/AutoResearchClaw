@@ -1087,7 +1087,7 @@ def _blog_post_contract_lines(*, items: list[dict[str, str]]) -> list[str]:
         "## 논증 구조",
         f"1. 관찰: {summary[0]}",
         f"2. 메커니즘: {summary[1]}",
-        f"3. 긴장: 자동 수집은 속도를 높이지만 공개 근거와 private context 경계를 분리해야 합니다.",
+        "3. 긴장: 자동 수집은 속도를 높이지만 공개 근거와 private context 경계를 분리해야 합니다.",
         "4. 반론: 공개 요약만으로는 원문의 한계와 평가 조건을 충분히 판단하기 어렵습니다.",
         f"5. 판단: {classification.primary_display} 축의 후속 읽기 후보로 저장하되 원문 확인을 전제로 봅니다.",
         "",
