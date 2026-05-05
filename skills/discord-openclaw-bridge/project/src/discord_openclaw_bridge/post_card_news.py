@@ -591,20 +591,94 @@ def _render_skeletal_card(
     return "\n".join(body_parts)
 
 
+
+
+def _first_nonempty(values: list[str], *, fallback: str = "") -> str:
+    for value in values:
+        cleaned = _clean(value)
+        if cleaned:
+            return cleaned
+    return fallback
+
+
+def _publication_summary_lines(cards: list[dict[str, Any]]) -> list[str]:
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    summary: list[str] = []
+    if topics:
+        summary.append(f"오늘 브리핑은 {', '.join(topics[:3])} 흐름을 하나의 기술 변화로 묶어 읽습니다.")
+    else:
+        summary.append("오늘 브리핑은 공개 근거가 확인된 기술 읽기 후보를 선별해 점검합니다.")
+
+    claim = ""
+    for item in cards:
+        claim = _first_nonempty([
+            str(item.get("core_change") or ""),
+            str(item.get("claim") or ""),
+            str(item.get("thesis") or ""),
+            *(_summary_lines(item)[:1]),
+        ])
+        if claim:
+            break
+    summary.append(_normalize_register(claim) if claim else "개별 링크보다 문제의식과 근거 수준을 먼저 분리해 읽어야 합니다.")
+
+    question = ""
+    for item in cards:
+        lines = _summary_lines(item)
+        if lines:
+            question = _question_or_transform(_normalize_register(lines[-1])) or ""
+        if question:
+            break
+    summary.append(question or "다음 실행에서는 원문 근거와 운영 적용 조건을 함께 확인해야 합니다.")
+    return [_clean(line, limit=180) for line in summary[:3]]
+
+
+def _publication_header(cards: list[dict[str, Any]], *, run_date: str, total_count: int) -> str:
+    summary = _publication_summary_lines(cards)
+    theme = _theme_sentence(cards)
+    topics = [t for t in _distinct_topics_in_order(cards) if t and t != GENERIC_TOPIC]
+    topic_text = ", ".join(topics[:3]) if topics else "기술 브리핑 후보"
+    first_title = _title(cards[0]) if cards else "수집 결과 없음"
+    core_claim = summary[1]
+    future_question = summary[2].rstrip(".")
+    if not future_question.endswith("?"):
+        future_question = f"{future_question}?"
+    lines = [
+        f"**집현전-Claw 기술 블로그 브리핑 — {run_date}**",
+        f"대표 이미지 설명: {topic_text}를 데이터 흐름과 현장 의사결정 보드로 은유한 추상 일러스트",
+        "",
+        "**3줄 요약**",
+        f"1. {summary[0]}",
+        f"2. {summary[1]}",
+        f"3. {summary[2]}",
+        "",
+        "**왜 지금인가**",
+        theme,
+        "",
+        "**핵심 주장**",
+        core_claim,
+        "",
+        "**논증 구조**",
+        f"관찰: {topic_text} 신호가 공개 원문에서 반복됩니다. 메커니즘: 수집된 근거는 방법·평가·적용 조건의 차이를 드러냅니다. 긴장: 도입자는 정확도, 비용, 지연시간, 검증 가능성을 함께 부담합니다. 판단: 출처가 확인된 항목부터 좁게 읽어야 합니다.",
+        "",
+        "**산업/현장 해석**",
+        f"{first_title} 같은 항목은 개인 영웅담보다 조직의 도구 선택, 평가 체계, 운영 비용 배분 문제로 읽어야 합니다.",
+        "",
+        "**앞으로 볼 질문**",
+        future_question,
+        "",
+        "**카드뉴스·Discord 재사용안**",
+        f"아래 {len(cards)}개 카드는 이 글의 주장과 근거를 Discord에서 재사용할 수 있게 나눈 섹션입니다.",
+        "",
+        f"선별 {len(cards)}건 / 수집 {total_count}건",
+    ]
+    return "\n".join(lines)
+
 def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) -> list[str]:
     items = [item for item in payload.get("items", []) if isinstance(item, dict)]
     cards = _select_cards(items, max_cards=max_cards)
     run_date = _clean(payload.get("date") or date.today().isoformat())
 
-    header = "\n".join(
-        [
-            f"**{CARD_NEWS_TITLE} — {run_date}**",
-            "",
-            _theme_sentence(cards),
-            "",
-            f"선별 {len(cards)}건 / 수집 {len(items)}건",
-        ]
-    )
+    header = _publication_header(cards, run_date=run_date, total_count=len(items))
     messages = [header]
     topic_index: dict[str, int] = {}
 
