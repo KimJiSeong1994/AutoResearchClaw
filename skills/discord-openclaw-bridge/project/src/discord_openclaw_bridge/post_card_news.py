@@ -857,7 +857,7 @@ def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
             f"{record['title']}는 “{_strip_sentence_end(record['snippet'])}”라고 말합니다"
             for record in records
         )
-        return _clean(f"핵심은 {axis}입니다. 근거는 {basis}.", limit=420)
+        return _clean(f"핵심은 {axis}입니다. 근거는 {basis}.", limit=280)
     for item in cards:
         claim = _normalize_register(
             _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=180)
@@ -886,11 +886,11 @@ def _argument_structure(cards: list[dict[str, Any]], theme: str) -> list[str]:
         else ""
     )
     return [
-        _clean(observation, limit=520),
-        f"메커니즘: {axis} 때문에 도입자는 모델 성능뿐 아니라 인덱스 구조, 메모리 저장 방식, 평가 로그를 함께 설계해야 합니다.",
+        _clean(observation, limit=240),
+        f"메커니즘: {axis} 때문에 도입자는 모델 성능뿐 아니라 데이터 구조, 메모리 저장 방식, 평가 로그를 함께 설계해야 합니다.",
         f"긴장: 공개 근거가 있는 항목은 {evidence_count}/{len(cards)}건입니다.{tension_tail} 기술 선택을 서두르면 성능 수치보다 운영 비용과 검증 책임이 먼저 누락됩니다.",
-        "반론: 공개 요약·초록은 저자나 매체가 제공한 1차 설명이므로, 성능 우위나 제품 효과는 원문 실험 조건을 확인하기 전까지 보류해야 합니다.",
-        f"판단: 현재 확실히 말할 수 있는 결론은 {axis}가 반복 쟁점이라는 점입니다. 채택 여부는 원문 링크의 데이터셋, 지연시간, 재현 코드, 보안 조건을 확인한 뒤 판단합니다.",
+        "반론: 공개 요약·초록은 1차 설명이므로 성능 우위나 제품 효과는 원문 실험 조건 확인 전까지 보류합니다.",
+        f"판단: 지금 말할 수 있는 결론은 {axis}가 반복 쟁점이라는 점입니다.",
     ]
 
 
@@ -900,17 +900,18 @@ def _industry_interpretation(cards: list[dict[str, Any]]) -> str:
     axis = _decision_axis(topics, records)
     lead = records[0]["title"] if records else "이번 브리핑"
     if not topics:
-        return f"{lead}는 기술 후보를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 함을 보여줍니다."
-    return (
+        return _clean(f"{lead}는 기술 후보를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 함을 보여줍니다.", limit=240)
+    return _clean(
         f"{lead}의 쟁점은 연구 성과 자체보다 {axis}를 조직이 어떻게 책임질지에 가깝습니다. "
-        "현장에서는 데이터 소유권, 인덱스 갱신 주기, 실패 로그, 비용 배분을 정하지 않으면 좋은 모델도 운영 리스크로 바뀝니다."
+        "현장에서는 데이터 소유권, 인덱스 갱신 주기, 실패 로그, 비용 배분을 정하지 않으면 좋은 모델도 운영 리스크로 바뀝니다.",
+        limit=280,
     )
 
 
 def _future_questions(cards: list[dict[str, Any]]) -> list[str]:
     questions: list[str] = []
     for record in _evidence_records(cards, limit=4):
-        title = _clean(record["title"], limit=70)
+        title = _clean(record["title"], limit=56)
         topic = record["topic"]
         if topic == "검색/RAG/지식그래프":
             qtext = f"{title}의 검색 구조는 우리 문서 권한, 최신성, 지연시간 조건에서도 같은 이득을 내는가?"
@@ -946,13 +947,13 @@ def _why_now_paragraph(cards: list[dict[str, Any]], theme: str) -> str:
             f"{records[0]['title']}는 “{_strip_sentence_end(records[0]['snippet'])}”라는 문제를 제기하고, "
             f"{records[1]['title']}는 “{_strip_sentence_end(records[1]['snippet'])}”라는 다른 근거를 보탭니다. "
             f"두 항목을 같은 화면에 놓으면 지금의 질문은 새 도구가 나왔다는 소식이 아니라 {axis}입니다.",
-            limit=650,
+            limit=430,
         )
     if records:
         return _clean(
             f"{records[0]['title']}의 공개 요약은 “{_strip_sentence_end(records[0]['snippet'])}”라고 말합니다. "
             f"그래서 이번 이슈는 단일 링크 소개가 아니라 {axis}라는 운영 질문으로 읽어야 합니다.",
-            limit=520,
+            limit=360,
         )
     return theme
 
@@ -962,9 +963,10 @@ def _source_basis_sentence(cards: list[dict[str, Any]], *, item_count: int) -> s
     evidence_count = _evidence_count(cards)
     if records:
         titles = ", ".join(record["title"] for record in records)
-        return (
+        return _clean(
             f"근거: 선별 {len(cards)}건 / 수집 {item_count}건 중 공개 요약·초록이 확인된 "
-            f"{evidence_count}건을 본문 근거로 사용했습니다. 대표 근거는 {titles}입니다."
+            f"{evidence_count}건을 본문 근거로 사용했습니다. 대표 근거는 {titles}입니다.",
+            limit=260,
         )
     return f"근거: 선별 {len(cards)}건 / 수집 {item_count}건 중 공개 요약이 부족해 제목과 원문 링크만 남겼습니다."
 
@@ -995,7 +997,7 @@ def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_c
         "",
         "## 논증 구조",
     ]
-    lines.extend(f"{idx}. {line}" for idx, line in enumerate(argument, start=1))
+    lines.extend(f"{idx}. {_clean(line, limit=210)}" for idx, line in enumerate(argument, start=1))
     lines += [
         "",
         "## 산업사회학적·현장기반 해석",
