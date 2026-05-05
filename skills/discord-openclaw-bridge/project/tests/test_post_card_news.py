@@ -19,6 +19,7 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _is_card_news_bot_message,
     _purge_previous_card_news_messages,
     _sanitize_public_url,
+    _split_discord_content,
     enrich_public_metadata,
     render_card_news_messages,
 )
@@ -792,6 +793,17 @@ def test_forum_thread_creation_uses_thread_starter_with_suppressed_embeds() -> N
             },
         }
     ]
+
+
+def test_split_discord_content_keeps_chunks_under_limit() -> None:
+    content = "intro\n\n" + ("A" * 1200) + "\n\n" + ("B" * 1200)
+
+    chunks = _split_discord_content(content, limit=1500)
+
+    assert len(chunks) == 2
+    assert all(len(chunk) <= 1500 for chunk in chunks)
+    assert chunks[0].startswith("intro")
+    assert chunks[1].startswith("B")
 
 
 def test_footer_strips_sensitive_url_query_params() -> None:

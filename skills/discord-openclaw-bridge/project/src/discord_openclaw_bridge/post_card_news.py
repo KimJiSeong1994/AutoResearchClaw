@@ -1399,6 +1399,29 @@ def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) ->
     return messages
 
 
+def _split_discord_content(content: str, *, limit: int = 1900) -> list[str]:
+    if len(content) <= limit:
+        return [content]
+    chunks: list[str] = []
+    current = ""
+    parts = content.split("\n\n")
+    for part in parts:
+        candidate = part if not current else f"{current}\n\n{part}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        while len(part) > limit:
+            chunks.append(part[:limit].rstrip())
+            part = part[limit:].lstrip()
+        current = part
+    if current:
+        chunks.append(current)
+    return chunks or [content[:limit]]
+
+
 def _is_card_news_bot_message(message: dict[str, object]) -> bool:
     content = str(message.get("content") or "")
     author = message.get("author")
@@ -1560,21 +1583,22 @@ async def run() -> None:
                     f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
                     headers=headers,
                 )
+            header_chunks = _split_discord_content(messages[0])
             thread_id = await _create_forum_card_news_thread(
                 client,
                 forum_url,
                 headers=headers,
                 name=f"{_clean(payload.get('date') or date.today().isoformat())} 기술 브리핑 카드뉴스",
-                content=messages[0],
+                content=header_chunks[0],
                 hero_image_path=hero_image_path,
             )
             target_channel_id = int(thread_id)
-            messages_to_post = messages[1:]
+            messages_to_post = [*header_chunks[1:], *messages[1:]]
         else:
             url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
             if purge_previous:
                 purged = await _purge_previous_card_news_messages(client, url, headers=headers)
-            messages_to_post = messages
+            messages_to_post = [chunk for message in messages for chunk in _split_discord_content(message)]
         post_url = f"https://discord.com/api/v10/channels/{target_channel_id}/messages"
         for message in messages_to_post:
             await _post_message_with_rate_limit(
