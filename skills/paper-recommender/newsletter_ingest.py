@@ -868,6 +868,75 @@ def _cardnews_cta(title: str, topic: str) -> str:
     return f"저장 후 {target}의 방법·평가·적용 조건을 원문에서 재확인하세요."
 
 
+
+
+def _blog_summary_lines(items: list[dict[str, str]]) -> list[str]:
+    overview = _topic_overview(items)
+    first = items[0] if items else {}
+    first_summary = item_summary_lines(first) if first else []
+    return [
+        f"오늘 브리핑은 {overview or '공개 기술 후보'}를 하나의 변화 흐름으로 묶어 읽습니다.",
+        first_summary[0] if first_summary else "핵심은 링크 나열이 아니라 문제의식, 근거 수준, 적용 조건을 분리하는 것입니다.",
+        first_summary[2] if first_summary else "출처가 약한 항목은 다음 수집에서 확인 필요로 남깁니다.",
+    ]
+
+
+def _blog_intro_lines(*, run_date: str, items: list[dict[str, str]], source_name: str) -> list[str]:
+    summary = _blog_summary_lines(items)
+    overview = _topic_overview(items) or "기술 브리핑 후보"
+    first_title = _safe_title((items[0] if items else {}).get("article_title") or (items[0] if items else {}).get("title") or "수집 결과 없음")
+    return [
+        "**집현전-Claw 기술 블로그 브리핑**",
+        f"작성일: `{run_date}`",
+        f"수집 경로: {source_name}",
+        "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
+        "",
+        f"대표 이미지 설명: {overview}를 데이터 흐름, 연구 노트, 현장 의사결정 보드로 은유한 추상 일러스트",
+        "",
+        "> 3줄 요약",
+        f"> 1. {summary[0]}",
+        f"> 2. {summary[1]}",
+        f"> 3. {summary[2]}",
+        "",
+        "## 왜 지금 이 이슈인가",
+        f"- {overview} 신호가 같은 날 수집된 공개 링크에서 반복됩니다.",
+        "- 단일 링크 소개보다 어떤 평가·비용·운영 조건이 바뀌는지 함께 읽어야 합니다.",
+        "",
+        "## 핵심 주장",
+        f"- 주장: {summary[1]}",
+        f"- 근거: {summary[2]}",
+        f"- 적용 장면: {first_title} 같은 항목을 원문 조건과 함께 검토합니다.",
+        "",
+        "## 논증 구조",
+        "1. 관찰: 공개 아티클/논문 후보가 토픽별로 모입니다.",
+        "2. 메커니즘: 방법, 평가, 적용 조건의 차이가 기술 선택을 좌우합니다.",
+        "3. 긴장: 조직은 정확도, 비용, 지연시간, 검증 가능성을 함께 부담합니다.",
+        "4. 반론: 공개 요약만으로는 결론을 일반화하기 어렵습니다.",
+        "5. 판단: 확인된 출처 링크 중심으로 좁게 읽고 약한 문장은 확인 필요로 둡니다.",
+        "",
+        "## 산업사회학적·현장기반 해석",
+        "- 개인이나 기업의 홍보 문구보다 조직 인센티브, 도구 선택 비용, 평가 체계의 변화로 읽습니다.",
+        "",
+        "## 앞으로 볼 질문",
+        "- 원문이 제시한 방법·평가 조건은 실제 운영 환경에서도 유지되는가?",
+        "- 누가 도입 이익을 얻고 누가 검증·비용 부담을 지는가?",
+        "",
+        "## 카드뉴스 재사용안",
+        "1. 카드 1: 오늘의 문제의식",
+        "2. 카드 2: 핵심 변화",
+        "3. 카드 3: 왜 중요한가",
+        "4. 카드 4: 현장의 쟁점",
+        "5. 카드 5: 남는 질문과 출처",
+        "",
+        "## 디스코드 브리핑 재사용안",
+        f"- 한 줄 제목: {overview} 기술 블로그 브리핑",
+        f"- 3줄 요약: {summary[0]} / {summary[1]} / {summary[2]}",
+        "- 핵심 링크: 아래 출처 링크 참조",
+        "- 토론 질문: 운영 환경에서도 같은 효과가 유지되는가?",
+        "",
+        "## 출처",
+    ]
+
 def render_topic_briefing(
     *,
     run_date: str,
@@ -881,11 +950,13 @@ def render_topic_briefing(
     hook/context/change/why/evidence/implication/CTA arc, while preserving the
     privacy boundary that private email bodies never appear in persisted output.
     """
-    lines = [
-        "**집현전-Claw 기술 브리핑 카드뉴스**",
-        f"작성일: `{run_date}`",
-        f"수집 경로: {source_name}",
-        "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
+    lines = _blog_intro_lines(run_date=run_date, items=items, source_name=source_name)
+    for item in items[:12]:
+        title = _safe_title(item.get("article_title") or item.get("title") or "(untitled newsletter item)")
+        url = item.get("url") or ""
+        if url:
+            lines.append(f"- [{title}]({url}) — 공개 원문/요약 근거")
+    lines += [
         "",
         "━━━━━━━━━━━━━━━━━━━━",
         "## 카드뉴스 발행 템플릿",
