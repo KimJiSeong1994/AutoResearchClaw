@@ -72,6 +72,21 @@ _NON_NEWSLETTER_SENDER_HINTS = (
     "security-noreply@",
 )
 
+_NOTION_UPDATE_URL_HINTS = (
+    "mail.notion.so/",
+    "notion.so/notifications",
+)
+
+_NOTION_UPDATE_SENDER_HINTS = (
+    "notify@mail.notion.so",
+    "notion team",
+)
+
+_NOTION_UPDATE_TEXT_HINTS = (
+    "업데이트했습니다",
+    "updated",
+)
+
 
 def _clean(value: object) -> str:
     return newsletter_ingest._clean_text(str(value or ""))  # noqa: SLF001 - shared ingest sanitizer
@@ -114,6 +129,20 @@ def is_non_technical_notification_item(raw: dict[str, object]) -> bool:
     if is_linkedin and any(hint in text for hint in _NON_TECH_TEXT_HINTS):
         return True
     return False
+
+
+def is_notion_update_item(raw: dict[str, object]) -> bool:
+    url = _clean(raw.get("url")).lower()
+    sender = _clean(raw.get("sender")).lower()
+    title = _clean(raw.get("articleTitle") or raw.get("article_title") or raw.get("title")).lower()
+    snippet = _clean(raw.get("snippet")).lower()
+    text = " ".join([sender, title, snippet])
+    return (
+        any(hint in url for hint in _NOTION_UPDATE_URL_HINTS)
+        or any(hint in sender for hint in _NOTION_UPDATE_SENDER_HINTS)
+        or ("notion" in text and any(hint in text for hint in _NOTION_UPDATE_TEXT_HINTS))
+        or ("노션" in text and any(hint in text for hint in _NOTION_UPDATE_TEXT_HINTS))
+    )
 
 
 def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
@@ -195,6 +224,8 @@ def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[s
         if is_job_related_item(item):
             continue
         if is_non_technical_notification_item(item):
+            continue
+        if is_notion_update_item(item):
             continue
         if newsletter_ingest.is_private_utility_url(url) or _is_tracking_url(url):
             continue

@@ -696,6 +696,39 @@ def test_apps_script_relay_ingest_filters_linkedin_impression_notifications(tmp_
     assert items[0]["article_title"] == "AI Native Knowledge Graphs"
 
 
+def test_apps_script_relay_ingest_filters_notion_update_notifications(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "(주)빅밸류에서 서종현이 업데이트했습니다",
+                        "url": "https://mg.mail.notion.so/c/update-tracker",
+                        "kind": "post",
+                        "sender": "Notion Team <notify@mail.notion.so>",
+                        "snippet": "Notion 페이지 업데이트 알림입니다.",
+                    },
+                    {
+                        "title": "RAG agent systems",
+                        "url": "https://example.com/rag-agent",
+                        "kind": "post",
+                        "sender": "Digest <digest@example.com>",
+                        "articleTitle": "RAG agent systems",
+                        "articleDescription": "Public article describes retrieval agents for knowledge graph search.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _payload, items = apps_script_relay_ingest.load_relay_items(payload_path)
+
+    assert len(items) == 1
+    assert items[0]["article_title"] == "RAG agent systems"
+
+
 def test_topic_taxonomy_parity_fixture_matches_apps_script_smoke_intent() -> None:
     """Lock Python behavior to the GAS README parity smoke checklist."""
     cases = [
