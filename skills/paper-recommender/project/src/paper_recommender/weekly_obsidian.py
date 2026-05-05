@@ -191,6 +191,82 @@ def _render_soul_snapshot(settings: Settings, soul_md: str | None) -> tuple[str 
     }
 
 
+
+def _axis_key(value: Any) -> str:
+    axis = _safe_md(value)
+    return axis or "unspecified"
+
+
+def _build_soul_axis_coverage(
+    queries: list[dict[str, str]],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Summarize candidate evidence coverage for generated SOUL/profile axes.
+
+    Query generation already projects the compact SOUL/profile into named search
+    axes. This telemetry keeps that contract visible in the rendered note and raw
+    artifact: every generated axis is shown, and axes with no candidate evidence
+    are explicitly marked missing instead of silently disappearing.
+    """
+
+    ordered_axes: list[str] = []
+    query_by_axis: dict[str, str] = {}
+    for q in queries:
+        axis = _axis_key(q.get("axis"))
+        if axis not in query_by_axis:
+            ordered_axes.append(axis)
+            query_by_axis[axis] = _safe_md(q.get("query"))
+
+    counts: dict[str, int] = {axis: 0 for axis in ordered_axes}
+    examples: dict[str, str] = {}
+    for p in candidates:
+        axis = _axis_key(p.get("_trend_axis"))
+        if axis not in counts:
+            # Candidate-only axes can happen when old/raw artifacts are rendered
+            # or adapters enrich candidates differently from query generation.
+            ordered_axes.append(axis)
+            counts[axis] = 0
+            query_by_axis.setdefault(axis, "")
+        counts[axis] += 1
+        examples.setdefault(axis, _safe_md(p.get("title")))
+
+    return [
+        {
+            "axis": axis,
+            "candidate_count": counts.get(axis, 0),
+            "status": "covered" if counts.get(axis, 0) > 0 else "missing",
+            "query": query_by_axis.get(axis, ""),
+            "example_title": examples.get(axis, ""),
+        }
+        for axis in ordered_axes
+    ]
+
+
+def _render_soul_axis_coverage(coverage: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = ["## SOUL-axis coverage", ""]
+    if not coverage:
+        lines.append("- No SOUL/profile search axes were generated, so axis coverage could not be measured.")
+        lines.append("")
+        return lines
+
+    missing = [item for item in coverage if item.get("status") == "missing"]
+    for item in coverage:
+        axis = _safe_md(item.get("axis")) or "unspecified"
+        count = int(item.get("candidate_count") or 0)
+        query = _safe_md(item.get("query"))
+        example = _safe_md(item.get("example_title"))
+        if count > 0:
+            suffix = f"; example: {example}" if example else ""
+            lines.append(f"- ✅ **{axis}** — covered by {count} candidate(s){suffix}.")
+        else:
+            suffix = f"; query: `{query}`" if query else ""
+            lines.append(f"- ⚠️ **{axis}** — missing candidate evidence{suffix}.")
+    if missing:
+        axes = ", ".join(_safe_md(item.get("axis")) or "unspecified" for item in missing)
+        lines.append(f"- Missing axes to revisit: {axes}.")
+    lines.append("")
+    return lines
+
 def _paper_url(p: dict[str, Any]) -> str | None:
     arxiv = p.get("arxiv_id")
     if isinstance(arxiv, str) and _ARXIV_ID_RE.match(arxiv):
@@ -282,9 +358,8 @@ def render_weekly_report(
         lines.append("- No generated queries were available.")
     lines.append("")
 
-    lines.extend(["## SOUL axis coverage", ""])
-    lines.extend(_render_soul_axis_coverage(axis_coverage))
-    lines.append("")
+    soul_axis_coverage = _build_soul_axis_coverage(queries, candidates)
+    lines.extend(_render_soul_axis_coverage(soul_axis_coverage))
 
     lines.extend(["## Trend clusters", ""])
     clusters = report.get("clusters") or []
@@ -395,7 +470,7 @@ def write_weekly_artifacts(
         "soul_provenance": soul_provenance or {},
         "soul_card": soul_card,
         "queries": queries,
-        "soul_axis_coverage": _soul_axis_coverage(queries, candidates),
+        "soul_axis_coverage": _build_soul_axis_coverage(queries, candidates),
         "candidate_count": len(candidates),
         "candidates": [
             {
