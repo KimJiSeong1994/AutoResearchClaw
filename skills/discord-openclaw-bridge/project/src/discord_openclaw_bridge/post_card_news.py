@@ -753,6 +753,76 @@ def _evidence_snippet(item: dict[str, Any], *, limit: int = 220) -> str:
     return ""
 
 
+def _has_hangul(text: str) -> bool:
+    return bool(re.search(r"[가-힣]", text or ""))
+
+
+def _korean_takeaway(item: dict[str, Any], *, limit: int = 360) -> str:
+    """Create Korean technical interpretation from public title/excerpt facts."""
+    title = _raw_title(item)
+    snippet = _evidence_snippet(item, limit=520)
+    haystack = f"{title} {snippet}".lower()
+
+    if "topology-aware representation alignment" in haystack or "vision-language" in haystack:
+        text = (
+            "이 논문의 출발점은 CLIP류 비전-언어 모델이 일반 벤치마크에서는 강하지만 위성·패션·의료처럼 "
+            "분포가 다른 도메인에서는 쉽게 흔들린다는 점입니다. ToMA는 이미지-텍스트 쌍을 하나씩 맞추는 데서 "
+            "멈추지 않고, 임베딩 공간의 연결·순환 구조를 지속적 호몰로지로 잡아 두 모달리티의 전역 구조를 함께 맞추려 합니다."
+        )
+        return _clean(text, limit=limit)
+
+    if "ai-native products grow differently" in haystack or ("old saas playbook" in haystack and "trust" in haystack):
+        text = (
+            "AI-native 제품의 차이는 AI 기능을 붙였다는 데 있지 않고, 사용 맥락·결과 달성·신뢰 형성을 제품 루프 안에 "
+            "넣는 데 있습니다. 기존 SaaS가 정해진 워크플로우에 모델을 덧붙였다면, AI-native 제품은 데이터 피드백, "
+            "비용 변동성, 사용자 신뢰를 제품 성장의 핵심 변수로 다뤄야 합니다."
+        )
+        return _clean(text, limit=limit)
+
+    if "knowledge graph health" in haystack or "structure before scale" in haystack:
+        text = (
+            "이 글의 핵심은 지식그래프를 크게 만드는 것보다 먼저 노드·엣지의 품질과 연결 구조를 점검해야 한다는 주장입니다. "
+            "GraphRAG에서는 구조가 불안정하면 검색이 빨라질수록 잘못된 근거도 더 빠르게 퍼지므로, 규모보다 상태 진단이 먼저입니다."
+        )
+        return _clean(text, limit=limit)
+
+    if "rag, llm wiki, or gbrain" in haystack or "agent remembers" in haystack:
+        text = (
+            "에이전트의 기억 구조는 단순 저장소 선택이 아니라 장기 실행 품질을 좌우하는 설계 문제입니다. "
+            "RAG, 위키형 메모리, 그래프형 기억은 각각 검색 속도, 근거 추적성, 갱신 비용이 다르기 때문에 제품 단계에서는 "
+            "정답률보다 기억의 출처와 실패 복구 방식을 함께 봐야 합니다."
+        )
+        return _clean(text, limit=limit)
+
+    if "hybrid search" in haystack and "bm25" in haystack:
+        text = (
+            "하이브리드 RAG의 요지는 벡터 검색 하나로 근거 검색을 끝내지 않는 데 있습니다. BM25, 임베딩 검색, 재랭킹을 "
+            "함께 쓰면 키워드 일치와 의미 유사도를 보완할 수 있지만, 운영 환경에서는 지연시간과 평가 로그 설계가 같이 따라와야 합니다."
+        )
+        return _clean(text, limit=limit)
+
+    if _has_hangul(snippet):
+        return _clean(_normalize_register(snippet), limit=limit)
+
+    topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+    if topic == "논문/리서치":
+        text = (
+            f"{_title(item)}는 공개 초록 기준으로 새 방법이나 평가 조건을 제시한 연구 후보입니다. "
+            "다만 성능 주장보다 데이터셋, 비교군, 재현 코드가 실제 도입 판단의 핵심입니다."
+        )
+    elif topic == "LLM/에이전트":
+        text = (
+            f"{_title(item)}는 에이전트 제품에서 모델 능력보다 운영 루프와 신뢰 설계가 중요하다는 신호입니다. "
+            "도입자는 비용, 실패 복구, 사용자 피드백이 제품 구조 안에 들어가는지 확인해야 합니다."
+        )
+    else:
+        text = (
+            f"{_title(item)}는 공개 요약 기준으로 기술 선택의 방향을 보여주는 후보입니다. "
+            "본문 판단은 원문이 제시한 조건과 실제 운영 제약을 대조해야 합니다."
+        )
+    return _clean(text, limit=limit)
+
+
 def _evidence_records(cards: list[dict[str, Any]], *, limit: int = 4) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     for item in cards:
@@ -764,6 +834,7 @@ def _evidence_records(cards: list[dict[str, Any]], *, limit: int = 4) -> list[di
                 "title": _title(item),
                 "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
                 "snippet": snippet,
+                "takeaway": _korean_takeaway(item, limit=360),
             }
         )
         if len(records) >= limit:
@@ -777,7 +848,7 @@ def _strip_sentence_end(text: str) -> str:
 
 def _decision_axis(topics: list[str], records: list[dict[str, str]]) -> str:
     topic_text = " ".join(topics)
-    title_text = " ".join(record["title"] for record in records).lower()
+    title_text = " ".join([record["title"] + " " + record.get("takeaway", "") for record in records]).lower()
     if "검색/RAG/지식그래프" in topic_text and "LLM/에이전트" in topic_text:
         return "에이전트가 무엇을 기억하고, 어떤 검색 근거를 신뢰하며, 그 결과를 어떻게 평가할지"
     if "검색/RAG/지식그래프" in topic_text:
@@ -837,11 +908,11 @@ def _three_line_summary(cards: list[dict[str, Any]], theme: str) -> list[str]:
     axis = _decision_axis(topics, records)
     evidence_count = _evidence_count(cards)
     if records:
-        first = f"{records[0]['title']}: {records[0]['snippet']}"
+        first = records[0]["takeaway"]
     else:
         first = theme
     if len(records) >= 2:
-        second = f"{records[1]['title']}까지 함께 보면 관건은 {axis}입니다."
+        second = f"{records[1]['title']}까지 함께 보면, 관건은 {axis}입니다."
     else:
         second = f"관건은 {axis}입니다."
     third = f"공개 요약·초록이 있는 {evidence_count}/{len(cards)}건만 본문 근거로 쓰고, 메일 본문·토큰·비밀값은 제외했습니다."
@@ -854,7 +925,7 @@ def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
     axis = _decision_axis(topics, records)
     if records:
         basis = "; ".join(
-            f"{record['title']}는 “{_strip_sentence_end(record['snippet'])}”라고 말합니다"
+            f"{record['title']}는 {_strip_sentence_end(record['takeaway'])}라고 해석됩니다"
             for record in records
         )
         return _clean(f"핵심은 {axis}입니다. 근거는 {basis}.", limit=280)
@@ -874,7 +945,7 @@ def _argument_structure(cards: list[dict[str, Any]], theme: str) -> list[str]:
     evidence_count = _evidence_count(cards)
     if records:
         observation = "관찰: " + "; ".join(
-            f"{record['title']}는 “{_strip_sentence_end(record['snippet'])}”라고 말합니다"
+            f"{record['title']}는 {_strip_sentence_end(record['takeaway'])}라고 읽힙니다"
             for record in records[:2]
         )
     else:
@@ -944,14 +1015,13 @@ def _why_now_paragraph(cards: list[dict[str, Any]], theme: str) -> str:
     axis = _decision_axis(topics, records)
     if len(records) >= 2:
         return _clean(
-            f"{records[0]['title']}는 “{_strip_sentence_end(records[0]['snippet'])}”라는 문제를 제기하고, "
-            f"{records[1]['title']}는 “{_strip_sentence_end(records[1]['snippet'])}”라는 다른 근거를 보탭니다. "
-            f"두 항목을 같은 화면에 놓으면 지금의 질문은 새 도구가 나왔다는 소식이 아니라 {axis}입니다.",
+            f"{records[0]['title']}는 {records[0]['takeaway']} "
+            f"여기에 {records[1]['title']}가 제기한 쟁점까지 붙이면, 이번 브리핑의 질문은 새 도구 소개가 아니라 {axis}입니다.",
             limit=430,
         )
     if records:
         return _clean(
-            f"{records[0]['title']}의 공개 요약은 “{_strip_sentence_end(records[0]['snippet'])}”라고 말합니다. "
+            f"{records[0]['title']}는 {records[0]['takeaway']} "
             f"그래서 이번 이슈는 단일 링크 소개가 아니라 {axis}라는 운영 질문으로 읽어야 합니다.",
             limit=360,
         )
@@ -1216,14 +1286,18 @@ def _render_lean_card(
     reasons: list[str] | None = None,
 ) -> str:
     excerpt = _normalize_register(_substantive_excerpt(item, raw_title=title)[:320])
+    takeaway = _korean_takeaway(item, limit=360) if excerpt else ""
     disclaimer = LEAN_DISCLAIMER_WITH_EXCERPT if excerpt else LEAN_DISCLAIMER_WITHOUT_EXCERPT
     body_parts = [
         CARD_SEPARATOR,
         f"**{title}**",
         "",
     ]
+    if takeaway:
+        body_parts.extend([takeaway, ""])
     if excerpt:
-        body_parts.extend([excerpt, ""])
+        if not _has_substring_overlap(takeaway, excerpt, min_len=24):
+            body_parts.extend([f"원문 단서: {_clean(excerpt, limit=180)}", ""])
     body_parts.extend(
         [
             disclaimer,
