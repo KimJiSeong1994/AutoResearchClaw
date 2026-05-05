@@ -160,16 +160,19 @@ _SKIP_FETCH_URL_PATTERNS = (
     "preferences",
 )
 _NON_ARTICLE_TERMS = (
+    "digest",
     "receipt",
     "invoice",
     "order",
     "pedido",
     "pix",
+    "weekly",
     "analytics",
     "access request",
     "액세스 권한",
     "제안을 보냈습니다",
     "답장을 기다리고",
+    "주차",
     "unsubscribe",
     "preferences",
 )
@@ -566,7 +569,6 @@ def _is_non_article_item(item: dict[str, Any]) -> bool:
     haystack = " ".join(
         [
             _clean(item.get("article_title") or item.get("title")),
-            _clean(item.get("source_name") or item.get("sender") or item.get("newsletter_name")),
             _sanitize_public_url(_clean(item.get("url"))),
         ]
     ).lower()
@@ -619,12 +621,45 @@ def _item_quality_score(item: dict[str, Any]) -> int:
     return score
 
 
+def _story_key(item: dict[str, Any]) -> str:
+    title = _title(item).lower()
+    snippet = _evidence_snippet(item, limit=220).lower()
+    text = title
+    quoted_paper = re.search(r"implementation of the paper [\"“](.+?)[\"”]", text)
+    if not quoted_paper:
+        quoted_paper = re.search(r"implementation of the paper [\"“](.+?)[\"”]", snippet)
+    if quoted_paper:
+        text = quoted_paper.group(1)
+    elif _looks_like_digest_title(title):
+        text = f"{title} {snippet}"
+    text = re.sub(r"^\[\d{4}\.\d+(?:v\d+)?\]\s*", "", text)
+    words = re.findall(r"[0-9a-z가-힣]+", text)
+    stop_words = {
+        "github",
+        "implementation",
+        "paper",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "newsletter",
+        "weekly",
+    }
+    significant = [word for word in words if len(word) > 1 and word not in stop_words]
+    if len(significant) < 4:
+        return ""
+    return " ".join(significant[:10])
+
+
 def _publishable_card(item: dict[str, Any]) -> bool:
     score = _item_quality_score(item)
     if _is_non_article_item(item):
         return False
     topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
     if topic == GENERIC_TOPIC and not _is_tech_relevant_item(item):
+        return False
+    if topic == GENERIC_TOPIC and not item.get("metadata_enriched"):
         return False
     if _has_card_evidence(item):
         return score >= -2
@@ -651,33 +686,20 @@ def _topic_groups(items: list[dict[str, Any]]) -> OrderedDict[str, list[dict[str
 def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
-    for _topic, topic_items in _topic_groups(items).items():
-        for item in _sort_by_quality(topic_items):
-            title_key = _canonical_title_key(item)
-            url = _clean(item.get("url"))
-            key = title_key or url
-            if not url or not key or key in seen_titles:
-                continue
-            if not _publishable_card(item):
-                continue
-            seen_titles.add(key)
-            selected.append(item)
-            break
+    seen_stories: set[str] = set()
+    for item in _sort_by_quality([item for item in items if _publishable_card(item)]):
+        title_key = _canonical_title_key(item)
+        story_key = _story_key(item)
+        url = _clean(item.get("url"))
+        key = title_key or url
+        if not url or not key or key in seen_titles or story_key in seen_stories:
+            continue
+        seen_titles.add(key)
+        if story_key:
+            seen_stories.add(story_key)
+        selected.append(item)
         if len(selected) >= max_cards:
-            return selected
-    if len(selected) < max_cards:
-        for item in _sort_by_quality(items):
-            title_key = _canonical_title_key(item)
-            url = _clean(item.get("url"))
-            key = title_key or url
-            if not url or not key or key in seen_titles:
-                continue
-            if not _publishable_card(item):
-                continue
-            seen_titles.add(key)
-            selected.append(item)
-            if len(selected) >= max_cards:
-                break
+            break
     if not selected:
         # Preserve a minimal fallback for synthetic/unit-test payloads and true
         # edge cases where the archive has no publishable evidence at all.  In

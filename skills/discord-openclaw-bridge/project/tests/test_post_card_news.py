@@ -849,6 +849,54 @@ def test_selection_prefers_substantive_article_over_tracking_profile_link() -> N
     assert "에이전트 메모리 구조" in joined
 
 
+def test_selection_omits_title_only_cards_when_evidence_exists() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Important but thin RAG article",
+                "url": "https://example.com/thin-rag",
+                "primary_topic_display": "검색/RAG/지식그래프",
+            },
+            {
+                "article_title": "Evidence backed agent article",
+                "url": "https://example.com/agent",
+                "primary_topic_display": "LLM/에이전트",
+                "public_excerpt": "에이전트 메모리 설계가 검색 근거와 장기 실행 비용을 함께 바꾼다는 공개 요약입니다.",
+            },
+        ]
+    }
+
+    joined = "\n".join(render_card_news_messages(payload, max_cards=2))
+
+    assert "Evidence backed agent article" in joined
+    assert "Important but thin RAG article" not in joined
+
+
+def test_selection_deduplicates_same_paper_across_code_and_arxiv_cards() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "GitHub - user/ToMA: Implementation of the paper \"Topology-Aware Representation Alignment\"",
+                "url": "https://github.com/user/ToMA",
+                "primary_topic_display": "오픈소스/코드",
+                "public_excerpt": "Implementation of the paper \"Topology-Aware Representation Alignment\" - user/ToMA",
+            },
+            {
+                "article_title": "[2604.26370] Topology-Aware Representation Alignment",
+                "url": "https://arxiv.org/abs/2604.26370",
+                "primary_topic_display": "논문/리서치",
+                "public_excerpt": "Vision-language models often generalize poorly to specialized domains.",
+            },
+        ]
+    }
+
+    joined = "\n".join(render_card_news_messages(payload, max_cards=2))
+
+    assert joined.count(CARD_SEPARATOR) == 1
+    assert "arxiv.org/abs/2604.26370" in joined
+    assert "github.com/user/ToMA" not in joined
+
+
 def test_public_metadata_enrichment_adds_article_description_before_render() -> None:
     import httpx
 
