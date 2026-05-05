@@ -902,7 +902,8 @@ def _hero_image_description(topics: list[str]) -> str:
     topic_text = " · ".join(topics[:3]) if topics else "기술 브리핑"
     return (
         f"{topic_text} 변화가 연구 현장, 제품 조직, 운영 대시보드로 이어지는 장면을 "
-        "추상적으로 표현한 대표 이미지. 읽을 수 있는 텍스트·로고·실존 인물 초상은 제외."
+        "추상적으로 표현한 대표 이미지. 제목과 핵심 키워드는 별도 오버레이로 넣고, "
+        "로고·실존 인물 초상·원문 스크린샷은 제외."
     )
 
 
