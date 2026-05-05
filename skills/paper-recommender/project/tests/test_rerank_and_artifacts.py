@@ -484,11 +484,60 @@ def test_weekly_markdown_uses_korean_cluster_role_bullets_and_evidence(tmp_path:
     )
 
     assert "- **핵심 요약:** Recent evidence centers on temporal graph structure." in md
-    assert "- **기술 포인트:** It affects longitudinal representation learning." in md
+    assert "- **기술 포인트:** 근거 논문 제목·연도·출처 수준에서 확인되는 방법론 단서만 사용한다." in md
     assert "- **연구자 액션:**" in md
+    assert "중요성 단서: It affects longitudinal representation learning." in md
     assert "**Why it matters:**" not in md
+    assert "**근거 논문**" in md
     assert "- [Dynamic graph paper](https://jiphyeonjeon.kr/papers/p1) (2026, arxiv)" in md
 
+
+def test_weekly_markdown_preserves_numeric_at_a_glance_line_prefixes(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[],
+        report={
+            "at_a_glance": "2026 dynamic graph momentum\n1. Ordered insight",
+            "coverage_caveat": "limited",
+            "clusters": [],
+            "weak_signals": [],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+
+    assert "- 2026 dynamic graph momentum" in md
+    assert "- Ordered insight" in md
+
+
+def test_weekly_markdown_marks_empty_cluster_evidence(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[],
+        report={
+            "at_a_glance": "ok",
+            "coverage_caveat": "limited",
+            "clusters": [{"title": "Sparse cluster", "summary": "S", "why_it_matters": "W", "paper_ids": ["ghost"]}],
+            "weak_signals": [],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+
+    assert "**근거 논문**" in md
+    assert "- 근거 논문 링크를 후보 목록에서 확인하지 못했습니다." in md
 
 def test_weekly_state_is_separate_from_daily_seen(tmp_path: Path) -> None:
     from paper_recommender.state import StateStore
