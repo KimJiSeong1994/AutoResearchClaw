@@ -15,6 +15,7 @@ discord-jiphyeonjeon-miner-review = "discord_openclaw_bridge.review_cli:main"
 discord-openclaw-post-briefing = "discord_openclaw_bridge.post_briefing:main"
 discord-openclaw-post-newsletter = "discord_openclaw_bridge.post_newsletter:main"
 discord-openclaw-post-card-news = "discord_openclaw_bridge.post_card_news:main"
+discord-openclaw-post-newsletter-archive = "discord_openclaw_bridge.post_newsletter_archive:main"
 
 [build-system]
 requires = ["setuptools>=68"]
