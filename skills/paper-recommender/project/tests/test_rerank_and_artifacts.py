@@ -396,6 +396,100 @@ def test_weekly_markdown_defangs_labels_and_links(tmp_path: Path) -> None:
     assert "T x \\| y" in md
 
 
+
+def test_weekly_markdown_renders_at_a_glance_lists_as_bullets(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[],
+        report={
+            "at_a_glance": ["Dynamic graph evidence is strong", "Diachronic semantics remains thin"],
+            "coverage_caveat": "limited",
+            "clusters": [],
+            "weak_signals": [],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+
+    assert "## At a glance" in md
+    assert "- Dynamic graph evidence is strong" in md
+    assert "- Diachronic semantics remains thin" in md
+    assert "['Dynamic graph" not in md
+
+
+def test_weekly_markdown_renders_stringified_at_a_glance_lists_as_bullets(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[],
+        report={
+            "at_a_glance": "['Temporal graph dominates', 'Embedding drift is background']",
+            "coverage_caveat": "limited",
+            "clusters": [],
+            "weak_signals": [],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+
+    assert "- Temporal graph dominates" in md
+    assert "- Embedding drift is background" in md
+    assert "['Temporal graph" not in md
+
+
+def test_weekly_markdown_uses_korean_cluster_role_bullets_and_evidence(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[
+            {
+                "paper_id": "p1",
+                "title": "Dynamic graph paper",
+                "year": 2026,
+                "source": "arxiv",
+                "url": "https://example.test/p1",
+            }
+        ],
+        report={
+            "at_a_glance": "ok",
+            "coverage_caveat": "limited",
+            "clusters": [
+                {
+                    "title": "Dynamic graph representation",
+                    "summary": "Recent evidence centers on temporal graph structure.",
+                    "why_it_matters": "It affects longitudinal representation learning.",
+                    "paper_ids": ["p1"],
+                }
+            ],
+            "weak_signals": [],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+
+    assert "- **핵심 요약:** Recent evidence centers on temporal graph structure." in md
+    assert "- **기술 포인트:** It affects longitudinal representation learning." in md
+    assert "- **연구자 액션:**" in md
+    assert "**Why it matters:**" not in md
+    assert "- [Dynamic graph paper](https://example.test/p1) (2026, arxiv)" in md
+
+
 def test_weekly_state_is_separate_from_daily_seen(tmp_path: Path) -> None:
     from paper_recommender.state import StateStore
 
