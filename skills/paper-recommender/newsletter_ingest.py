@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Mapping
 
 
 _URL_RE = re.compile(r"https?://[^\s<>()\"']+", re.IGNORECASE)
@@ -296,6 +296,7 @@ def _decode_header(value: str | None) -> str:
 def _message_body(msg: mailbox.mboxMessage) -> str:
     """Return decoded text/html body for URL extraction only."""
     chunks: list[str] = []
+    parts: Iterable[email.message.Message]
     if msg.is_multipart():
         parts = msg.walk()
     else:
@@ -313,8 +314,9 @@ def _message_body(msg: mailbox.mboxMessage) -> str:
             if isinstance(raw_payload, str):
                 chunks.append(raw_payload)
             continue
-        charset = part.get_content_charset() or "utf-8"
-        chunks.append(payload.decode(charset, errors="replace"))
+        if isinstance(payload, bytes):
+            charset = part.get_content_charset() or "utf-8"
+            chunks.append(payload.decode(charset, errors="replace"))
     return "\n".join(chunks)
 
 
@@ -788,7 +790,7 @@ def _item_for_publish(item: dict[str, str]) -> dict[str, object]:
     return out
 
 
-def item_summary_lines(item: dict[str, object]) -> list[str]:
+def item_summary_lines(item: Mapping[str, object]) -> list[str]:
     raw = item.get("summary_lines") or item.get("summaryLines") or []
     lines: list[str] = []
     if isinstance(raw, list):
