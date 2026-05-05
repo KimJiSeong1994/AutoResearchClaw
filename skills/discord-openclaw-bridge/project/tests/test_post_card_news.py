@@ -238,7 +238,8 @@ def test_skeletal_card_is_three_lines_max_no_topic_boilerplate() -> None:
     )
     for phrase in legacy_phrases:
         assert phrase not in card, f"legacy boilerplate leaked: {phrase}"
-    assert "후속 읽기 후보" in card
+    assert "수집 제목 기준" in card
+    assert "세부 근거는 원문에서 확인" in card
     assert "`잠정`" in card
 
 

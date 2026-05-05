@@ -173,6 +173,34 @@ _NON_ARTICLE_TERMS = (
     "unsubscribe",
     "preferences",
 )
+_TECH_RELEVANCE_TERMS = (
+    "ai",
+    "agent",
+    "anthropic",
+    "benchmark",
+    "claude",
+    "code",
+    "csail",
+    "data",
+    "eval",
+    "graph",
+    "knowledge",
+    "llm",
+    "machine learning",
+    "model",
+    "multimodal",
+    "paper",
+    "rag",
+    "research",
+    "retrieval",
+    "vision",
+    "검색",
+    "논문",
+    "모델",
+    "멀티모달",
+    "에이전트",
+    "지식그래프",
+)
 
 
 def _clean(value: object, *, limit: int | None = None) -> str:
@@ -326,9 +354,11 @@ def _extract_public_metadata(markup: str) -> dict[str, str]:
     description = ""
     for match in _META_DESC_PATTERN.finditer(markup or ""):
         candidate = _strip_html(match.group(2))
-        if len(candidate) >= 40:
+        if len(candidate) >= 40 and not candidate.lower().startswith("abstract page for arxiv paper"):
             description = candidate
             break
+        if len(candidate) >= 40 and not description:
+            description = candidate
     title = ""
     title_match = _TITLE_PATTERN.search(markup or "")
     if title_match:
@@ -540,6 +570,19 @@ def _has_card_evidence(item: dict[str, Any]) -> bool:
     )
 
 
+def _is_tech_relevant_item(item: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        [
+            _clean(item.get("article_title") or item.get("title")),
+            _clean(item.get("source_name") or item.get("sender") or item.get("newsletter_name")),
+            _clean(item.get("primary_topic_display")),
+            _clean(item.get("public_excerpt") or item.get("article_description")),
+            _sanitize_public_url(_clean(item.get("url"))),
+        ]
+    ).lower()
+    return any(term in haystack for term in _TECH_RELEVANCE_TERMS)
+
+
 def _item_quality_score(item: dict[str, Any]) -> int:
     raw_title = _raw_title(item)
     score = _url_quality(_clean(item.get("url")))
@@ -564,10 +607,15 @@ def _publishable_card(item: dict[str, Any]) -> bool:
     score = _item_quality_score(item)
     if _is_non_article_item(item):
         return False
+    topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+    if topic == GENERIC_TOPIC and not _is_tech_relevant_item(item):
+        return False
     if _has_card_evidence(item):
         return score >= -2
     # Allow only highly trusted research/publication URLs through without a
     # public excerpt; otherwise the card becomes a title-only shell.
+    if topic != GENERIC_TOPIC and _url_quality(_clean(item.get("url"))) >= 2:
+        return True
     return score >= 9
 
 
@@ -1015,10 +1063,14 @@ def _render_skeletal_card(
     bucket: str,
 ) -> str:
     follow_up_topic = topic if topic and topic != GENERIC_TOPIC else "기술"
+    title_signal = title.rstrip(".")
     body_parts = [
         CARD_SEPARATOR,
         f"**{title}**",
-        f"{follow_up_topic} 영역의 후속 읽기 후보입니다.",
+        (
+            f"수집 제목 기준으로는 {follow_up_topic} 영역에서 `{title_signal}` 문제를 다룹니다. "
+            "공개 요약을 가져오지 못해 세부 근거는 원문에서 확인해야 합니다."
+        ),
         f"<{_sanitize_public_url(url)}> · `{bucket}`",
     ]
     return "\n".join(body_parts)
