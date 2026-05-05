@@ -637,3 +637,54 @@ def test_weekly_dry_run_does_not_write_artifacts_or_weekly_state(tmp_path: Path,
     assert not (tmp_path / "artifacts").exists()
     assert not (tmp_path / "state" / "weekly_seen.json").exists()
     assert not (tmp_path / "state" / "weekly_reports.jsonl").exists()
+
+
+def test_weekly_candidate_gather_retries_empty_axis_with_relaxed_query(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    from paper_recommender import weekly
+    from paper_recommender.state import StateStore
+
+    settings = _settings(tmp_path)
+    settings.weekly_report.per_query = 2
+    settings.weekly_report.candidate_cap = 10
+    calls: list[str] = []
+
+    class FakeJiphyClient:
+        def __init__(self, _settings):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def search(self, query: str, **_kwargs):
+            calls.append(query)
+            if query == "diachronic semantics":
+                return [{"paper_id": "p1", "title": "Semantic change benchmark"}]
+            return []
+
+    monkeypatch.setattr(weekly, "JiphyClient", FakeJiphyClient)
+    candidates = asyncio.run(
+        weekly._gather_weekly_candidates(
+            settings,
+            StateStore(tmp_path / "state"),
+            [
+                {
+                    "axis": "diachronic_semantics",
+                    "query": '("diachronic semantic change" OR "semantic change") AND (2026 OR 2025)',
+                    "rationale": "SOUL axis",
+                }
+            ],
+            force=True,
+        )
+    )
+
+    assert calls == [
+        '("diachronic semantic change" OR "semantic change") AND (2026 OR 2025)',
+        "diachronic semantics",
+    ]
+    assert candidates[0]["_trend_axis"] == "diachronic_semantics"
+    assert candidates[0]["_trend_query"] == "diachronic semantics"

@@ -277,21 +277,36 @@ async def _gather_weekly_candidates(
     pool: list[dict[str, Any]] = []
     async with JiphyClient(settings.jiphyeonjeon) as jh:
         for q in queries:
+            search_query = q["query"]
             try:
                 results = await jh.search(
-                    q["query"],
+                    search_query,
                     max_results=settings.weekly_report.per_query,
                     year_start=settings.weekly_report.year_start,
                     year_end=settings.weekly_report.year_end,
                 )
             except Exception as e:
-                log.warning("weekly search failed for %r: %s", q.get("query"), e)
-                continue
+                log.warning("weekly search failed for %r: %s", search_query, e)
+                results = []
+            if not results:
+                relaxed_query = _relaxed_weekly_query(q)
+                if relaxed_query and relaxed_query != search_query:
+                    try:
+                        results = await jh.search(
+                            relaxed_query,
+                            max_results=settings.weekly_report.per_query,
+                            year_start=settings.weekly_report.year_start,
+                            year_end=settings.weekly_report.year_end,
+                        )
+                        search_query = relaxed_query
+                    except Exception as e:
+                        log.warning("weekly relaxed search failed for %r: %s", relaxed_query, e)
+                        continue
             for p in results:
                 if not isinstance(p, dict):
                     continue
                 p = enrich_paper_ids(dict(p))
-                p["_trend_query"] = q["query"]
+                p["_trend_query"] = search_query
                 p["_trend_axis"] = q.get("axis")
                 p["_trend_rationale"] = q.get("rationale")
                 pool.append(p)
@@ -303,6 +318,16 @@ async def _gather_weekly_candidates(
             continue
         eligible.append(p)
     return _fair_cap(eligible, settings.weekly_report.candidate_cap)
+
+
+def _relaxed_weekly_query(query: dict[str, str]) -> str:
+    axis = str(query.get("axis") or "").replace("_", " ").strip()
+    if axis and axis.lower() != "unspecified":
+        return axis
+    raw = str(query.get("query") or "")
+    terms = re.sub(r"\b(?:AND|OR)\b|[()\"]|20\d{2}", " ", raw, flags=re.IGNORECASE)
+    terms = " ".join(terms.split())
+    return terms[:120]
 
 
 async def run_weekly_report(
