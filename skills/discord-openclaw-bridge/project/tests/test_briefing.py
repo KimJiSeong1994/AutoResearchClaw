@@ -62,6 +62,27 @@ class BriefingRenderTests(unittest.TestCase):
         self.assertNotIn("markdown fallback conclusion", briefing.body)
         self.assertNotIn("Markdown-only cluster", briefing.body)
 
+    def test_weekly_report_title_uses_kst_date(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            note = base / "research-trends.md"
+            note.write_text("# Weekly research trends\n", encoding="utf-8")
+            (base / "raw.json").write_text(
+                json.dumps(
+                    {
+                        "run_at": "2026-05-04T23:57:33+00:00",
+                        "soul_source": "soul",
+                        "report": {"clusters": [{"title": "KST cluster"}]},
+                        "candidates": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            briefing = render_briefing(note)
+
+        self.assertEqual(briefing.title, "최신 연구 동향 — 2026-05-05")
+
     def test_weekly_raw_profile_fallback_keeps_basis_visible(self) -> None:
         with TemporaryDirectory() as tmp:
             base = Path(tmp)

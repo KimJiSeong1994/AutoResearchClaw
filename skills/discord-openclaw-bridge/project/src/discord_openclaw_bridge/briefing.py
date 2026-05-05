@@ -4,7 +4,9 @@ import ast
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -212,7 +214,7 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     run_at = _raw_string(raw.get("run_at"))
     title = "최신 연구 동향"
     if run_at:
-        title = f"최신 연구 동향 — {run_at[:10]}"
+        title = f"최신 연구 동향 — {_kst_date(run_at)}"
 
     soul_source = _raw_string(raw.get("soul_source"))
     soul_fallback = _raw_bool(raw.get("soul_fallback_used"))
@@ -277,6 +279,16 @@ def _render_weekly_raw_briefing(source_path: Path, raw: dict[str, object], *, ma
     if len(body) > max_chars:
         body = body[: max(0, max_chars - 24)].rstrip() + "\n…(briefing truncated)"
     return Briefing(title=title, body=body, source_path=source_path)
+
+
+def _kst_date(value: str) -> str:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
 
 
 def render_briefing(source_path: Path, *, max_chars: int = 1800) -> Briefing:
