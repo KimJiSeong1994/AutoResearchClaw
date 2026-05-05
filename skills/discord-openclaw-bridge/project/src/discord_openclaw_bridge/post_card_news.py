@@ -622,7 +622,7 @@ def _item_quality_score(item: dict[str, Any]) -> int:
 
 
 def _story_key(item: dict[str, Any]) -> str:
-    title = _title(item).lower()
+    title = _raw_title(item).lower()
     snippet = _evidence_snippet(item, limit=220).lower()
     text = title
     quoted_paper = re.search(r"implementation of the paper [\"“](.+?)[\"”]", text)
