@@ -51,6 +51,69 @@ def test_weekly_report_marks_profile_fallback_distinctly(tmp_path) -> None:
     assert "profile/narrative fallback was used" in md
 
 
+
+def test_weekly_markdown_reports_soul_axis_coverage_and_missing_axes(tmp_path) -> None:
+    md = render_weekly_report(
+        _settings(tmp_path),
+        profile={"keywords": ["dynamic graph"]},
+        soul_md="dynamic graph representation\ndiachronic semantics",
+        user_id="researcher-1",
+        queries=[
+            {"axis": "dynamic graph", "query": "dynamic graph 2026", "rationale": "SOUL axis"},
+            {"axis": "diachronic semantics", "query": "semantic change 2026", "rationale": "SOUL axis"},
+        ],
+        candidates=[
+            {
+                "paper_id": "p1",
+                "title": "Dynamic graph paper",
+                "year": 2026,
+                "source": "arxiv",
+                "_trend_axis": "dynamic graph",
+                "_trend_query": "dynamic graph 2026",
+            }
+        ],
+        report={"coverage_caveat": "limited", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    assert "## SOUL axis coverage" in md
+    assert "- ✅ **dynamic graph:** covered by 1 candidate(s)." in md
+    assert "- ⚠️ **diachronic semantics:** missing visible candidate evidence." in md
+
+
+def test_weekly_raw_records_soul_axis_coverage(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    target = write_weekly_artifacts(
+        settings,
+        profile={"keywords": ["dynamic graph"]},
+        soul_md="dynamic graph representation",
+        user_id="researcher-1",
+        soul_card=None,
+        soul_provenance={"source": "soul", "present": True, "fallback_used": False},
+        queries=[
+            {"axis": "dynamic graph", "query": "dynamic graph 2026", "rationale": "SOUL axis"},
+            {"axis": "word embedding drift", "query": "dynamic word embedding", "rationale": "SOUL axis"},
+        ],
+        candidates=[
+            {
+                "paper_id": "p1",
+                "title": "Dynamic graph paper",
+                "year": 2026,
+                "source": "arxiv",
+                "_trend_axis": "dynamic graph",
+                "_trend_query": "dynamic graph 2026",
+            }
+        ],
+        report={"coverage_caveat": "limited", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    raw = json.loads((target / settings.weekly_report.raw_filename).read_text())
+    assert raw["soul_axis_coverage"] == [
+        {"axis": "dynamic graph", "candidate_count": 1, "covered": True},
+        {"axis": "word embedding drift", "candidate_count": 0, "covered": False},
+    ]
+
 def test_weekly_raw_records_soul_provenance_and_compact_card(tmp_path) -> None:
     settings = _settings(tmp_path)
     target = write_weekly_artifacts(

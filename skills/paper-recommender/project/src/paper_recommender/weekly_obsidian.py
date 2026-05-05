@@ -123,6 +123,50 @@ def _snapshot_policy(settings: Settings) -> tuple[str, int]:
     return mode, max(0, max_chars)
 
 
+
+def _soul_axis_coverage(
+    queries: list[dict[str, str]], candidates: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    axes: list[str] = []
+    seen: set[str] = set()
+    for q in queries:
+        axis = _safe_md(q.get("axis")) or "trend"
+        key = axis.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        axes.append(axis)
+
+    counts = {axis.lower(): 0 for axis in axes}
+    for p in candidates:
+        axis = _safe_md(p.get("_trend_axis") or p.get("trend_axis"))
+        key = axis.lower()
+        if key in counts:
+            counts[key] += 1
+
+    return [
+        {
+            "axis": axis,
+            "candidate_count": counts.get(axis.lower(), 0),
+            "covered": counts.get(axis.lower(), 0) > 0,
+        }
+        for axis in axes
+    ]
+
+
+def _render_soul_axis_coverage(coverage: list[dict[str, Any]]) -> list[str]:
+    if not coverage:
+        return ["- No configured/derived SOUL axes were available for this run."]
+    lines: list[str] = []
+    for item in coverage:
+        axis = _safe_md(item.get("axis")) or "trend"
+        count = int(item.get("candidate_count") or 0)
+        if count > 0:
+            lines.append(f"- ✅ **{axis}:** covered by {count} candidate(s).")
+        else:
+            lines.append(f"- ⚠️ **{axis}:** missing visible candidate evidence.")
+    return lines
+
 def _render_soul_snapshot(settings: Settings, soul_md: str | None) -> tuple[str | None, dict[str, Any]]:
     if not soul_md:
         return None, {"mode": "absent", "included": False, "chars": 0, "truncated": False}
@@ -174,6 +218,7 @@ def render_weekly_report(
     run_iso: str,
 ) -> str:
     by_id = {paper_key(p): p for p in candidates}
+    axis_coverage = _soul_axis_coverage(queries, candidates)
     week = datetime.fromisoformat(run_iso.replace("Z", "+00:00")).strftime("%G-W%V")
     soul_provenance = dict(soul_provenance or {})
     soul_source = str(soul_provenance.get("source") or ("soul" if soul_md else "absent"))
@@ -235,6 +280,10 @@ def render_weekly_report(
             lines.append(f"- **{_safe_md(q.get('axis'))}:** `{_safe_md(q.get('query'))}` — {_safe_md(q.get('rationale'))}")
     else:
         lines.append("- No generated queries were available.")
+    lines.append("")
+
+    lines.extend(["## SOUL axis coverage", ""])
+    lines.extend(_render_soul_axis_coverage(axis_coverage))
     lines.append("")
 
     lines.extend(["## Trend clusters", ""])
@@ -346,6 +395,7 @@ def write_weekly_artifacts(
         "soul_provenance": soul_provenance or {},
         "soul_card": soul_card,
         "queries": queries,
+        "soul_axis_coverage": _soul_axis_coverage(queries, candidates),
         "candidate_count": len(candidates),
         "candidates": [
             {
