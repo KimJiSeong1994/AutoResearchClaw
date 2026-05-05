@@ -161,6 +161,73 @@ def test_weekly_markdown_can_include_sanitized_truncated_snapshot(tmp_path) -> N
     assert "[truncated]" in md
 
 
+def test_weekly_reading_queue_preserves_ranked_order_and_cap(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    settings.weekly_report.top_papers = 2
+
+    candidates = [
+        {"paper_id": "best", "title": "Best ranked paper", "_trend_query": "dynamic graph ranking"},
+        {"paper_id": "second", "title": "Second ranked paper", "_trend_query": "temporal graph methods"},
+        {"paper_id": "third", "title": "Third capped paper", "_trend_query": "noise beyond cap"},
+    ]
+
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=candidates,
+        report={"coverage_caveat": "", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    assert "## Reading queue" in md
+    first = md.index("1. **Best ranked paper**")
+    second = md.index("2. **Second ranked paper**")
+    assert first < second
+    assert "Third capped paper" not in md
+
+    target = write_weekly_artifacts(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=candidates,
+        report={"coverage_caveat": "", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+    raw = json.loads((target / settings.weekly_report.raw_filename).read_text())
+    assert [p["paper_id"] for p in raw["candidates"]] == ["best", "second"]
+
+
+def test_weekly_reading_queue_defangs_noisy_query_labels(tmp_path) -> None:
+    md = render_weekly_report(
+        _settings(tmp_path),
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[
+            {
+                "paper_id": "p1",
+                "title": "Ranked <paper> | with [[wikilink]]",
+                "_trend_query": "graph RAG | <script>\n## Changelog [noise]",
+            }
+        ],
+        report={"coverage_caveat": "", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    queue_line = next(line for line in md.splitlines() if line.startswith("1. **"))
+    assert "Ranked paper \| with wikilink" in queue_line
+    assert "graph RAG \| script ## Changelog noise" in queue_line
+    assert "<script>" not in queue_line
+    assert "[[" not in queue_line
+    assert "]]" not in queue_line
+
+
 def test_fallback_queries_skip_soul_governance_noise() -> None:
     settings = SimpleNamespace(
         profile=SimpleNamespace(seed_topics=[]),
