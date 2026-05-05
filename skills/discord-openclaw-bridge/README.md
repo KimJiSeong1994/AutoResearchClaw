@@ -14,6 +14,7 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 - `/openclaw_status` — lightweight OpenClaw health check
 - `/jiphyeonjeon_briefing` — post the latest Jiphyeonjeon-Claw AI briefing from `DISCORD_BRIEFING_SOURCE`
 - `/jiphyeonjeon_mine url:<link> [title] [note]` — register a Discord-requested link for 집현전-광부 intake and 집현전-클로 content review
+- standalone `discord-jiphyeonjeon-miner.service` for running 집현전-광부 as an individual Discord bot with `DISCORD_MINER_BOT_TOKEN`
 - one-shot newsletter/card-news publishers from the installed project scripts
 - mention replies, only if `DISCORD_ENABLE_MENTION_RESPONSES=1`
 
@@ -35,6 +36,7 @@ Operational controls:
 
 - `DISCORD_MINER_CHANNEL_ID` defaults to `DISCORD_ALLOWED_CHANNEL_ID` when unset.
 - `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires Discord `MESSAGE_CONTENT` intent.
+- For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue; use an approved-only JSONL file after 집현전-클로 review.
 
@@ -46,6 +48,17 @@ cp project/.env.example project/.env
 $EDITOR project/.env  # set DISCORD_BOT_TOKEN and optional DISCORD_CLIENT_ID
 bash project/scripts/install.sh
 systemctl --user start discord-openclaw-bridge.service
+bash project/scripts/status.sh
+```
+
+To run 집현전-광부 as a separate Discord application/bot:
+
+```bash
+cd ~/.openclaw/workspace/skills/discord-openclaw-bridge
+$EDITOR project/.env  # set DISCORD_MINER_BOT_TOKEN, DISCORD_MINER_CLIENT_ID, DISCORD_MINER_CHANNEL_ID
+bash project/scripts/invite-miner-url.sh
+bash project/scripts/install-miner.sh
+systemctl --user start discord-jiphyeonjeon-miner.service
 bash project/scripts/status.sh
 ```
 

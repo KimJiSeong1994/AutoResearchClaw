@@ -4,13 +4,17 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-echo "== service =="
-systemctl --user status discord-openclaw-bridge.service --no-pager -l 2>&1 | sed -n '1,80p' || true
+echo "== services =="
+for service in discord-openclaw-bridge.service discord-jiphyeonjeon-miner.service; do
+  echo "-- $service --"
+  systemctl --user status "$service" --no-pager -l 2>&1 | sed -n '1,80p' || true
+done
 
 echo "== safe config =="
 if [ -f .env ]; then
-  grep -E '^(DISCORD_CLIENT_ID|DISCORD_GUILD_ID|DISCORD_ALLOWED_CHANNEL_ID|OPENCLAW_BASE_URL|OPENCLAW_MODEL|DISCORD_ENABLE_MENTION_RESPONSES|DISCORD_BRIEFING_SOURCE)=' .env || true
+  grep -E '^(DISCORD_CLIENT_ID|DISCORD_MINER_CLIENT_ID|DISCORD_GUILD_ID|DISCORD_ALLOWED_CHANNEL_ID|DISCORD_MINER_CHANNEL_ID|OPENCLAW_BASE_URL|OPENCLAW_MODEL|DISCORD_ENABLE_MENTION_RESPONSES|DISCORD_MINER_ENABLE_CHANNEL_COLLECTION|DISCORD_BRIEFING_SOURCE|JIPHYEONJEON_MINER_INTAKE_PATH|JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH)=' .env || true
   if grep -q '^DISCORD_BOT_TOKEN=.' .env; then echo 'DISCORD_BOT_TOKEN=set'; else echo 'DISCORD_BOT_TOKEN=missing'; fi
+  if grep -q '^DISCORD_MINER_BOT_TOKEN=.' .env; then echo 'DISCORD_MINER_BOT_TOKEN=set'; else echo 'DISCORD_MINER_BOT_TOKEN=missing'; fi
 else
   echo '.env missing'
 fi
@@ -26,4 +30,7 @@ else
 fi
 
 echo "== recent logs =="
-journalctl --user -u discord-openclaw-bridge.service --no-pager -n 40 2>&1 || true
+for service in discord-openclaw-bridge.service discord-jiphyeonjeon-miner.service; do
+  echo "-- $service --"
+  journalctl --user -u "$service" --no-pager -n 40 2>&1 || true
+done

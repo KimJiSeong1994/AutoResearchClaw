@@ -68,6 +68,48 @@ class BridgeConfig:
     miner_enable_channel_collection: bool
 
 
+@dataclass(frozen=True)
+class MinerBotConfig:
+    discord_bot_token: str
+    guild_id: int
+    miner_channel_id: int
+    miner_intake_path: Path
+    miner_review_queue_path: Path
+    miner_enable_channel_collection: bool
+
+
+def _miner_intake_path() -> Path:
+    return Path(
+        os.environ.get(
+            "JIPHYEONJEON_MINER_INTAKE_PATH",
+            str(Path.home() / ".openclaw" / "workspace" / "intake" / "jiphyeonjeon-miner" / "links.jsonl"),
+        )
+    ).expanduser()
+
+
+def _miner_review_queue_path() -> Path:
+    return Path(
+        os.environ.get(
+            "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
+            str(
+                Path.home()
+                / ".openclaw"
+                / "workspace"
+                / "review"
+                / "jiphyeonjeon-claw"
+                / "link-review-queue.jsonl"
+            ),
+        )
+    ).expanduser()
+
+
+def _miner_channel_id(default: int | None = None) -> int:
+    channel_id = _optional_int("DISCORD_MINER_CHANNEL_ID", default)
+    if channel_id is None:
+        raise ConfigError("missing required env var: DISCORD_MINER_CHANNEL_ID")
+    return channel_id
+
+
 def load_config() -> BridgeConfig:
     _load_dotenv(Path.cwd() / ".env")
 
@@ -89,7 +131,7 @@ def load_config() -> BridgeConfig:
         raise ConfigError("OPENCLAW_BASE_URL must remain loopback for this bridge")
 
     allowed_channel_id = _required_int("DISCORD_ALLOWED_CHANNEL_ID")
-    miner_channel_id = _optional_int("DISCORD_MINER_CHANNEL_ID", allowed_channel_id)
+    miner_channel_id = _miner_channel_id(default=allowed_channel_id)
 
     return BridgeConfig(
         discord_bot_token=discord_bot_token,
@@ -109,24 +151,25 @@ def load_config() -> BridgeConfig:
             )
         ).expanduser(),
         miner_channel_id=miner_channel_id,
-        miner_intake_path=Path(
-            os.environ.get(
-                "JIPHYEONJEON_MINER_INTAKE_PATH",
-                str(Path.home() / ".openclaw" / "workspace" / "intake" / "jiphyeonjeon-miner" / "links.jsonl"),
-            )
-        ).expanduser(),
-        miner_review_queue_path=Path(
-            os.environ.get(
-                "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
-                str(
-                    Path.home()
-                    / ".openclaw"
-                    / "workspace"
-                    / "review"
-                    / "jiphyeonjeon-claw"
-                    / "link-review-queue.jsonl"
-                ),
-            )
-        ).expanduser(),
+        miner_intake_path=_miner_intake_path(),
+        miner_review_queue_path=_miner_review_queue_path(),
+        miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
+    )
+
+
+def load_miner_config() -> MinerBotConfig:
+    _load_dotenv(Path.cwd() / ".env")
+
+    discord_bot_token = os.environ.get("DISCORD_MINER_BOT_TOKEN", "").strip()
+    if not discord_bot_token:
+        raise ConfigError("missing required env var: DISCORD_MINER_BOT_TOKEN")
+
+    default_channel_id = _optional_int("DISCORD_ALLOWED_CHANNEL_ID")
+    return MinerBotConfig(
+        discord_bot_token=discord_bot_token,
+        guild_id=_required_int("DISCORD_GUILD_ID"),
+        miner_channel_id=_miner_channel_id(default=default_channel_id),
+        miner_intake_path=_miner_intake_path(),
+        miner_review_queue_path=_miner_review_queue_path(),
         miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
     )
