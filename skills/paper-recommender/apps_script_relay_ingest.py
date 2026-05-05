@@ -122,7 +122,10 @@ def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
     article_description = _clean(raw.get("articleDescription") or raw.get("article_description"))
     article_text = _clean(raw.get("articleText") or raw.get("article_text"))
     snippet = _clean(raw.get("snippet"))
-    public_excerpt = article_description or article_text or snippet or title
+    # Gmail snippets are mailbox body context, not public article evidence.
+    # Keep them out of persisted/published excerpts; use only fetched/public
+    # article metadata or title fallbacks.
+    public_excerpt = article_description or article_text or title
     if _looks_like_link_dump(public_excerpt):
         public_excerpt = article_description or title
     public_excerpt = public_excerpt[:900]
@@ -151,7 +154,7 @@ def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
         "kind": _clean(raw.get("kind")) or "post",
         "sender": _clean(raw.get("sender")),
         "received_at": _clean(raw.get("receivedAt") or raw.get("received_at")),
-        "snippet": snippet,
+        "snippet": "",
         "summary_lines": [
             _clean(line)
             for line in raw_summary_lines

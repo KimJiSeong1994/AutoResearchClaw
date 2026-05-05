@@ -196,7 +196,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
             sender: sender,
             receivedAt: receivedAt,
             topic: topic,
-            snippet: snippet
+            snippet: ''
           });
         }
         return;
@@ -207,7 +207,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
         const articleText = articleDetail.text || '';
         if (shouldFetchDetail) detailFetchCount += 1;
         const sourceContext = contextByUrl[url] || extractUrlContext_(body, url);
-        const detailBasis = articleText || articleDetail.title || articleDetail.description || sourceContext || snippet;
+        const detailBasis = articleText || articleDetail.title || articleDetail.description || sourceContext || subject;
         if (isBlockedNewsletterItem_(subject, url, articleDetail, sourceContext)) return;
         const key = subject + '|' + url;
         if (seen[key]) {
@@ -221,7 +221,7 @@ function collectNewsletterItems_(query, maxThreads, senderAllowlist, collectAllM
           sender: sender,
           receivedAt: receivedAt,
           topic: classifyTopic_(subject + ' ' + detailBasis + ' ' + url),
-          snippet: snippet,
+          snippet: '',
           articleTitle: articleDetail.title,
           articleDescription: articleDetail.description,
           sourceContext: sourceContext,
@@ -510,7 +510,7 @@ function sanitizeRelayItems_(items) {
       sender: item.sender || '',
       receivedAt: item.receivedAt || '',
       topic: item.topic || '',
-      snippet: item.snippet || '',
+      snippet: '',
       articleTitle: item.articleTitle || '',
       articleDescription: item.articleDescription || '',
       articleText: truncate_(plain_(item.articleText || ''), MAX_ARTICLE_CHARS),
@@ -553,7 +553,7 @@ function postDiscord_(channelId, token, content, webhookUrl) {
   const options = {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({ content: content, allowed_mentions: { parse: [] } }),
+    payload: JSON.stringify({ content: content, allowed_mentions: { parse: [] }, flags: 4 }),
     muteHttpExceptions: true
   };
   if (!webhookUrl) {
@@ -1000,7 +1000,7 @@ function canonicalizeNewsletterUrl_(url) {
       // Keep original URL when decoding fails.
     }
   }
-  text = text.replace(/[?&](?:utm_[^=&]+|fbclid|gclid|mc_cid|mc_eid|igshid|ref)=[^&#]*/gi, '');
+  text = text.replace(/[?&](?:utm_[^=&]+|fbclid|gclid|mc_cid|mc_eid|igshid|ref|token|access_token|relay_token|secret|signature|sig|key|code|auth|password)=[^&#]*/gi, '');
   text = text.replace(/[?&]$/, '');
   return text;
 }

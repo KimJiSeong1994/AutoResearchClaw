@@ -348,9 +348,9 @@ def test_header_card_uses_theme_sentence_not_machinery() -> None:
 
     header = render_card_news_messages(payload, max_cards=1)[0]
 
-    assert header.startswith(f"**{CARD_NEWS_TITLE} — 2026-05-05**")
+    assert header.startswith(f"**{CARD_NEWS_TITLE} — 기술 블로그 브리핑 — 2026-05-05**")
     assert "구성:" not in header
-    assert "블로그형 기술 브리핑" not in header
+    assert "기술 블로그 브리핑" in header
     assert "선별 1건" in header
     assert "수집 1건" in header
     assert "에이전트 운영 비용 평가가 본격화됩니다." in header
@@ -781,3 +781,23 @@ def test_forum_thread_creation_uses_thread_starter_with_suppressed_embeds() -> N
             },
         }
     ]
+
+
+def test_footer_strips_sensitive_url_query_params() -> None:
+    payload = {
+        "items": [
+            {
+                "article_title": "Sensitive URL fixture",
+                "url": "https://example.com/post?token=secret&utm_source=x&id=7",
+                "primary_topic_display": "LLM/에이전트",
+                "topic_confidence": 0.8,
+                "summary_lines": ["요약 한 줄.", "요약 두 줄.", "요약 세 줄."],
+            }
+        ]
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert "token=secret" not in card
+    assert "utm_source" not in card
+    assert "https://example.com/post?id=7" in card

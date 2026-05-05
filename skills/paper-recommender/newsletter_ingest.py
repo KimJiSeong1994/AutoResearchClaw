@@ -27,10 +27,23 @@ from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 _URL_RE = re.compile(r"https?://[^\s<>()\"']+", re.IGNORECASE)
 _TRAILING_PUNCT = ".,;:!?)]}>'\""
+_SENSITIVE_QUERY_KEYS = {
+    "access_token",
+    "auth",
+    "code",
+    "key",
+    "password",
+    "relay_token",
+    "secret",
+    "signature",
+    "sig",
+    "token",
+}
 
 _RESEARCH_HOST_HINTS = (
     "arxiv.org",
@@ -392,6 +405,33 @@ def extract_urls(text: str) -> list[str]:
     return urls
 
 
+def sanitize_public_url(url: str) -> str:
+    """Strip tracking and credential-like query parameters before persisting/posting."""
+    text = url.strip().rstrip(_TRAILING_PUNCT)
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_")
+        and key.lower()
+        not in {
+            "fbclid",
+            "gclid",
+            "igshid",
+            "mc_cid",
+            "mc_eid",
+            "ref",
+            *_SENSITIVE_QUERY_KEYS,
+        }
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query, doseq=True), parts.fragment))
+
+
 def classify_url(url: str) -> str:
     lower = url.lower()
     if "arxiv.org/abs/" in lower or "arxiv.org/pdf/" in lower:
@@ -430,7 +470,13 @@ def is_private_utility_url(url: str) -> bool:
         "account",
         "settings",
     )
-    return any(token in lower for token in blocked)
+    if any(token in lower for token in blocked):
+        return True
+    try:
+        query_keys = {key.lower() for key, _value in parse_qsl(urlsplit(url).query, keep_blank_values=True)}
+    except ValueError:
+        return False
+    return bool(query_keys & _SENSITIVE_QUERY_KEYS)
 
 
 def select_items(
@@ -447,7 +493,8 @@ def select_items(
         sender_lower = msg.sender.lower()
         if allow and not any(token in sender_lower for token in allow):
             continue
-        for url in extract_urls(msg.body):
+        for raw_url in extract_urls(msg.body):
+            url = sanitize_public_url(raw_url)
             if is_private_utility_url(url):
                 continue
             if not include_all_urls and not is_research_url(url):
@@ -873,6 +920,91 @@ def _representative_item(items: list[dict[str, str]]) -> dict[str, str]:
         if item.get("url"):
             return item
     return items[0] if items else {}
+
+
+def _blog_intro_lines(*, run_date: str, items: list[dict[str, str]], source_name: str) -> list[str]:
+    """Render the article-like opening using only public/sanitized fields."""
+    primary = _representative_item(items)
+    if not items:
+        return [
+            "**집현전-Claw 기술 블로그 브리핑**",
+            f"작성일: `{run_date}`",
+            f"수집 경로: {source_name}",
+            "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
+            "",
+            "대표 이미지 설명: 비어 있는 수집 보드 앞에서 공개 링크 입력 경로를 점검하는 데이터 편집 데스크",
+            "",
+            "> 3줄 요약",
+            "> 1. 오늘 공개 근거 기반 후보가 수집되지 않았습니다.",
+            "> 2. 발행 품질보다 allowlist·쿼리·공개 URL 추출 경로 점검이 우선입니다.",
+            "> 3. 다음 실행에서 수집 조건과 원문 접근 가능성을 확인해야 합니다.",
+            "",
+            "## 왜 지금 이 이슈인가",
+            "- 수집 공백은 자동 발행 파이프라인의 입력 품질을 점검해야 한다는 신호입니다.",
+            "",
+            "## 핵심 주장",
+            "- 주장: 공개 근거가 없으면 블로그형 해석보다 수집 조건 검증을 먼저 해야 합니다.",
+            "- 근거: 현재 렌더링 가능한 공개 링크가 없습니다.",
+            "",
+            "## 논증 구조",
+            "1. 관찰: 수집 후보가 없습니다.",
+            "2. 메커니즘: allowlist, 검색 쿼리, 공개 URL 필터 중 하나가 후보를 제한했을 수 있습니다.",
+            "3. 긴장: 자동 발행 속도와 근거 품질 사이의 균형이 필요합니다.",
+            "4. 반론: 단기 수집 공백일 수 있어 설정 변경은 신중해야 합니다.",
+            "5. 판단: 다음 실행 전 입력 경로를 점검합니다.",
+            "",
+            "## 산업사회학적·현장기반 해석",
+            "- 자동 브리핑은 생성 모델보다 수집·검증·게시 권한의 조직적 경계가 품질을 좌우합니다.",
+            "",
+            "## 앞으로 볼 질문",
+            "- 어떤 수집 조건이 공개 근거 후보를 가장 많이 누락시키는가?",
+            "",
+            "## 출처",
+        ]
+
+    classification = classify_topic_result(primary)
+    summary = item_summary_lines(primary)
+    title = _safe_title(primary.get("article_title") or primary.get("title") or "대표 후보")
+    topic_overview = _topic_overview(items) or classification.primary_display
+    return [
+        "**집현전-Claw 기술 블로그 브리핑**",
+        f"작성일: `{run_date}`",
+        f"수집 경로: {source_name}",
+        "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
+        "",
+        f"대표 이미지 설명: {classification.primary_display} 흐름을 데이터 흐름, 연구 노트, 현장 의사결정 보드로 은유한 추상 일러스트",
+        "",
+        "> 3줄 요약",
+        f"> 1. {summary[0]}",
+        f"> 2. {summary[1]}",
+        f"> 3. {summary[2]}",
+        "",
+        "## 왜 지금 이 이슈인가",
+        f"- {topic_overview} 흐름을 단순 링크 목록이 아니라 하나의 기술 변화 문제로 묶어 읽습니다.",
+        f"- 대표 후보 `{title}`의 방법·평가·적용 조건을 공개 원문 기준으로 확인합니다.",
+        "",
+        "## 핵심 주장",
+        f"- 주장: 오늘의 브리핑은 {classification.primary_display} 변화가 연구·제품·운영 현장에 어떤 선택 비용을 만드는지 소개합니다.",
+        f"- 근거: {summary[2]}",
+        "- 현장 사례 또는 적용 장면: 연구자·운영자가 원문 방법과 평가 조건을 확인한 뒤 도입 여부를 판단합니다.",
+        "",
+        "## 논증 구조",
+        f"1. 관찰: {summary[0]}",
+        f"2. 메커니즘: {summary[1]}",
+        "3. 긴장: 빠른 자동 발행과 공개 근거 검증 비용 사이의 균형이 필요합니다.",
+        "4. 반론: 공개 요약만으로는 원문의 한계와 적용 조건을 일반화하기 어렵습니다.",
+        "5. 판단: 출처가 확인된 항목부터 좁게 읽고, 운영 적용 전 원문을 확인합니다.",
+        "",
+        "## 산업사회학적·현장기반 해석",
+        "- 기술 브리핑의 품질은 모델 성능만이 아니라 조직의 수집·검증·공유 루틴에 좌우됩니다.",
+        "- 누가 도입 이익을 얻고 누가 검증·비용 부담을 지는지가 후속 판단의 핵심입니다.",
+        "",
+        "## 앞으로 볼 질문",
+        "- 원문이 제시한 방법·평가 조건은 실제 운영 환경에서도 유지되는가?",
+        "- 공개 근거만으로 판단할 수 없는 비용과 리스크는 무엇인가?",
+        "",
+        "## 출처",
+    ]
 
 
 def _blog_post_contract_lines(*, items: list[dict[str, str]]) -> list[str]:

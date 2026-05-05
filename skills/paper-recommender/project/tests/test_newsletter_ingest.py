@@ -213,7 +213,7 @@ def test_topic_briefing_groups_items_without_email_body(tmp_path: Path, capsys) 
     assert rc == 0
     assert "wrote" in capsys.readouterr().out
     briefing = briefing_path.read_text(encoding="utf-8")
-    assert "집현전-Claw 기술 브리핑 카드뉴스" in briefing
+    assert "집현전-Claw 기술 블로그 브리핑" in briefing
     assert "검색/RAG/지식그래프" in briefing
     assert "- 훅:" in briefing
     assert "- 맥락:" in briefing
@@ -275,7 +275,7 @@ def test_apps_script_briefing_renderer_mentions_cardnews_contract() -> None:
     script = (Path(__file__).resolve().parents[4] / "integrations" / "google-apps-script" / "newsletter_archive_to_discord.gs").read_text(encoding="utf-8")
 
     for marker in [
-        "집현전-Claw 기술 브리핑 카드뉴스",
+        "집현전-Claw 기술 블로그 브리핑",
         "## 카드뉴스 발행 템플릿",
         "훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트",
         "  - 핵심 변화: ",
@@ -741,7 +741,7 @@ def test_topic_briefing_renders_blog_research_post_contract() -> None:
     ]
     cursor = -1
     for section in expected_sections:
-        found = briefing.find(section)
+        found = briefing.find(section, cursor + 1)
         assert found > cursor, section
         cursor = found
 
@@ -803,3 +803,62 @@ def test_apps_script_renderer_mentions_blog_research_post_contract_in_parity() -
         assert marker in text
     assert "메일 본문/비밀값은 게시하지 않고" in text
 
+
+
+def test_public_url_sanitization_strips_sensitive_query_params() -> None:
+    url = newsletter_ingest.sanitize_public_url(
+        "https://example.com/article?utm_source=news&token=secret&access_token=abc&id=42"
+    )
+
+    assert url == "https://example.com/article?id=42"
+    assert "secret" not in url
+    assert "access_token" not in url
+
+
+def test_apps_script_relay_ingest_never_publishes_private_snippet_fallback(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "query": "newer_than:7d",
+                "items": [
+                    {
+                        "title": "Agent report",
+                        "url": "https://example.com/agent-report?token=secret&id=1",
+                        "kind": "post",
+                        "sender": "Digest <digest@example.com>",
+                        "receivedAt": "2026-05-05 08:00",
+                        "snippet": "PRIVATE mailbox snippet token=abc123",
+                        "summaryLines": [
+                            "Public summary one.",
+                            "Public summary two.",
+                            "Public summary three.",
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = apps_script_relay_ingest.main(
+        [
+            "--payload",
+            str(payload_path),
+            "--wiki-root",
+            str(tmp_path / "wiki"),
+            "--date",
+            "2026-05-05",
+            "--briefing-path",
+            str(tmp_path / "briefing.md"),
+        ]
+    )
+
+    assert rc == 0
+    raw = json.loads((tmp_path / "wiki" / "raw" / "newsletters" / "2026-05-05" / "items.json").read_text(encoding="utf-8"))
+    text = json.dumps(raw, ensure_ascii=False)
+    briefing = (tmp_path / "briefing.md").read_text(encoding="utf-8")
+    assert "PRIVATE mailbox snippet" not in text
+    assert "token=abc123" not in text
+    assert "PRIVATE mailbox snippet" not in briefing
+    assert "token=abc123" not in briefing

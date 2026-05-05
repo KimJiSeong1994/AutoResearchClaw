@@ -102,6 +102,18 @@ _QUESTION_TRANSFORMS = (
     (re.compile(r"^(.+?)을 측정합니다\.?$"), r"\1이 운영 환경에서도 유지되는가?"),
     (re.compile(r"^(.+?)를 측정합니다\.?$"), r"\1가 운영 환경에서도 유지되는가?"),
 )
+_SENSITIVE_QUERY_KEYS = {
+    "access_token",
+    "auth",
+    "code",
+    "key",
+    "password",
+    "relay_token",
+    "secret",
+    "signature",
+    "sig",
+    "token",
+}
 
 
 def _clean(value: object, *, limit: int | None = None) -> str:
@@ -227,6 +239,19 @@ def _confidence_bucket(value: object) -> str:
     return "잠정"
 
 
+def _sanitize_public_url(url: str) -> str:
+    text = _clean(url)
+    if not text:
+        return ""
+    for key in _SENSITIVE_QUERY_KEYS:
+        text = re.sub(rf"([?&]){re.escape(key)}=[^&#]*", r"\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"([?&])(?:utm_[^=&]+|fbclid|gclid|igshid|mc_cid|mc_eid|ref)=[^&#]*", r"\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"\?&+", "?", text)
+    text = re.sub(r"&&+", "&", text)
+    text = re.sub(r"[?&](#|$)", r"\1", text)
+    return text
+
+
 def _format_footer(
     source: str,
     url: str,
@@ -235,7 +260,7 @@ def _format_footer(
     *,
     reasons: list[str] | None = None,
 ) -> str:
-    parts = [f"— {source}", f"<{url}>"]
+    parts = [f"— {source}", f"<{_sanitize_public_url(url)}>"]
     if topic and topic != GENERIC_TOPIC:
         parts.append(f"`{topic}`")
     parts.append(f"`{bucket}`")
@@ -699,7 +724,7 @@ def _render_skeletal_card(
         CARD_SEPARATOR,
         f"**{title}**",
         f"{follow_up_topic} 영역의 후속 읽기 후보입니다.",
-        f"<{url}> · `{bucket}`",
+        f"<{_sanitize_public_url(url)}> · `{bucket}`",
     ]
     return "\n".join(body_parts)
 
