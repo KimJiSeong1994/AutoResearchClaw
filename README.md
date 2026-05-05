@@ -54,6 +54,14 @@ bash scripts/deploy-discord-openclaw-bridge.sh
 
 On EC2, set `DISCORD_BOT_TOKEN` in `~/.openclaw/workspace/skills/discord-openclaw-bridge/project/.env`, run `bash project/scripts/install.sh`, then start `discord-openclaw-bridge.service`. The bridge is allowlisted to Discord guild `1500743272551813142` and channel `1500743273361440823` by default.
 
+## Check remote ops readiness
+
+```bash
+bash scripts/check-openclaw-ops.sh
+```
+
+This read-only check verifies the remote gateway service, loopback listeners, `/v1/models` probe, Discord bridge service, ResearchClaw install surface, latest paper-recommender status, and recent OpenClaw warning/error log signal without printing gateway tokens.
+
 ## Open the dashboard through SSH
 
 ```bash
