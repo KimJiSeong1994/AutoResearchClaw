@@ -504,6 +504,39 @@ def test_apps_script_relay_ingest_filters_linkedin_job_posts(tmp_path: Path) -> 
     assert items[0]["article_title"] == "AI Native Knowledge Graphs"
 
 
+def test_apps_script_relay_ingest_filters_linkedin_impression_notifications(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "jiseong 님 업데이트의 지난 주 노출수",
+                        "url": "https://www.linkedin.com/comm/feed/update/urn:li:activity:123",
+                        "kind": "post",
+                        "sender": "LinkedIn <notifications-noreply@linkedin.com>",
+                        "snippet": "회원님의 업데이트가 지난 주 받은 노출수와 반응을 확인하세요.",
+                    },
+                    {
+                        "title": "Issue #12 AI Native Knowledge Graphs",
+                        "url": "https://www.linkedin.com/comm/pulse/ai-native-knowledge-graphs-health",
+                        "kind": "post",
+                        "sender": "Newsletters <newsletters-noreply@linkedin.com>",
+                        "articleTitle": "AI Native Knowledge Graphs",
+                        "articleDescription": "Knowledge graph health assessment for RAG systems.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _payload, items = apps_script_relay_ingest.load_relay_items(payload_path)
+
+    assert len(items) == 1
+    assert items[0]["article_title"] == "AI Native Knowledge Graphs"
+
+
 def test_topic_taxonomy_parity_fixture_matches_apps_script_smoke_intent() -> None:
     """Lock Python behavior to the GAS README parity smoke checklist."""
     cases = [

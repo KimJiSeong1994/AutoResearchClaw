@@ -1028,11 +1028,50 @@ function isBlockedNewsletterItem_(subject, url, articleDetail, context) {
   const lowerUrl = String(url || '').toLowerCase();
   const lowerContext = String(context || '').toLowerCase();
   if (isJobRelatedItem_(subject, url, description, context)) return true;
+  if (isNonTechnicalNotificationItem_(subject, url, description, context)) return true;
   if (lowerUrl.indexOf('colab.research.google.com') !== -1) return true;
   if (title.indexOf('google colab') !== -1 || title === 'colab') return true;
   if (title.indexOf('colaboratory') !== -1) return true;
   if (lowerUrl.indexOf('c.gle/') !== -1 && (title.indexOf('colab') !== -1 || description.indexOf('colab') !== -1 || lowerContext.indexOf('colab') !== -1)) return true;
   return false;
+}
+
+function isNonTechnicalNotificationItem_(subject, url, description, context) {
+  const lowerUrl = String(url || '').toLowerCase();
+  const text = [
+    subject || '',
+    description || '',
+    context || ''
+  ].join(' ').toLowerCase();
+  const isLinkedIn = lowerUrl.indexOf('linkedin.com') !== -1 || text.indexOf('linkedin') !== -1;
+  if (!isLinkedIn) return false;
+  const urlHints = [
+    'linkedin.com/analytics',
+    'linkedin.com/notifications',
+    'linkedin.com/comm/notifications',
+    'linkedin.com/comm/feed/update'
+  ];
+  if (urlHints.some(token => lowerUrl.indexOf(token) !== -1)) return true;
+  const textHints = [
+    '업데이트의 지난 주 노출수',
+    '지난 주 노출수',
+    '노출수',
+    '프로필 조회',
+    '게시물 조회',
+    '회원님의 업데이트',
+    '회원님의 게시물',
+    '님 업데이트',
+    '님 게시물',
+    'impressions',
+    'profile views',
+    'post views',
+    'people viewed your profile',
+    'your update',
+    'your post',
+    'weekly stats',
+    'analytics'
+  ];
+  return textHints.some(token => text.indexOf(token) !== -1);
 }
 
 function isJobRelatedItem_(subject, url, description, context) {

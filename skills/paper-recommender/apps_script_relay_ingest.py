@@ -40,6 +40,33 @@ _JOB_TEXT_HINTS = (
     "지원하기",
 )
 
+_NON_TECH_URL_HINTS = (
+    "linkedin.com/analytics",
+    "linkedin.com/notifications",
+    "linkedin.com/comm/notifications",
+    "linkedin.com/comm/feed/update",
+)
+
+_NON_TECH_TEXT_HINTS = (
+    "업데이트의 지난 주 노출수",
+    "지난 주 노출수",
+    "노출수",
+    "프로필 조회",
+    "게시물 조회",
+    "회원님의 업데이트",
+    "회원님의 게시물",
+    "님 업데이트",
+    "님 게시물",
+    "impressions",
+    "profile views",
+    "post views",
+    "people viewed your profile",
+    "your update",
+    "your post",
+    "weekly stats",
+    "analytics",
+)
+
 _NON_NEWSLETTER_SENDER_HINTS = (
     "no-reply@accounts.google.com",
     "security-noreply@",
@@ -70,6 +97,21 @@ def is_job_related_item(raw: dict[str, object]) -> bool:
     snippet = _clean(raw.get("snippet")).lower()
     text = " ".join([sender, title, description, snippet])
     if "linkedin" in sender and any(hint in text for hint in _JOB_TEXT_HINTS):
+        return True
+    return False
+
+
+def is_non_technical_notification_item(raw: dict[str, object]) -> bool:
+    url = _clean(raw.get("url")).lower()
+    sender = _clean(raw.get("sender")).lower()
+    title = _clean(raw.get("articleTitle") or raw.get("article_title") or raw.get("title")).lower()
+    description = _clean(raw.get("articleDescription") or raw.get("article_description")).lower()
+    snippet = _clean(raw.get("snippet")).lower()
+    text = " ".join([sender, title, description, snippet])
+    is_linkedin = "linkedin" in sender or "linkedin.com" in url
+    if is_linkedin and any(hint in url for hint in _NON_TECH_URL_HINTS):
+        return True
+    if is_linkedin and any(hint in text for hint in _NON_TECH_TEXT_HINTS):
         return True
     return False
 
@@ -145,6 +187,8 @@ def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[s
         if not url or any(hint in sender for hint in _NON_NEWSLETTER_SENDER_HINTS):
             continue
         if is_job_related_item(item):
+            continue
+        if is_non_technical_notification_item(item):
             continue
         if newsletter_ingest.is_private_utility_url(url) or _is_tracking_url(url):
             continue
