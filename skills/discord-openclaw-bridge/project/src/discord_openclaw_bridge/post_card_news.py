@@ -173,6 +173,13 @@ _NON_ARTICLE_TERMS = (
     "unsubscribe",
     "preferences",
 )
+_DIGEST_TITLE_TERMS = (
+    "digest",
+    "weekly",
+    "뉴스레터",
+    "오마카세",
+    "주차",
+)
 _TECH_RELEVANCE_TERMS = (
     "ai",
     "agent",
@@ -392,6 +399,11 @@ def _metadata_is_better(item: dict[str, Any], description: str) -> bool:
     return len(description) > len(current) + 40
 
 
+def _looks_like_digest_title(value: object) -> bool:
+    title = _clean_title(value).lower()
+    return any(term in title for term in _DIGEST_TITLE_TERMS)
+
+
 async def enrich_public_metadata(
     payload: dict[str, Any],
     client: httpx.AsyncClient,
@@ -439,7 +451,8 @@ async def enrich_public_metadata(
             item["public_excerpt"] = description
             item["metadata_enriched"] = True
         title = _clean_title(meta.get("title"), limit=120)
-        if title and not _clean(item.get("article_title") or item.get("title")):
+        current_title = _clean(item.get("article_title") or item.get("title"))
+        if title and (not current_title or _looks_like_digest_title(current_title)):
             item["article_title"] = title
 
     await asyncio.gather(*(fetch_one(item) for item in candidates))
