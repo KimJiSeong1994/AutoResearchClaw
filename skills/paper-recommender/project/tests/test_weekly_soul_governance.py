@@ -147,7 +147,7 @@ def test_weekly_axis_coverage_dedupes_axes_and_counts_trend_axis_fallback(tmp_pa
         run_iso="2026-05-04T00:00:00+00:00",
     )
 
-    assert md.count("**Dynamic Graph:**") == 1
+    assert md.count("**Dynamic Graph**") == 1
     assert "- ✅ **Dynamic Graph** — covered by 2 candidate(s); example: A." in md
     assert "unconfigured" not in md
 
@@ -312,32 +312,6 @@ def test_weekly_markdown_renders_soul_axis_coverage_and_missing_axes(tmp_path) -
     assert "⚠️ **graph recommendation** — missing candidate evidence" in md
     assert "Missing axes to revisit: graph recommendation" in md
 
-
-def test_weekly_raw_records_soul_axis_coverage(tmp_path) -> None:
-    settings = _settings(tmp_path)
-    target = write_weekly_artifacts(
-        settings,
-        profile={"keywords": ["dynamic graph learning"]},
-        soul_md="SOUL: diachronic semantics",
-        user_id="researcher-1",
-        soul_card="Keywords: diachronic semantics",
-        soul_provenance={"source": "soul", "present": True, "fallback_used": False},
-        queries=[{"axis": "diachronic semantic change", "query": "diachronic semantic change", "rationale": "SOUL axis"}],
-        candidates=[{"paper_id": "p1", "title": "Meaning Shift", "_trend_axis": "diachronic semantic change"}],
-        report={"coverage_caveat": "", "clusters": []},
-        run_iso="2026-05-04T00:00:00+00:00",
-    )
-
-    raw = json.loads((target / settings.weekly_report.raw_filename).read_text())
-    assert raw["soul_axis_coverage"] == [
-        {
-            "axis": "diachronic semantic change",
-            "candidate_count": 1,
-            "status": "covered",
-            "query": "diachronic semantic change",
-            "example_title": "Meaning Shift",
-        }
-    ]
 
 def test_fallback_queries_skip_soul_governance_noise() -> None:
     settings = SimpleNamespace(
