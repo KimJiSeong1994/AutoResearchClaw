@@ -332,3 +332,75 @@ def test_topic_briefing_renders_sanitized_primary_secondary_metadata() -> None:
     assert "tags=`rag" in briefing
     assert "confidence=" in briefing
     assert "Private body should never render" not in briefing
+
+
+def test_topic_taxonomy_parity_fixture_matches_apps_script_smoke_intent() -> None:
+    """Lock Python behavior to the GAS README parity smoke checklist."""
+    cases = [
+        (
+            {
+                "title": "Research paper on diffusion models",
+                "kind": "paper",
+                "url": "https://example.com/paper",
+            },
+            "논문/리서치",
+        ),
+        (
+            {
+                "title": "Inference benchmark for CUDA serving latency",
+                "kind": "post",
+                "url": "https://example.com/benchmark",
+            },
+            "인프라/배포",
+        ),
+        (
+            {
+                "title": "RAG agent over a knowledge graph",
+                "kind": "post",
+                "url": "https://example.com/rag-agent",
+            },
+            "검색/RAG/지식그래프",
+        ),
+        (
+            {
+                "title": "LLM agent developer workflow",
+                "kind": "code",
+                "url": "https://github.com/example/agent-workflow",
+            },
+            "LLM/에이전트",
+        ),
+        (
+            {
+                "title": "Enterprise pricing partnership launch",
+                "kind": "post",
+                "url": "https://example.com/product-launch",
+            },
+            "산업/제품 동향",
+        ),
+    ]
+
+    for item, expected in cases:
+        assert newsletter_ingest.classify_topic(item) == expected
+
+
+def test_topic_taxonomy_parity_fixture_guards_false_positive_terms() -> None:
+    assert (
+        newsletter_ingest.classify_topic(
+            {
+                "title": "Research roundup on diffusion models",
+                "kind": "post",
+                "url": "https://example.com/research-roundup",
+            }
+        )
+        == "기타 테크 리포트"
+    )
+    assert (
+        newsletter_ingest.classify_topic(
+            {
+                "title": "Benchmarking inference latency",
+                "kind": "post",
+                "url": "https://example.com/benchmarking",
+            }
+        )
+        != "산업/제품 동향"
+    )
