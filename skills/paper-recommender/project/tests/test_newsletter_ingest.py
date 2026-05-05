@@ -281,7 +281,7 @@ def test_apps_script_briefing_renderer_mentions_cardnews_contract() -> None:
         "  - 핵심 변화: ",
         "  - 왜 중요한가: ",
         "  - CTA/저장 포인트: ",
-        "메일 본문/개인정보는 게시하지",
+        "메일 본문/비밀값은 게시하지",
     ]:
         assert marker in script
 

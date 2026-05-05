@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Mapping
 
 
 _URL_RE = re.compile(r"https?://[^\s<>()\"']+", re.IGNORECASE)
@@ -296,6 +296,7 @@ def _decode_header(value: str | None) -> str:
 def _message_body(msg: mailbox.mboxMessage) -> str:
     """Return decoded text/html body for URL extraction only."""
     chunks: list[str] = []
+    parts: Iterable[email.message.Message]
     if msg.is_multipart():
         parts = msg.walk()
     else:
@@ -313,8 +314,9 @@ def _message_body(msg: mailbox.mboxMessage) -> str:
             if isinstance(raw_payload, str):
                 chunks.append(raw_payload)
             continue
-        charset = part.get_content_charset() or "utf-8"
-        chunks.append(payload.decode(charset, errors="replace"))
+        if isinstance(payload, bytes):
+            charset = part.get_content_charset() or "utf-8"
+            chunks.append(payload.decode(charset, errors="replace"))
     return "\n".join(chunks)
 
 
@@ -788,7 +790,7 @@ def _item_for_publish(item: dict[str, str]) -> dict[str, object]:
     return out
 
 
-def item_summary_lines(item: dict[str, object]) -> list[str]:
+def item_summary_lines(item: Mapping[str, object]) -> list[str]:
     raw = item.get("summary_lines") or item.get("summaryLines") or []
     lines: list[str] = []
     if isinstance(raw, list):
@@ -825,8 +827,8 @@ def _topic_overview(items: list[dict[str, str]], *, limit: int = 8) -> str:
 
 def _source_link_line(title: str, url: str) -> str:
     if not url:
-        return "  - 근거/출처: 메일 본문 내 공개 외부 링크 없음"
-    return f"  - 근거/출처: [{title}]({url})"
+        return "  - 출처 링크: 메일 본문 내 공개 외부 링크 없음"
+    return f"  - 출처 링크: [{title}]({url})"
 
 
 def _compact_source_label(item: dict[str, str]) -> str:
@@ -929,13 +931,9 @@ def render_topic_briefing(
                 f"  - 핵심 변화: {summary[0]}",
                 f"  - 왜 중요한가: {summary[1]}",
                 f"  - 근거: {summary[2]}",
-                f"  - 시사점: `{classification.primary}` 축에서 `{evidence}` 신호를 후속 비교합니다.",
-                f"  - CTA/저장 포인트: {_cardnews_cta(title, topic)}",
-                f"  - 분류 메타: `{kind}` · primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f} · 근거 `{evidence}`",
-                f"  - 수집 메타: {sender} · {received}",
-                _source_link_line(title, url),
-                f"  - 시사점: primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f}",
+                f"  - 시사점: primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f} · 근거 `{evidence}`",
                 f"  - CTA/저장 포인트: {_save_point(item, classification, summary)}",
+                _source_link_line(title, url),
                 f"  - 수집 메타: {_compact_source_label(item)}",
             ]
         remaining = len(topic_items) - max_items_per_topic

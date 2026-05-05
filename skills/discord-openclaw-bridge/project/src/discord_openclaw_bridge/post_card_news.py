@@ -746,7 +746,7 @@ async def _create_forum_card_news_thread(
     content: str,
     hero_image_path: Path | None = None,
 ) -> str:
-    payload = {
+    payload: dict[str, Any] = {
         "name": _clean(name, limit=90),
         "auto_archive_duration": 1440,
         "message": {
@@ -756,7 +756,9 @@ async def _create_forum_card_news_thread(
         },
     }
     if hero_image_path and hero_image_path.exists():
-        payload["message"]["attachments"] = [{"id": 0, "filename": hero_image_path.name}]
+        message_payload = payload["message"]
+        if isinstance(message_payload, dict):
+            message_payload["attachments"] = [{"id": 0, "filename": hero_image_path.name}]
         response = await client.post(
             f"{forum_url}/threads",
             headers=headers,

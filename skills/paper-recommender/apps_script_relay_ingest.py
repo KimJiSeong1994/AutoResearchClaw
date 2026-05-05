@@ -138,6 +138,10 @@ def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
         ]
         if part
     )
+    raw_summary_lines = raw.get("summaryLines") or raw.get("summary_lines") or []
+    if not isinstance(raw_summary_lines, list):
+        raw_summary_lines = []
+
     item: dict[str, object] = {
         "title": title or article_title or "(untitled newsletter item)",
         "article_title": article_title,
@@ -150,7 +154,7 @@ def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
         "snippet": snippet,
         "summary_lines": [
             _clean(line)
-            for line in (raw.get("summaryLines") or raw.get("summary_lines") or [])
+            for line in raw_summary_lines
             if _clean(line) and not _looks_like_link_dump(_clean(line))
         ][:3],
         # Used only in memory for topic selection; publish_items intentionally
