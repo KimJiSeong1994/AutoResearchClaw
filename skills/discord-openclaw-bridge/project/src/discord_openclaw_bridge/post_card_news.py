@@ -628,11 +628,10 @@ def _publishable_card(item: dict[str, Any]) -> bool:
         return False
     if _has_card_evidence(item):
         return score >= -2
-    # Allow only highly trusted research/publication URLs through without a
-    # public excerpt; otherwise the card becomes a title-only shell.
-    if topic != GENERIC_TOPIC and _url_quality(_clean(item.get("url"))) >= 2:
-        return True
-    return score >= 9
+    # Mixed archives should not pad the publication with title-only shells.
+    # The fallback path in _select_cards still preserves a minimal card for
+    # fully thin synthetic or edge-case archives.
+    return False
 
 
 def _sort_by_quality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
