@@ -23,6 +23,23 @@ _TRACKING_URL_HINTS = (
     "medium.com/plans",
 )
 
+_JOB_URL_HINTS = (
+    "linkedin.com/jobs",
+    "linkedin.com/comm/jobs",
+    "linkedin.com/jobs/view",
+    "linkedin.com/job-collections",
+)
+
+_JOB_TEXT_HINTS = (
+    "job alert",
+    "job recommendation",
+    "hiring",
+    "채용",
+    "채용공고",
+    "구인",
+    "지원하기",
+)
+
 _NON_NEWSLETTER_SENDER_HINTS = (
     "no-reply@accounts.google.com",
     "security-noreply@",
@@ -41,6 +58,20 @@ def _is_tracking_url(url: str) -> bool:
 def _looks_like_link_dump(text: str) -> bool:
     lower = text.lower()
     return ("http://" in lower or "https://" in lower) and len(text) > 140
+
+
+def is_job_related_item(raw: dict[str, object]) -> bool:
+    url = _clean(raw.get("url")).lower()
+    if any(hint in url for hint in _JOB_URL_HINTS):
+        return True
+    sender = _clean(raw.get("sender")).lower()
+    title = _clean(raw.get("articleTitle") or raw.get("article_title") or raw.get("title")).lower()
+    description = _clean(raw.get("articleDescription") or raw.get("article_description")).lower()
+    snippet = _clean(raw.get("snippet")).lower()
+    text = " ".join([sender, title, description, snippet])
+    if "linkedin" in sender and any(hint in text for hint in _JOB_TEXT_HINTS):
+        return True
+    return False
 
 
 def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
@@ -112,6 +143,8 @@ def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[s
         url = _clean(item.get("url"))
         sender = _clean(item.get("sender")).lower()
         if not url or any(hint in sender for hint in _NON_NEWSLETTER_SENDER_HINTS):
+            continue
+        if is_job_related_item(item):
             continue
         if newsletter_ingest.is_private_utility_url(url) or _is_tracking_url(url):
             continue

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import httpx
 
+DISCORD_SUPPRESS_EMBEDS_FLAG = 1 << 2
+
 
 class NewsletterPostConfigError(RuntimeError):
     """Raised when newsletter posting is not safely configured."""
@@ -95,10 +97,14 @@ async def _post_message_with_rate_limit(
     *,
     headers: dict[str, str],
     content: str,
+    suppress_embeds: bool = True,
     max_retries: int = 4,
 ) -> None:
+    payload: dict[str, object] = {"content": content, "allowed_mentions": {"parse": []}}
+    if suppress_embeds:
+        payload["flags"] = DISCORD_SUPPRESS_EMBEDS_FLAG
     for attempt in range(max_retries + 1):
-        response = await client.post(url, headers=headers, json={"content": content})
+        response = await client.post(url, headers=headers, json=payload)
         if response.status_code != 429:
             response.raise_for_status()
             return
@@ -131,6 +137,12 @@ async def run() -> None:
         )
     ).expanduser()
     max_chars = int(os.environ.get("DISCORD_MAX_RESPONSE_CHARS", "1800"))
+    suppress_embeds = os.environ.get("DISCORD_SUPPRESS_EMBEDS", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     body = _load_message(source, max_chars=max_chars * 20)
     messages = _split_newsletter_messages(body, max_chars=max_chars)
 
@@ -139,7 +151,13 @@ async def run() -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         for idx, message in enumerate(messages, start=1):
             suffix = f"\n\n({idx}/{len(messages)})" if len(messages) > 1 else ""
-            await _post_message_with_rate_limit(client, url, headers=headers, content=message + suffix)
+            await _post_message_with_rate_limit(
+                client,
+                url,
+                headers=headers,
+                content=message + suffix,
+                suppress_embeds=suppress_embeds,
+            )
     print(f"posted newsletter briefing to channel={channel_id} source={source} messages={len(messages)}")
 
 

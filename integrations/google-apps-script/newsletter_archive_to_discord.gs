@@ -1027,10 +1027,32 @@ function isBlockedNewsletterItem_(subject, url, articleDetail, context) {
   const description = String((articleDetail && articleDetail.description) || '').toLowerCase();
   const lowerUrl = String(url || '').toLowerCase();
   const lowerContext = String(context || '').toLowerCase();
+  if (isJobRelatedItem_(subject, url, description, context)) return true;
   if (lowerUrl.indexOf('colab.research.google.com') !== -1) return true;
   if (title.indexOf('google colab') !== -1 || title === 'colab') return true;
   if (title.indexOf('colaboratory') !== -1) return true;
   if (lowerUrl.indexOf('c.gle/') !== -1 && (title.indexOf('colab') !== -1 || description.indexOf('colab') !== -1 || lowerContext.indexOf('colab') !== -1)) return true;
+  return false;
+}
+
+function isJobRelatedItem_(subject, url, description, context) {
+  const lowerUrl = String(url || '').toLowerCase();
+  const text = [
+    subject || '',
+    description || '',
+    context || ''
+  ].join(' ').toLowerCase();
+  const jobUrlHints = [
+    'linkedin.com/jobs',
+    'linkedin.com/comm/jobs',
+    'linkedin.com/jobs/view',
+    'linkedin.com/job-collections'
+  ];
+  if (jobUrlHints.some(token => lowerUrl.indexOf(token) !== -1)) return true;
+  if (lowerUrl.indexOf('linkedin.com') !== -1) {
+    const jobTextHints = ['job alert', 'job recommendation', 'hiring', '채용', '채용공고', '구인', '지원하기'];
+    if (jobTextHints.some(token => text.indexOf(token) !== -1)) return true;
+  }
   return false;
 }
 

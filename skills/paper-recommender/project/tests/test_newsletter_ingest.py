@@ -471,6 +471,39 @@ def test_apps_script_relay_ingest_normalizes_public_payload_and_omits_private_co
     assert "RAG orchestration" in briefing
 
 
+def test_apps_script_relay_ingest_filters_linkedin_job_posts(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "LinkedIn Job Alert",
+                        "url": "https://www.linkedin.com/jobs/view/123",
+                        "kind": "post",
+                        "sender": "LinkedIn <jobs-noreply@linkedin.com>",
+                        "snippet": "채용공고 추천",
+                    },
+                    {
+                        "title": "AI Native Knowledge Graphs",
+                        "url": "https://www.linkedin.com/comm/pulse/ai-native-knowledge-graphs",
+                        "kind": "post",
+                        "sender": "Newsletters <newsletters-noreply@linkedin.com>",
+                        "articleTitle": "AI Native Knowledge Graphs",
+                        "articleDescription": "Knowledge graph health assessment for RAG systems.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _payload, items = apps_script_relay_ingest.load_relay_items(payload_path)
+
+    assert len(items) == 1
+    assert items[0]["article_title"] == "AI Native Knowledge Graphs"
+
+
 def test_topic_taxonomy_parity_fixture_matches_apps_script_smoke_intent() -> None:
     """Lock Python behavior to the GAS README parity smoke checklist."""
     cases = [

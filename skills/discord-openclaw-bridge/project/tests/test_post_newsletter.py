@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discord_openclaw_bridge.post_newsletter import (  # noqa: E402
+    DISCORD_SUPPRESS_EMBEDS_FLAG,
     NewsletterPostConfigError,
     _load_message,
     _post_message_with_rate_limit,
@@ -62,14 +63,15 @@ def test_newsletter_splitter_preserves_topic_boundaries() -> None:
 def test_newsletter_post_retries_discord_429(monkeypatch) -> None:
     import httpx
 
-    calls: list[str] = []
+    calls: list[object] = []
 
     async def fake_sleep(_seconds: float) -> None:
         calls.append("sleep")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append("post")
-        if calls.count("post") == 1:
+        calls.append(request)
+        post_count = sum(isinstance(call, httpx.Request) for call in calls)
+        if post_count == 1:
             return httpx.Response(429, json={"retry_after": 0.01}, request=request)
         return httpx.Response(200, json={"id": "1"}, request=request)
 
@@ -86,4 +88,37 @@ def test_newsletter_post_retries_discord_429(monkeypatch) -> None:
 
     asyncio.run(scenario())
 
-    assert calls == ["post", "sleep", "post"]
+    requests = [call for call in calls if isinstance(call, httpx.Request)]
+    assert len(requests) == 2
+    assert calls[1] == "sleep"
+    assert requests[0].read()
+    import json
+
+    payload = json.loads(requests[0].content.decode())
+    assert payload["flags"] == DISCORD_SUPPRESS_EMBEDS_FLAG
+    assert payload["allowed_mentions"] == {"parse": []}
+
+
+def test_newsletter_post_can_disable_embed_suppression() -> None:
+    import httpx
+    import json
+
+    seen: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content.decode()))
+        return httpx.Response(200, json={"id": "1"}, request=request)
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await _post_message_with_rate_limit(
+                client,
+                "https://discord.com/api/v10/channels/1/messages",
+                headers={"Authorization": "Bot test"},
+                content="hello",
+                suppress_embeds=False,
+            )
+
+    asyncio.run(scenario())
+
+    assert "flags" not in seen[0]

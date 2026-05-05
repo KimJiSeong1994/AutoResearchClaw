@@ -819,6 +819,16 @@ def item_summary_lines(item: dict[str, object]) -> list[str]:
     return lines[:3]
 
 
+def _topic_overview(items: list[dict[str, str]], *, limit: int = 8) -> str:
+    return " · ".join(f"{topic} {len(topic_items)}" for topic, topic_items in group_items_by_topic(items)[:limit])
+
+
+def _source_link_line(title: str, url: str) -> str:
+    if not url:
+        return "  - 출처 링크: 메일 본문 내 공개 외부 링크 없음"
+    return f"  - 출처 링크: [{title}]({url})"
+
+
 def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
     grouped: dict[str, list[dict[str, str]]] = {}
     for item in items:
@@ -837,16 +847,16 @@ def render_topic_briefing(
 ) -> str:
     lines = [
         "**집현전-Claw 뉴스레터 수집 브리핑**",
-        f"_date: {run_date}_",
-        f"_source: {source_name}_",
-        "_privacy: 메일 본문/개인정보는 게시하지 않고 메타데이터와 추출 URL만 사용_",
+        f"작성일: `{run_date}`",
+        f"수집 경로: {source_name}",
+        "개인정보 경계: 메일 본문은 저장/게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
         "",
         "━━━━━━━━━━━━━━━━━━━━",
         "## 토픽별 기술 리포트/뉴스레터 요약",
         "",
         f"- 수집 항목: {len(items)}개",
         "- 기준: 허용된 수집 경로에서 메일 메타데이터와 공개 아티클 원문/요약만 받아 토픽별 정리",
-        "- 운영 메모: 메일 본문/개인정보는 저장하지 않고 공개 URL의 기술 근거와 출처 링크만 게시",
+        "- 형식: 토픽별 카드, 아티클당 3줄 요약, 출처 링크, 간단 분류 메타",
     ]
     if not items:
         lines += [
@@ -858,9 +868,13 @@ def render_topic_briefing(
         ]
         return "\n".join(lines) + "\n"
 
-    for topic, topic_items in group_items_by_topic(items):
-        lines += ["", f"### {topic}"]
-        for item in topic_items[:max_items_per_topic]:
+    overview = _topic_overview(items)
+    if overview:
+        lines += ["", f"토픽 인덱스: {overview}"]
+
+    for topic_index, (topic, topic_items) in enumerate(group_items_by_topic(items), start=1):
+        lines += ["", "━━━━━━━━━━━━━━━━━━━━", f"### {topic_index}. {topic}", f"- 토픽 내 후보: {len(topic_items)}개"]
+        for item_index, item in enumerate(topic_items[:max_items_per_topic], start=1):
             title = _safe_title(item.get("article_title") or item.get("title") or "(untitled newsletter item)")
             sender = _safe_title(item.get("sender") or "unknown")
             kind = item.get("kind") or "post"
@@ -871,18 +885,20 @@ def render_topic_briefing(
             tags = ", ".join(classification.secondary) or "none"
             summary = item_summary_lines(item)
             lines += [
-                f"- 주요 아티클/논문: {title}",
+                "",
+                f"**{topic_index}.{item_index} {title}**",
                 f"  - 핵심 요약: {summary[0]}",
                 f"  - 기술 포인트: {summary[1]}",
                 f"  - 의미/근거: {summary[2]}",
-                f"  - 분류 근거: `{kind}` 유형, primary=`{classification.primary}`, tags=`{tags}`, confidence={classification.confidence:.2f}, 토픽 근거 `{evidence}`. 발신자 `{sender}`, 수신일 `{received}`",
-                f"- 출처 링크: [{title}]({url})",
+                f"  - 분류 메타: `{kind}` · primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f} · 근거 `{evidence}`",
+                f"  - 수집 메타: {sender} · {received}",
+                _source_link_line(title, url),
             ]
         remaining = len(topic_items) - max_items_per_topic
         if remaining > 0:
-            lines.append(f"- 추가 항목: {remaining}개는 raw archive에 보존")
+            lines.append(f"- raw archive 추가 보존: {remaining}개")
 
-    lines += ["", "━━━━━━━━━━━━━━━━━━━━", "원문 메일 본문은 게시하지 않고 raw archive에는 추출 URL/메타데이터만 보존됩니다."]
+    lines += ["", "━━━━━━━━━━━━━━━━━━━━", "운영 메모: Discord 게시 시 링크 임베드 미리보기는 억제하고, raw archive에는 공개 URL/메타데이터/토픽 컨텍스트만 보존합니다."]
     return "\n".join(lines) + "\n"
 
 
