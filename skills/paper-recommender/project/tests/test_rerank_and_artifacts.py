@@ -539,6 +539,53 @@ def test_weekly_markdown_marks_empty_cluster_evidence(tmp_path: Path) -> None:
     assert "**근거 논문**" in md
     assert "- 근거 논문 링크를 후보 목록에서 확인하지 못했습니다." in md
 
+
+def test_weekly_reading_queue_labels_core_items_and_demotes_noise(tmp_path: Path) -> None:
+    from paper_recommender.weekly_obsidian import render_weekly_report
+
+    settings = _settings(tmp_path)
+    settings.weekly_report.top_papers = 2
+    md = render_weekly_report(
+        settings,
+        profile={"keywords": []},
+        soul_md=None,
+        user_id=None,
+        queries=[],
+        candidates=[
+            {
+                "paper_id": "noisy",
+                "title": "Fault diagnosis for mobile edge computing in healthcare finance",
+                "year": 2026,
+                "_trend_query": "fault diagnosis mobile edge computing",
+            },
+            {
+                "paper_id": "core",
+                "title": "Dynamic Graph Representation Learning",
+                "year": 2026,
+                "_trend_query": "dynamic graph representation learning 2026",
+            },
+            {
+                "paper_id": "method",
+                "title": "Benchmark survey for temporal graph methods",
+                "year": 2024,
+                "_trend_query": "temporal graph benchmark survey",
+            },
+        ],
+        report={
+            "at_a_glance": "ok",
+            "coverage_caveat": "limited",
+            "clusters": [{"title": "Dynamic graph", "summary": "S", "paper_ids": ["core"]}],
+            "weak_signals": [],
+        },
+        run_iso="2026-04-26T11:00:00+00:00",
+    )
+
+    assert "1. **Dynamic Graph Representation Learning** — 최신 핵심; query: dynamic graph representation learning 2026" in md
+    assert "2. **Benchmark survey for temporal graph methods** — 방법론 비교; query: temporal graph benchmark survey" in md
+    assert "노이즈 후보" not in md
+    assert "Fault diagnosis" not in md
+
+
 def test_weekly_state_is_separate_from_daily_seen(tmp_path: Path) -> None:
     from paper_recommender.state import StateStore
 

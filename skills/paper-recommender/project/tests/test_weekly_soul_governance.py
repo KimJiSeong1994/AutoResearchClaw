@@ -82,7 +82,7 @@ def test_weekly_markdown_reports_soul_axis_coverage_and_missing_axes(tmp_path) -
     assert "- Missing axes to revisit: diachronic semantics." in md
 
 
-def test_weekly_raw_records_soul_axis_coverage(tmp_path) -> None:
+def test_weekly_raw_records_single_soul_axis_coverage(tmp_path) -> None:
     settings = _settings(tmp_path)
     target = write_weekly_artifacts(
         settings,

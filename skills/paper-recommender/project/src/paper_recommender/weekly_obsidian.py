@@ -18,6 +18,35 @@ _SENSITIVE_REPLACEMENTS = (
     (re.compile(r"(?i)(bearer)\s+[A-Za-z0-9._~+/=-]{16,}"), r"\1 [REDACTED]"),
     (re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]"),
 )
+_READING_QUEUE_NOISE_TERMS = (
+    "fault diagnosis",
+    "accident severity",
+    "healthcare",
+    "finance",
+    "financial",
+    "mobile edge computing",
+    "edge computing",
+)
+_READING_QUEUE_METHOD_TERMS = (
+    "benchmark",
+    "evaluation",
+    "compare",
+    "comparison",
+    "method",
+    "methodology",
+    "dataset",
+    "baseline",
+    "survey",
+    "review",
+)
+_READING_QUEUE_APPLICATION_TERMS = (
+    "urban",
+    "spatial",
+    "recommendation",
+    "recommender",
+    "application",
+    "applied",
+)
 
 
 def _safe_md(value: Any) -> str:
@@ -229,6 +258,72 @@ def _render_soul_axis_coverage(coverage: list[dict[str, Any]]) -> list[str]:
     lines.append("")
     return lines
 
+
+def _cluster_evidence_ids(report: dict[str, Any]) -> set[str]:
+    evidence: set[str] = set()
+    for cluster in report.get("clusters") or []:
+        for pid in cluster.get("paper_ids") or []:
+            evidence.add(str(pid))
+    return evidence
+
+
+def _paper_year(p: dict[str, Any]) -> int | None:
+    try:
+        return int(str(p.get("year") or "")[:4])
+    except ValueError:
+        return None
+
+
+def _reading_queue_label(p: dict[str, Any], evidence_ids: set[str], run_year: int) -> str:
+    text = " ".join(
+        str(p.get(key) or "")
+        for key in ("title", "abstract", "venue", "source", "_trend_query", "_trend_axis", "trend_query", "trend_axis")
+    ).lower()
+    if any(term in text for term in _READING_QUEUE_NOISE_TERMS):
+        return "노이즈 후보"
+    year = _paper_year(p)
+    is_recent = year is not None and year >= run_year - 1
+    if paper_key(p) in evidence_ids:
+        return "최신 핵심" if is_recent else "배경·서베이"
+    if any(term in text for term in _READING_QUEUE_METHOD_TERMS):
+        return "방법론 비교"
+    if any(term in text for term in _READING_QUEUE_APPLICATION_TERMS):
+        return "응용 확장"
+    return "최신 핵심" if is_recent else "배경·서베이"
+
+
+def _reading_queue_items(
+    candidates: list[dict[str, Any]],
+    report: dict[str, Any],
+    *,
+    limit: int,
+    run_iso: str,
+) -> list[tuple[dict[str, Any], str]]:
+    run_year = _paper_year({"year": run_iso[:4]}) or datetime.now().year
+    evidence_ids = _cluster_evidence_ids(report)
+    labeled = [(p, _reading_queue_label(p, evidence_ids, run_year)) for p in candidates]
+    non_noise = [(p, label) for p, label in labeled if label != "노이즈 후보"]
+    noise = [(p, label) for p, label in labeled if label == "노이즈 후보"]
+
+    def sort_key(item: tuple[dict[str, Any], str]) -> tuple[int, int, str]:
+        p, label = item
+        evidence_rank = 0 if paper_key(p) in evidence_ids else 1
+        label_rank = {
+            "최신 핵심": 0,
+            "방법론 비교": 1,
+            "응용 확장": 2,
+            "배경·서베이": 3,
+            "노이즈 후보": 4,
+        }.get(label, 5)
+        year = _paper_year(p) or 0
+        return (evidence_rank, label_rank, f"{9999 - year:04d}")
+
+    ordered_non_noise = sorted(non_noise, key=sort_key)
+    if len(ordered_non_noise) >= limit:
+        return ordered_non_noise[:limit]
+    return (ordered_non_noise + sorted(noise, key=sort_key))[:limit]
+
+
 def _paper_url(p: dict[str, Any]) -> str | None:
     arxiv = p.get("arxiv_id")
     if isinstance(arxiv, str) and _ARXIV_ID_RE.match(arxiv):
@@ -356,13 +451,19 @@ def render_weekly_report(
             lines.append(f"- {_safe_md(item)}")
         lines.append("")
 
-    top = candidates[: settings.weekly_report.top_papers]
+    top = _reading_queue_items(
+        candidates,
+        report,
+        limit=settings.weekly_report.top_papers,
+        run_iso=run_iso,
+    )
     if top:
         lines.extend(["## Reading queue", ""])
-        for i, p in enumerate(top, 1):
+        for i, (p, label) in enumerate(top, 1):
             title = _safe_md(p.get("title")) or "(untitled)"
-            query = _safe_md(p.get("_trend_query"))
-            lines.append(f"{i}. **{title}** — {query}")
+            query = _safe_md(p.get("_trend_query") or p.get("trend_query"))
+            query_suffix = f"; query: {query}" if query else ""
+            lines.append(f"{i}. **{title}** — {label}{query_suffix}")
         lines.append("")
 
     if soul_card:
