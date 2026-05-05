@@ -487,7 +487,7 @@ def test_weekly_markdown_uses_korean_cluster_role_bullets_and_evidence(tmp_path:
     assert "- **기술 포인트:** It affects longitudinal representation learning." in md
     assert "- **연구자 액션:**" in md
     assert "**Why it matters:**" not in md
-    assert "- [Dynamic graph paper](https://example.test/p1) (2026, arxiv)" in md
+    assert "- [Dynamic graph paper](https://jiphyeonjeon.kr/papers/p1) (2026, arxiv)" in md
 
 
 def test_weekly_state_is_separate_from_daily_seen(tmp_path: Path) -> None:
