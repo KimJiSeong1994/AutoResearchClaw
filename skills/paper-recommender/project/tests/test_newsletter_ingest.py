@@ -213,11 +213,15 @@ def test_topic_briefing_groups_items_without_email_body(tmp_path: Path, capsys) 
     assert rc == 0
     assert "wrote" in capsys.readouterr().out
     briefing = briefing_path.read_text(encoding="utf-8")
-    assert "집현전-Claw 뉴스레터 수집 브리핑" in briefing
+    assert "집현전-Claw 기술 브리핑 카드뉴스" in briefing
     assert "검색/RAG/지식그래프" in briefing
-    assert "- 핵심 요약:" in briefing
-    assert "- 기술 포인트:" in briefing
-    assert "- 출처 링크:" in briefing
+    assert "## 오늘의 카드뉴스 흐름" in briefing
+    assert "- 훅:" in briefing
+    assert "- 맥락:" in briefing
+    assert "- 핵심 변화:" in briefing
+    assert "- 왜 중요한가:" in briefing
+    assert "- 근거/출처:" in briefing
+    assert "- CTA/저장 포인트:" in briefing
     assert "https://arxiv.org/abs/2605.00001" in briefing
     assert "Private body" not in briefing
 
@@ -388,6 +392,9 @@ def test_topic_briefing_renders_sanitized_primary_secondary_metadata() -> None:
     assert "primary=`data_retrieval_knowledge`" in briefing
     assert "tags=`rag" in briefing
     assert "confidence=" in briefing
+    assert "- 훅:" in briefing
+    assert "- 시사점:" in briefing
+    assert "- CTA/저장 포인트:" in briefing
     assert "Private body should never render" not in briefing
 
 
@@ -415,6 +422,8 @@ def test_topic_briefing_uses_public_article_summary_lines() -> None:
     assert "retrieval benchmark for graph-grounded agents" in briefing
     assert "query planning" in briefing
     assert "accuracy and latency trade-offs" in briefing
+    assert "카드 1" in briefing
+    assert "- 맥락:" in briefing
     assert "private subscriber context" not in briefing
 
 

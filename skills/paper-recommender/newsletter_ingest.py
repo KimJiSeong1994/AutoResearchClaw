@@ -825,8 +825,23 @@ def _topic_overview(items: list[dict[str, str]], *, limit: int = 8) -> str:
 
 def _source_link_line(title: str, url: str) -> str:
     if not url:
-        return "  - 출처 링크: 메일 본문 내 공개 외부 링크 없음"
-    return f"  - 출처 링크: [{title}]({url})"
+        return "  - 근거/출처: 메일 본문 내 공개 외부 링크 없음"
+    return f"  - 근거/출처: [{title}]({url})"
+
+
+def _compact_source_label(item: dict[str, str]) -> str:
+    sender = _safe_title(item.get("sender") or "unknown")
+    received = _clean_text(item.get("received_at") or "unknown")
+    kind = _clean_text(item.get("kind") or "post")
+    return f"{sender} · {received} · `{kind}`"
+
+
+def _save_point(item: dict[str, str], classification: TopicClassification, summary: list[str]) -> str:
+    title = _clean_text(item.get("article_title") or item.get("title") or "이 항목")
+    if classification.primary == "other_tech_report":
+        return f"저장 포인트: `{title[:70]}`의 공개 원문 근거를 다음 수집에서 재확인"
+    technical_hint = ", ".join(classification.reasons[:2]) or classification.primary_display
+    return f"저장 포인트: {technical_hint} 변화가 {summary[2][:110]}"
 
 
 def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
@@ -845,26 +860,36 @@ def render_topic_briefing(
     source_name: str,
     max_items_per_topic: int = 3,
 ) -> str:
+    """Render a Discord-ready Markdown carousel/cardnews briefing.
+
+    The contract mirrors the Apps Script relay path: compact cards with a
+    hook/context/change/why/evidence/implication/CTA arc, while preserving the
+    privacy boundary that private email bodies never appear in persisted output.
+    """
     lines = [
-        "**집현전-Claw 뉴스레터 수집 브리핑**",
+        "**집현전-Claw 기술 브리핑 카드뉴스**",
         f"작성일: `{run_date}`",
         f"수집 경로: {source_name}",
-        "개인정보 경계: 메일 본문은 저장/게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
+        "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        "## 토픽별 기술 리포트/뉴스레터 요약",
+        "## 오늘의 카드뉴스 흐름",
         "",
-        f"- 수집 항목: {len(items)}개",
-        "- 기준: 허용된 수집 경로에서 메일 메타데이터와 공개 아티클 원문/요약만 받아 토픽별 정리",
-        "- 형식: 토픽별 카드, 아티클당 3줄 요약, 출처 링크, 간단 분류 메타",
+        f"- 훅: {len(items)}개 공개 링크에서 연구자에게 바로 읽을 변화 신호를 선별",
+        "- 구조: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트",
+        "- 운영: Discord 길이 제한에 맞춘 compact Markdown 카드, raw archive에는 공개 URL/메타데이터/토픽 컨텍스트만 보존",
     ]
     if not items:
         lines += [
             "",
-            "### 수집 결과 없음",
-            "- 핵심 요약: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.",
-            "- 기술 포인트: sender_allowlist, export 경로, max_source_bytes, URL host hint를 점검해야 합니다.",
-            "- 출처 링크: 없음",
+            "### 카드 0 · 수집 결과 없음",
+            "- 훅: 오늘 카드로 만들 공개 연구/기술 링크가 없습니다.",
+            "- 맥락: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.",
+            "- 핵심 변화: 새로운 후보가 없어 토픽 다양성 및 요약 품질을 산출하지 않았습니다.",
+            "- 왜 중요한가: 수집 경계가 너무 좁거나 최근 메일 수신이 없을 수 있습니다.",
+            "- 근거: 공개 출처 링크 없음",
+            "- 시사점: sender_allowlist, export 경로, max_source_bytes, URL host hint를 점검해야 합니다.",
+            "- CTA/저장 포인트: 다음 실행 전 수집 조건을 재검토",
         ]
         return "\n".join(lines) + "\n"
 
@@ -872,13 +897,12 @@ def render_topic_briefing(
     if overview:
         lines += ["", f"토픽 인덱스: {overview}"]
 
+    card_no = 0
     for topic_index, (topic, topic_items) in enumerate(group_items_by_topic(items), start=1):
-        lines += ["", "━━━━━━━━━━━━━━━━━━━━", f"### {topic_index}. {topic}", f"- 토픽 내 후보: {len(topic_items)}개"]
-        for item_index, item in enumerate(topic_items[:max_items_per_topic], start=1):
+        lines += ["", "━━━━━━━━━━━━━━━━━━━━", f"### 섹션 {topic_index}. {topic}", f"- 토픽 내 후보: {len(topic_items)}개"]
+        for item in topic_items[:max_items_per_topic]:
+            card_no += 1
             title = _safe_title(item.get("article_title") or item.get("title") or "(untitled newsletter item)")
-            sender = _safe_title(item.get("sender") or "unknown")
-            kind = item.get("kind") or "post"
-            received = item.get("received_at") or "unknown"
             url = item.get("url") or ""
             classification = classify_topic_result(item)
             evidence = ", ".join(classification.reasons) or "fallback"
@@ -886,19 +910,25 @@ def render_topic_briefing(
             summary = item_summary_lines(item)
             lines += [
                 "",
-                f"**{topic_index}.{item_index} {title}**",
-                f"  - 핵심 요약: {summary[0]}",
-                f"  - 기술 포인트: {summary[1]}",
-                f"  - 의미/근거: {summary[2]}",
-                f"  - 분류 메타: `{kind}` · primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f} · 근거 `{evidence}`",
-                f"  - 수집 메타: {sender} · {received}",
+                f"**카드 {card_no} · {title}**",
+                f"  - 훅: {summary[0]}",
+                f"  - 맥락: {classification.primary_display} 흐름에서 `{evidence}` 신호가 포착됨",
+                f"  - 핵심 변화: {summary[1]}",
+                f"  - 왜 중요한가: {summary[2]}",
                 _source_link_line(title, url),
+                f"  - 시사점: primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f}",
+                f"  - CTA/저장 포인트: {_save_point(item, classification, summary)}",
+                f"  - 수집 메타: {_compact_source_label(item)}",
             ]
         remaining = len(topic_items) - max_items_per_topic
         if remaining > 0:
             lines.append(f"- raw archive 추가 보존: {remaining}개")
 
-    lines += ["", "━━━━━━━━━━━━━━━━━━━━", "운영 메모: Discord 게시 시 링크 임베드 미리보기는 억제하고, raw archive에는 공개 URL/메타데이터/토픽 컨텍스트만 보존합니다."]
+    lines += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "운영 메모: 카드뉴스는 Discord Markdown/캐러셀 초안용 구조이며, 링크 임베드 미리보기는 억제하고 private email context는 출력하지 않습니다.",
+    ]
     return "\n".join(lines) + "\n"
 
 
