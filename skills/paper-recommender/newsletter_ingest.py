@@ -52,63 +52,92 @@ _DEFAULT_MAX_MESSAGES = 500
 
 @dataclass(frozen=True)
 class TopicRule:
+    primary: str
     label: str
     priority: int
     phrases: tuple[str, ...] = ()
     terms: tuple[str, ...] = ()
     substrings: tuple[str, ...] = ()
+    secondary: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class TopicClassification:
-    label: str
+    primary: str
+    primary_display: str
+    secondary: tuple[str, ...]
+    confidence: float
+    reasons: tuple[str, ...]
     score: int
-    evidence: tuple[str, ...]
+
+    @property
+    def label(self) -> str:
+        """Backward-compatible display label used by existing callers."""
+        return self.primary_display
+
+    @property
+    def evidence(self) -> tuple[str, ...]:
+        """Backward-compatible sanitized match reasons."""
+        return self.reasons
 
 
 _TOPIC_RULES: tuple[TopicRule, ...] = (
     TopicRule(
+        "data_retrieval_knowledge",
         "검색/RAG/지식그래프",
         10,
         phrases=("knowledge graph", "semantic search", "vector database"),
         terms=("retrieval", "rag", "search", "graph", "knowledge"),
+        secondary=("rag", "semantic_search", "knowledge_graph"),
     ),
     TopicRule(
+        "agents_automation",
         "LLM/에이전트",
         20,
         phrases=("language model", "tool use", "coding agent", "llm agent"),
         terms=("llm", "agent", "reasoning", "workflow", "autonomous"),
+        secondary=("llm", "agent", "automation"),
     ),
     TopicRule(
+        "multimodal_vision",
         "멀티모달/비전",
         30,
         phrases=("multimodal model",),
         terms=("multimodal", "vision", "image", "video", "vlm"),
+        secondary=("multimodal", "vision", "generative_ai"),
     ),
     TopicRule(
+        "ai_infra_mlops",
         "인프라/배포",
         40,
         phrases=("inference serving", "eval pipeline"),
         terms=("inference", "serving", "gpu", "cuda", "deploy", "latency", "benchmark"),
+        secondary=("evaluation", "mlops", "compute_cost"),
     ),
     TopicRule(
+        "open_source_developer_ecosystem",
         "오픈소스/코드",
         50,
         phrases=("open source", "developer tool"),
         terms=("repo", "repository", "library", "framework"),
         substrings=("github.com",),
+        secondary=("open_source", "developer_tools"),
     ),
     TopicRule(
+        "safety_governance_regulation",
         "AI 안전/평가",
         60,
         phrases=("red team",),
         terms=("safety", "eval", "evaluation", "alignment", "privacy", "security", "regulation", "copyright"),
+        secondary=("evaluation", "safety", "privacy", "security", "regulatory_risk"),
     ),
     TopicRule(
+        "market_ecosystem_strategy",
         "산업/제품 동향",
         70,
         phrases=("product launch",),
         terms=("product", "launch", "release", "pricing", "market", "enterprise", "partnership", "funding"),
+        secondary=("enterprise", "pricing", "market", "startup"),
     ),
 )
 
@@ -395,23 +424,40 @@ def _has_token_phrase(text: str, phrase: str) -> bool:
 
 def _score_topic_rule(text: str, rule: TopicRule) -> TopicClassification | None:
     score = 0
-    evidence: list[str] = []
+    reasons: list[str] = []
+    secondary: list[str] = []
+
+    def add_secondary() -> None:
+        for tag in rule.secondary:
+            if tag not in secondary:
+                secondary.append(tag)
+
     for phrase in rule.phrases:
         if _has_token_phrase(text, phrase):
             score += 4
-            evidence.append(phrase)
+            reasons.append(phrase)
+            add_secondary()
     for term in rule.terms:
         if _has_token_phrase(text, term):
             score += 2
-            evidence.append(term)
+            reasons.append(term)
+            add_secondary()
     lower = text.lower()
     for token in rule.substrings:
         if token.lower() in lower:
             score += 2
-            evidence.append(token)
+            reasons.append(token)
+            add_secondary()
     if score < _TOPIC_SCORE_THRESHOLD:
         return None
-    return TopicClassification(rule.label, score, tuple(evidence))
+    return TopicClassification(
+        primary=rule.primary,
+        primary_display=rule.label,
+        secondary=tuple(secondary[:7]),
+        confidence=min(1.0, score / 10),
+        reasons=tuple(reasons),
+        score=score,
+    )
 
 
 def classify_topic_result(item: dict[str, str]) -> TopicClassification:
@@ -434,12 +480,30 @@ def classify_topic_result(item: dict[str, str]) -> TopicClassification:
         priority = {rule.label: rule.priority for rule in _TOPIC_RULES}
         return sorted(matches, key=lambda result: (-result.score, priority[result.label]))[0]
     if item.get("kind", "").startswith("paper"):
-        return TopicClassification("논문/리서치", 1, ("paper-kind",))
-    return TopicClassification("기타 테크 리포트", 0, ())
+        return TopicClassification(
+            primary="research_paper_general",
+            primary_display="논문/리서치",
+            secondary=("research",),
+            confidence=0.1,
+            reasons=("paper-kind",),
+            score=1,
+        )
+    return TopicClassification(
+        primary="other_tech_report",
+        primary_display="기타 테크 리포트",
+        secondary=(),
+        confidence=0.0,
+        reasons=(),
+        score=0,
+    )
+
+
+def classify_topic_detail(item: dict[str, str]) -> TopicClassification:
+    return classify_topic_result(item)
 
 
 def classify_topic(item: dict[str, str]) -> str:
-    return classify_topic_result(item).label
+    return classify_topic_result(item).primary_display
 
 
 def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
@@ -490,10 +554,11 @@ def render_topic_briefing(
             received = item.get("received_at") or "unknown"
             url = item.get("url") or ""
             classification = classify_topic_result(item)
-            evidence = ", ".join(classification.evidence) or "fallback"
+            evidence = ", ".join(classification.reasons) or "fallback"
+            tags = ", ".join(classification.secondary) or "none"
             lines += [
                 f"- 핵심 요약: {title}",
-                f"- 기술 포인트: `{kind}` 유형, 토픽 근거 `{evidence}` 기준으로 분류. 발신자 `{sender}`, 수신일 `{received}` 기준으로 추적",
+                f"- 기술 포인트: `{kind}` 유형, primary=`{classification.primary}`, tags=`{tags}`, confidence={classification.confidence:.2f}, 토픽 근거 `{evidence}` 기준으로 분류. 발신자 `{sender}`, 수신일 `{received}` 기준으로 추적",
                 f"- 출처 링크: [{title}]({url})",
             ]
         remaining = len(topic_items) - max_items_per_topic
