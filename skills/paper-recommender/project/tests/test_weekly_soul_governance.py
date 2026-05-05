@@ -221,8 +221,8 @@ def test_weekly_reading_queue_defangs_noisy_query_labels(tmp_path) -> None:
     )
 
     queue_line = next(line for line in md.splitlines() if line.startswith("1. **"))
-    assert "Ranked paper \| with wikilink" in queue_line
-    assert "graph RAG \| script ## Changelog noise" in queue_line
+    assert "Ranked paper \\| with wikilink" in queue_line
+    assert "graph RAG \\| script ## Changelog noise" in queue_line
     assert "<script>" not in queue_line
     assert "[[" not in queue_line
     assert "]]" not in queue_line
