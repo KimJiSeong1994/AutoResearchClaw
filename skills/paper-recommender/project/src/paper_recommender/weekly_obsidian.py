@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from datetime import datetime
@@ -26,6 +27,79 @@ def _safe_md(value: Any) -> str:
     out = re.sub(r"[<>\[\]]", "", out)
     return out.strip()
 
+
+
+
+def _safe_md_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith(('[', '(')) and text.endswith((']', ')')):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, (list, tuple)):
+                return _safe_md_list(parsed)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) > 1:
+            return [_safe_md(re.sub(r"^[-*\d.)\s]+", "", line)) for line in lines]
+        return [_safe_md(text)]
+    if isinstance(value, dict):
+        title = value.get("title") or value.get("label") or value.get("summary") or value.get("text")
+        detail = value.get("detail") or value.get("rationale") or value.get("why")
+        if title and detail:
+            return [_safe_md(f"{title}: {detail}")]
+        if title:
+            return [_safe_md(title)]
+        return [_safe_md(json.dumps(value, ensure_ascii=False, sort_keys=True))]
+    if isinstance(value, (list, tuple)):
+        out: list[str] = []
+        for item in value:
+            out.extend(_safe_md_list(item))
+        return [item for item in out if item]
+    return [_safe_md(value)]
+
+
+def _render_at_a_glance(value: Any) -> list[str]:
+    bullets = _safe_md_list(value)
+    if not bullets:
+        return []
+    return [f"- {bullet}" for bullet in bullets]
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        parts = _safe_md_list(value)
+        if parts:
+            return parts[0]
+    return ""
+
+
+def _render_cluster_role_bullets(cluster: dict[str, Any]) -> list[str]:
+    summary = _first_text(cluster.get("summary"), cluster.get("description"))
+    technical = _first_text(
+        cluster.get("technical_point"),
+        cluster.get("technical_points"),
+        cluster.get("method"),
+        cluster.get("why_it_matters"),
+    )
+    action = _first_text(cluster.get("researcher_action"), cluster.get("next_action"), cluster.get("action"))
+    if not action:
+        title = _safe_md(cluster.get("title")) or "this cluster"
+        action = f"아래 근거 논문을 먼저 대조해 `{title}` 축의 후속 읽기 우선순위를 정한다."
+    if not summary:
+        summary = "근거 논문으로 확인 가능한 공통 주제를 묶은 클러스터다."
+    if not technical:
+        technical = "근거 논문 제목·연도·출처 수준에서 확인되는 방법론 단서만 사용한다."
+    return [
+        f"- **핵심 요약:** {summary}",
+        f"- **기술 포인트:** {technical}",
+        f"- **연구자 액션:** {action}",
+    ]
 
 def _sanitize_snapshot(value: str) -> str:
     sanitized = value
@@ -145,9 +219,9 @@ def render_weekly_report(
         lines.append(f"- Active context bytes: `{_safe_md(soul_provenance.get('active_bytes'))}`; compact card bytes: `{_safe_md(soul_provenance.get('compact_card_bytes'))}`.")
     lines.append("")
 
-    glance = _safe_md(report.get("at_a_glance"))
-    if glance:
-        lines.extend(["## At a glance", "", glance, ""])
+    glance_lines = _render_at_a_glance(report.get("at_a_glance"))
+    if glance_lines:
+        lines.extend(["## At a glance", "", *glance_lines, ""])
 
     lines.extend(["## Search coverage", ""])
     if queries:
@@ -165,12 +239,8 @@ def render_weekly_report(
     for i, cluster in enumerate(clusters, 1):
         lines.append(f"### {i}. {_safe_md(cluster.get('title'))}")
         lines.append("")
-        if cluster.get("summary"):
-            lines.append(_safe_md(cluster.get("summary")))
-            lines.append("")
-        if cluster.get("why_it_matters"):
-            lines.append(f"**Why it matters:** {_safe_md(cluster.get('why_it_matters'))}")
-            lines.append("")
+        lines.extend(_render_cluster_role_bullets(cluster))
+        lines.append("")
         lines.append("**Evidence papers**")
         for pid in cluster.get("paper_ids") or []:
             p = by_id.get(str(pid))
