@@ -105,7 +105,7 @@ def fallback_trend_queries(settings: Settings, soul_md: str | None, profile: dic
     items = [
         {
             "query": q,
-            "axis": "fallback",
+            "axis": q,
             "rationale": "Derived from cached SOUL/profile terms because OpenClaw query generation was unavailable.",
         }
         for q in candidates
