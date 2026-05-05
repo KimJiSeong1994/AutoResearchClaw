@@ -853,6 +853,19 @@ def group_items_by_topic(items: list[dict[str, str]]) -> list[tuple[str, list[di
     return sorted(grouped.items(), key=lambda pair: (topic_priority.get(pair[0], 999), -len(pair[1]), pair[0]))
 
 
+def _cardnews_hook(topic: str, topic_items: list[dict[str, str]]) -> str:
+    first = topic_items[0] if topic_items else {}
+    title = _clean_text(str(first.get("article_title") or first.get("title") or topic))
+    if title and title != topic:
+        return f"{topic}에서 '{title}' 흐름을 먼저 확인할 때입니다."
+    return f"{topic} 흐름을 카드 단위로 빠르게 점검할 때입니다."
+
+
+def _cardnews_cta(title: str, topic: str) -> str:
+    target = title or topic or "원문"
+    return f"저장 후 {target}의 방법·평가·적용 조건을 원문에서 재확인하세요."
+
+
 def render_topic_briefing(
     *,
     run_date: str,
@@ -873,23 +886,25 @@ def render_topic_briefing(
         "개인정보 경계: 메일 본문/비밀값은 저장·게시하지 않고 공개 아티클 근거와 출처 링크만 사용",
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        "## 오늘의 카드뉴스 흐름",
+        "## 카드뉴스 발행 템플릿",
         "",
-        f"- 훅: {len(items)}개 공개 링크에서 연구자에게 바로 읽을 변화 신호를 선별",
-        "- 구조: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트",
-        "- 운영: Discord 길이 제한에 맞춘 compact Markdown 카드, raw archive에는 공개 URL/메타데이터/토픽 컨텍스트만 보존",
+        f"- 수집 항목: {len(items)}개",
+        "- 구성: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트",
+        "- 기준: 허용된 수집 경로의 메타데이터와 공개 아티클 원문/요약만 사용",
+        "- 플랫폼 메모: Discord Markdown에서도 카드 단위로 읽히도록 compact하게 렌더링",
     ]
     if not items:
         lines += [
             "",
-            "### 카드 0 · 수집 결과 없음",
-            "- 훅: 오늘 카드로 만들 공개 연구/기술 링크가 없습니다.",
+            "### 카드 0. 수집 결과 없음",
+            "- 훅: 오늘 카드뉴스로 전환할 공개 기술 후보가 없습니다.",
             "- 맥락: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.",
-            "- 핵심 변화: 새로운 후보가 없어 토픽 다양성 및 요약 품질을 산출하지 않았습니다.",
-            "- 왜 중요한가: 수집 경계가 너무 좁거나 최근 메일 수신이 없을 수 있습니다.",
-            "- 근거: 공개 출처 링크 없음",
-            "- 시사점: sender_allowlist, export 경로, max_source_bytes, URL host hint를 점검해야 합니다.",
-            "- CTA/저장 포인트: 다음 실행 전 수집 조건을 재검토",
+            "- 핵심 변화: 신규 후보가 없어 토픽 변화 신호를 산출하지 않았습니다.",
+            "- 왜 중요한가: 수집 공백은 발행 품질보다 입력 경로 점검이 우선이라는 신호입니다.",
+            "- 근거: sender_allowlist, export 경로, max_source_bytes, URL host hint를 점검해야 합니다.",
+            "- 시사점: 다음 실행 전 수집 조건과 공개 링크 추출 상태를 확인하세요.",
+            "- CTA/저장 포인트: 설정을 고친 뒤 다시 발행하고 raw archive 생성을 확인하세요.",
+            "- 출처 링크: 없음",
         ]
         return "\n".join(lines) + "\n"
 
@@ -897,11 +912,11 @@ def render_topic_briefing(
     if overview:
         lines += ["", f"토픽 인덱스: {overview}"]
 
-    card_no = 0
-    for topic_index, (topic, topic_items) in enumerate(group_items_by_topic(items), start=1):
-        lines += ["", "━━━━━━━━━━━━━━━━━━━━", f"### 섹션 {topic_index}. {topic}", f"- 토픽 내 후보: {len(topic_items)}개"]
-        for item in topic_items[:max_items_per_topic]:
-            card_no += 1
+    card_number = 0
+    for topic, topic_items in group_items_by_topic(items):
+        card_number += 1
+        lines += ["", "━━━━━━━━━━━━━━━━━━━━", f"### 카드 {card_number}. {topic}", f"- 훅: {_cardnews_hook(topic, topic_items)}", f"- 맥락: 공개 근거 {len(topic_items)}개를 같은 변화 축으로 묶었습니다."]
+        for item_index, item in enumerate(topic_items[:max_items_per_topic], start=1):
             title = _safe_title(item.get("article_title") or item.get("title") or "(untitled newsletter item)")
             url = item.get("url") or ""
             classification = classify_topic_result(item)
@@ -910,11 +925,14 @@ def render_topic_briefing(
             summary = item_summary_lines(item)
             lines += [
                 "",
-                f"**카드 {card_no} · {title}**",
-                f"  - 훅: {summary[0]}",
-                f"  - 맥락: {classification.primary_display} 흐름에서 `{evidence}` 신호가 포착됨",
-                f"  - 핵심 변화: {summary[1]}",
-                f"  - 왜 중요한가: {summary[2]}",
+                f"**{card_number}.{item_index} {title}**",
+                f"  - 핵심 변화: {summary[0]}",
+                f"  - 왜 중요한가: {summary[1]}",
+                f"  - 근거: {summary[2]}",
+                f"  - 시사점: `{classification.primary}` 축에서 `{evidence}` 신호를 후속 비교합니다.",
+                f"  - CTA/저장 포인트: {_cardnews_cta(title, topic)}",
+                f"  - 분류 메타: `{kind}` · primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f} · 근거 `{evidence}`",
+                f"  - 수집 메타: {sender} · {received}",
                 _source_link_line(title, url),
                 f"  - 시사점: primary=`{classification.primary}` · tags=`{tags}` · confidence={classification.confidence:.2f}",
                 f"  - CTA/저장 포인트: {_save_point(item, classification, summary)}",

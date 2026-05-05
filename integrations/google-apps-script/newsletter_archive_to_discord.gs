@@ -247,22 +247,23 @@ function renderBriefingWithTelemetry_(items, query) {
     '_privacy: 메일 본문/비밀값은 게시하지 않고 공개 아티클 근거와 출처 링크만 사용_',
     '',
     '━━━━━━━━━━━━━━━━━━━━',
-    '## 오늘의 카드뉴스 흐름',
+    '## 카드뉴스 발행 템플릿',
     '',
-    '- 훅: ' + items.length + '개 공개 링크에서 연구자에게 바로 읽을 변화 신호를 선별',
-    '- 구조: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트',
-    '- 운영: Google Apps Script 내부에서 실행되며 Discord에는 compact Markdown 카드만 게시'
+    '- 수집 항목: ' + items.length + '개',
+    '- 구성: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트',
+    '- 운영 메모: Google Apps Script 내부에서 실행되며 Discord에는 카드 요약과 공개 출처 링크만 게시'
   ];
 
   if (items.length === 0) {
-    lines.push('', '### 카드 0 · 수집 결과 없음');
-    lines.push('- 훅: 오늘 카드로 만들 공개 연구/기술 링크가 없습니다.');
+    lines.push('', '### 수집 결과 없음');
+    lines.push('- 훅: 오늘 카드뉴스로 전환할 공개 기술 후보가 없습니다.');
     lines.push('- 맥락: 설정된 allowlist와 연구/테크 URL 조건에 맞는 항목이 없습니다.');
-    lines.push('- 핵심 변화: 새로운 후보가 없어 토픽 다양성 및 요약 품질을 산출하지 않았습니다.');
-    lines.push('- 왜 중요한가: 수집 경계가 너무 좁거나 최근 메일 수신이 없을 수 있습니다.');
-    lines.push('- 근거: 공개 출처 링크 없음');
-    lines.push('- 시사점: SENDER_ALLOWLIST, GMAIL_QUERY, 메일 수신 상태를 점검해야 합니다.');
-    lines.push('- CTA/저장 포인트: 다음 실행 전 수집 조건을 재검토');
+    lines.push('- 핵심 변화: 신규 후보가 없어 토픽 변화 신호를 산출하지 않았습니다.');
+    lines.push('- 왜 중요한가: 수집 공백은 발행 품질보다 입력 경로 점검이 우선이라는 신호입니다.');
+    lines.push('- 근거: SENDER_ALLOWLIST, GMAIL_QUERY, 메일 수신 상태를 점검해야 합니다.');
+    lines.push('- 시사점: 다음 실행 전 수집 조건과 공개 링크 추출 상태를 확인하세요.');
+    lines.push('- CTA/저장 포인트: 설정을 고친 뒤 다시 발행하고 raw archive 생성을 확인하세요.');
+    lines.push('- 출처 링크: 없음');
     return { briefing: lines.join('\n'), telemetry: buildBriefingTelemetry_(items, query, [], 0, false) };
   }
 
@@ -282,8 +283,8 @@ function renderBriefingWithTelemetry_(items, query) {
   let renderTruncated = false;
   let cardNo = 0;
   const renderedTopicCounts = {};
-  selectedTopics.forEach((entry, topicIdx) => {
-    const topicHeader = ['', '━━━━━━━━━━━━━━━━━━━━', '### 섹션 ' + (topicIdx + 1) + '. ' + entry.topic, '- 토픽 내 후보: ' + entry.total + '개'];
+  selectedTopics.forEach(entry => {
+    const topicHeader = ['', '### 카드: ' + entry.topic, '- 훅: ' + entry.topic + ' 흐름을 카드 단위로 빠르게 점검할 때입니다.', '- 맥락: 공개 근거 ' + entry.total + '개를 같은 변화 축으로 묶었습니다.'];
     if (!appendWithinLimit_(lines, topicHeader, BRIEFING_RENDER_CHAR_LIMIT)) {
       renderTruncated = true;
       return;
@@ -296,12 +297,12 @@ function renderBriefingWithTelemetry_(items, query) {
       const evidence = summarizeTechnicalTerms_((item.articleText || item.articleDescription || item.snippet || item.title || '') + ' ' + item.url, entry.topic);
       const sourceMeta = sanitizeInline_(item.sender || 'unknown') + ' · ' + sanitizeInline_(item.receivedAt || 'unknown') + ' · `' + sanitizeInline_(item.kind || 'post') + '`';
       const block = [
-        '',
-        '**카드 ' + cardNo + ' · ' + title + '**',
-        '  - 훅: ' + summary[0],
-        '  - 맥락: ' + entry.topic + ' 흐름에서 `' + evidence + '` 신호가 포착됨',
-        '  - 핵심 변화: ' + summary[1],
-        '  - 왜 중요한가: ' + summary[2]
+        '- 주요 아티클/논문: ' + title,
+        '  - 핵심 변화: ' + summary[0],
+        '  - 왜 중요한가: ' + summary[1],
+        '  - 근거: ' + summary[2],
+        '  - 시사점: ' + entry.topic + ' 축에서 후속 비교할 신호입니다.',
+        '  - CTA/저장 포인트: 저장 후 원문의 방법·평가·적용 조건을 재확인하세요.'
       ];
       if (item.url) {
         block.push('  - 근거/출처: [' + title.replace(/]/g, '') + '](' + escapeMarkdownUrl_(item.url) + ')');
