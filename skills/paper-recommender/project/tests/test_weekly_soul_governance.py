@@ -76,9 +76,10 @@ def test_weekly_markdown_reports_soul_axis_coverage_and_missing_axes(tmp_path) -
         run_iso="2026-05-04T00:00:00+00:00",
     )
 
-    assert "## SOUL axis coverage" in md
-    assert "- ✅ **dynamic graph:** covered by 1 candidate(s)." in md
-    assert "- ⚠️ **diachronic semantics:** missing visible candidate evidence." in md
+    assert "## SOUL-axis coverage" in md
+    assert "- ✅ **dynamic graph** — covered by 1 candidate(s); example: Dynamic graph paper." in md
+    assert "- ⚠️ **diachronic semantics** — missing candidate evidence; query: `semantic change 2026`." in md
+    assert "- Missing axes to revisit: diachronic semantics." in md
 
 
 def test_weekly_raw_records_soul_axis_coverage(tmp_path) -> None:
@@ -110,8 +111,20 @@ def test_weekly_raw_records_soul_axis_coverage(tmp_path) -> None:
 
     raw = json.loads((target / settings.weekly_report.raw_filename).read_text())
     assert raw["soul_axis_coverage"] == [
-        {"axis": "dynamic graph", "candidate_count": 1, "covered": True},
-        {"axis": "word embedding drift", "candidate_count": 0, "covered": False},
+        {
+            "axis": "dynamic graph",
+            "candidate_count": 1,
+            "status": "covered",
+            "query": "dynamic graph 2026",
+            "example_title": "Dynamic graph paper",
+        },
+        {
+            "axis": "word embedding drift",
+            "candidate_count": 0,
+            "status": "missing",
+            "query": "dynamic word embedding",
+            "example_title": "",
+        },
     ]
 
 
@@ -135,7 +148,7 @@ def test_weekly_axis_coverage_dedupes_axes_and_counts_trend_axis_fallback(tmp_pa
     )
 
     assert md.count("**Dynamic Graph:**") == 1
-    assert "- ✅ **Dynamic Graph:** covered by 2 candidate(s)." in md
+    assert "- ✅ **Dynamic Graph** — covered by 2 candidate(s); example: A." in md
     assert "unconfigured" not in md
 
 
@@ -154,7 +167,7 @@ def test_weekly_axis_coverage_handles_no_queries(tmp_path) -> None:
 
     md = (target / settings.weekly_report.note_filename).read_text()
     raw = json.loads((target / settings.weekly_report.raw_filename).read_text())
-    assert "- No configured/derived SOUL axes were available for this run." in md
+    assert "- No SOUL/profile search axes were generated, so axis coverage could not be measured." in md
     assert raw["soul_axis_coverage"] == []
 
 def test_weekly_raw_records_soul_provenance_and_compact_card(tmp_path) -> None:

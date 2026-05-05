@@ -124,48 +124,6 @@ def _snapshot_policy(settings: Settings) -> tuple[str, int]:
 
 
 
-def _soul_axis_coverage(
-    queries: list[dict[str, str]], candidates: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    axes: list[str] = []
-    seen: set[str] = set()
-    for q in queries:
-        axis = _safe_md(q.get("axis")) or "trend"
-        key = axis.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        axes.append(axis)
-
-    counts = {axis.lower(): 0 for axis in axes}
-    for p in candidates:
-        axis = _safe_md(p.get("_trend_axis") or p.get("trend_axis"))
-        key = axis.lower()
-        if key in counts:
-            counts[key] += 1
-
-    return [
-        {
-            "axis": axis,
-            "candidate_count": counts.get(axis.lower(), 0),
-            "covered": counts.get(axis.lower(), 0) > 0,
-        }
-        for axis in axes
-    ]
-
-
-def _render_soul_axis_coverage(coverage: list[dict[str, Any]]) -> list[str]:
-    if not coverage:
-        return ["- No configured/derived SOUL axes were available for this run."]
-    lines: list[str] = []
-    for item in coverage:
-        axis = _safe_md(item.get("axis")) or "trend"
-        count = int(item.get("candidate_count") or 0)
-        if count > 0:
-            lines.append(f"- ✅ **{axis}:** covered by {count} candidate(s).")
-        else:
-            lines.append(f"- ⚠️ **{axis}:** missing visible candidate evidence.")
-    return lines
 
 def _render_soul_snapshot(settings: Settings, soul_md: str | None) -> tuple[str | None, dict[str, Any]]:
     if not soul_md:
@@ -197,6 +155,10 @@ def _axis_key(value: Any) -> str:
     return axis or "unspecified"
 
 
+def _axis_lookup_key(value: Any) -> str:
+    return _axis_key(value).lower()
+
+
 def _build_soul_axis_coverage(
     queries: list[dict[str, str]],
     candidates: list[dict[str, Any]],
@@ -206,39 +168,39 @@ def _build_soul_axis_coverage(
     Query generation already projects the compact SOUL/profile into named search
     axes. This telemetry keeps that contract visible in the rendered note and raw
     artifact: every generated axis is shown, and axes with no candidate evidence
-    are explicitly marked missing instead of silently disappearing.
+    are explicitly marked missing instead of silently disappearing. Candidate-only
+    axes are ignored because coverage is measured against configured/derived axes.
     """
 
-    ordered_axes: list[str] = []
-    query_by_axis: dict[str, str] = {}
+    ordered_keys: list[str] = []
+    labels: dict[str, str] = {}
+    query_by_key: dict[str, str] = {}
     for q in queries:
         axis = _axis_key(q.get("axis"))
-        if axis not in query_by_axis:
-            ordered_axes.append(axis)
-            query_by_axis[axis] = _safe_md(q.get("query"))
+        key = axis.lower()
+        if key not in labels:
+            ordered_keys.append(key)
+            labels[key] = axis
+            query_by_key[key] = _safe_md(q.get("query"))
 
-    counts: dict[str, int] = {axis: 0 for axis in ordered_axes}
+    counts: dict[str, int] = {key: 0 for key in ordered_keys}
     examples: dict[str, str] = {}
     for p in candidates:
-        axis = _axis_key(p.get("_trend_axis"))
-        if axis not in counts:
-            # Candidate-only axes can happen when old/raw artifacts are rendered
-            # or adapters enrich candidates differently from query generation.
-            ordered_axes.append(axis)
-            counts[axis] = 0
-            query_by_axis.setdefault(axis, "")
-        counts[axis] += 1
-        examples.setdefault(axis, _safe_md(p.get("title")))
+        key = _axis_lookup_key(p.get("_trend_axis") or p.get("trend_axis"))
+        if key not in counts:
+            continue
+        counts[key] += 1
+        examples.setdefault(key, _safe_md(p.get("title")))
 
     return [
         {
-            "axis": axis,
-            "candidate_count": counts.get(axis, 0),
-            "status": "covered" if counts.get(axis, 0) > 0 else "missing",
-            "query": query_by_axis.get(axis, ""),
-            "example_title": examples.get(axis, ""),
+            "axis": labels[key],
+            "candidate_count": counts.get(key, 0),
+            "status": "covered" if counts.get(key, 0) > 0 else "missing",
+            "query": query_by_key.get(key, ""),
+            "example_title": examples.get(key, ""),
         }
-        for axis in ordered_axes
+        for key in ordered_keys
     ]
 
 
@@ -294,7 +256,6 @@ def render_weekly_report(
     run_iso: str,
 ) -> str:
     by_id = {paper_key(p): p for p in candidates}
-    axis_coverage = _soul_axis_coverage(queries, candidates)
     week = datetime.fromisoformat(run_iso.replace("Z", "+00:00")).strftime("%G-W%V")
     soul_provenance = dict(soul_provenance or {})
     soul_source = str(soul_provenance.get("source") or ("soul" if soul_md else "absent"))
