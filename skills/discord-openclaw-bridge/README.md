@@ -13,6 +13,7 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 - `/openclaw prompt:<text>` — ask OpenClaw from the allowlisted channel
 - `/openclaw_status` — lightweight OpenClaw health check
 - `/jiphyeonjeon_briefing` — post the latest Jiphyeonjeon-Claw AI briefing from `DISCORD_BRIEFING_SOURCE`
+- one-shot newsletter/card-news publishers from the installed project scripts
 - mention replies, only if `DISCORD_ENABLE_MENTION_RESPONSES=1`
 
 ## Setup on EC2
@@ -26,11 +27,36 @@ systemctl --user start discord-openclaw-bridge.service
 bash project/scripts/status.sh
 ```
 
-To publish a briefing immediately after the token is configured:
+To publish briefings immediately after the token is configured:
 
 ```bash
+# Markdown briefing from DISCORD_BRIEFING_SOURCE.
 bash project/scripts/post-briefing.sh
+
+# Newsletter Markdown from DISCORD_NEWSLETTER_BRIEFING_SOURCE.
+bash project/scripts/post-newsletter-briefing.sh
+
+# Card-news carousel-style Markdown from newsletter raw archive items.json.
+bash project/scripts/post-card-news.sh
 ```
+
+## Card-news publishing path
+
+`project/src/discord_openclaw_bridge/post_card_news.py` renders the newsletter raw archive into compact Discord messages shaped for a card-news/carousel read:
+
+1. a header card with the publication date, cross-topic theme, and selected/collected counts;
+2. up to `DISCORD_CARD_NEWS_MAX_CARDS` item cards selected for topic spread before duplicates;
+3. rich cards as short narrative paragraphs (`why now` → claim/mechanism → evidence → optional next question), lean cards as public-excerpt notes, and skeletal cards as explicit follow-up candidates.
+
+Operational controls:
+
+- `DISCORD_CARD_NEWS_CHANNEL_ID` defaults to the card-news forum/channel `1501073491921993758`.
+- `DISCORD_CARD_NEWS_SOURCE` defaults to the latest `NEWSLETTER_WIKI_ROOT/raw/newsletters/*/items.json` archive, preferring today.
+- `DISCORD_CARD_NEWS_MAX_CARDS` defaults to `8` to keep the Discord thread compact.
+- `DISCORD_CARD_NEWS_HERO_IMAGE_PATH` optionally attaches a PNG hero image when posting to a Discord forum channel.
+- `DISCORD_PURGE_PREVIOUS_CARD_NEWS` defaults to enabled; previous bot-authored card-news posts/active threads are removed before reposting.
+
+Privacy boundary: the renderer uses sanitized archive fields (`article_title`, `summary_lines`, `why_now`, `claim`, `mechanism`, `evidence`, public excerpt/description, source name, URL, topic labels/reasons). It does not read or post Gmail bodies, OAuth tokens, Script Properties, webhook URLs, relay tokens, or OpenClaw gateway secrets. Discord embeds are suppressed for posted messages.
 
 ## Invite URL
 
@@ -45,4 +71,5 @@ Install the app with scopes `bot applications.commands`, then restrict the app/b
 - No `Administrator` permission requested by the invite helper.
 - OpenClaw gateway remains loopback-only.
 - Discord and OpenClaw tokens are read from local secret files/env only.
+- Card-news output is generated from already-sanitized newsletter archive fields; do not add raw email bodies or secret env values to card text.
 - Full prompts are not logged by default.
