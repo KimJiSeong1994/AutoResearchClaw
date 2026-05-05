@@ -114,6 +114,49 @@ def test_weekly_raw_records_soul_axis_coverage(tmp_path) -> None:
         {"axis": "word embedding drift", "candidate_count": 0, "covered": False},
     ]
 
+
+def test_weekly_axis_coverage_dedupes_axes_and_counts_trend_axis_fallback(tmp_path) -> None:
+    md = render_weekly_report(
+        _settings(tmp_path),
+        profile={"keywords": ["dynamic graph"]},
+        soul_md="dynamic graph representation",
+        user_id="researcher-1",
+        queries=[
+            {"axis": "Dynamic Graph", "query": "dynamic graph 2026", "rationale": "SOUL axis"},
+            {"axis": "dynamic graph", "query": "temporal graph", "rationale": "duplicate axis"},
+        ],
+        candidates=[
+            {"paper_id": "p1", "title": "A", "trend_axis": "dynamic graph"},
+            {"paper_id": "p2", "title": "B", "_trend_axis": "Dynamic Graph"},
+            {"paper_id": "p3", "title": "Ignored", "_trend_axis": "unconfigured"},
+        ],
+        report={"coverage_caveat": "limited", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    assert md.count("**Dynamic Graph:**") == 1
+    assert "- ✅ **Dynamic Graph:** covered by 2 candidate(s)." in md
+    assert "unconfigured" not in md
+
+
+def test_weekly_axis_coverage_handles_no_queries(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    target = write_weekly_artifacts(
+        settings,
+        profile={"keywords": []},
+        soul_md="",
+        user_id=None,
+        queries=[],
+        candidates=[{"paper_id": "p1", "title": "A", "_trend_axis": "dynamic graph"}],
+        report={"coverage_caveat": "limited", "clusters": []},
+        run_iso="2026-05-04T00:00:00+00:00",
+    )
+
+    md = (target / settings.weekly_report.note_filename).read_text()
+    raw = json.loads((target / settings.weekly_report.raw_filename).read_text())
+    assert "- No configured/derived SOUL axes were available for this run." in md
+    assert raw["soul_axis_coverage"] == []
+
 def test_weekly_raw_records_soul_provenance_and_compact_card(tmp_path) -> None:
     settings = _settings(tmp_path)
     target = write_weekly_artifacts(
