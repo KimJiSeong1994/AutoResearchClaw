@@ -619,9 +619,24 @@ def test_topic_taxonomy_parity_fixture_guards_false_positive_terms() -> None:
 
 
 def test_apps_script_renderer_keeps_cardnews_contract_labels_in_parity() -> None:
-    script = Path(__file__).resolve().parents[3] / ".." / "integrations" / "google-apps-script" / "newsletter_archive_to_discord.gs"
-    text = script.resolve().read_text(encoding="utf-8")
+    script = (
+        Path(__file__).resolve().parents[3]
+        / ".."
+        / "integrations"
+        / "google-apps-script"
+        / "newsletter_archive_to_discord.gs"
+    ).resolve()
+    text = script.read_text(encoding="utf-8")
 
-    for label in ["훅", "맥락", "핵심 변화", "왜 중요한가", "근거/출처", "시사점", "CTA/저장 포인트"]:
+    expected_labels = [
+        "훅",
+        "맥락",
+        "핵심 변화",
+        "왜 중요한가",
+        "근거/출처",
+        "시사점",
+        "CTA/저장 포인트",
+    ]
+    for label in expected_labels:
         assert label in text
     assert "메일 본문/비밀값은 게시하지 않고" in text
