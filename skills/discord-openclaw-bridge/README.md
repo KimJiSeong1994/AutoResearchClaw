@@ -58,6 +58,37 @@ Operational controls:
 
 Privacy boundary: the renderer uses sanitized archive fields (`article_title`, `summary_lines`, `why_now`, `claim`, `mechanism`, `evidence`, public excerpt/description, source name, URL, topic labels/reasons). It does not read or post Gmail bodies, OAuth tokens, Script Properties, webhook URLs, relay tokens, or OpenClaw gateway secrets. Discord embeds are suppressed for posted messages.
 
+
+## Lane3 verification checklist
+
+Before posting to Discord, verify the local bridge path end-to-end without exposing secrets:
+
+```bash
+cd skills/discord-openclaw-bridge/project
+uv run --with pytest --with httpx python -m pytest \
+  tests/test_post_card_news.py \
+  tests/test_post_newsletter.py \
+  tests/test_briefing.py -q
+uv run --with ruff ruff check src tests
+python3 -m compileall -q src
+bash -n scripts/post-card-news.sh scripts/post-newsletter-briefing.sh scripts/post-briefing.sh
+```
+
+Pre-publish checks:
+
+- Confirm `DISCORD_BOT_TOKEN` is configured locally, but never print it in logs or tickets.
+- Confirm `DISCORD_CARD_NEWS_SOURCE` points to a sanitized `items.json`; if unset, the script uses the latest archive under `NEWSLETTER_WIKI_ROOT/raw/newsletters/`.
+- Inspect a rendered fixture with `discord_openclaw_bridge.post_card_news.render_card_news_messages(...)` and assert no raw Gmail body snippets, OAuth tokens, Script Properties, webhook URLs, relay tokens, or gateway tokens appear.
+- Keep `DISCORD_CARD_NEWS_MAX_CARDS` small enough for a readable thread; default is `8`.
+- Review `DISCORD_PURGE_PREVIOUS_CARD_NEWS` before production posting. It defaults to enabled for replacement posts and removes prior bot-authored card-news posts/active card-news forum threads.
+- If using `DISCORD_CARD_NEWS_HERO_IMAGE_PATH`, use a non-secret PNG asset intended for public Discord posting.
+
+Post-publish checks:
+
+- Confirm the header card shows date, theme, and selected/collected counts.
+- Confirm item cards keep the card-news narrative arc and suppress link embeds.
+- Confirm Discord thread/channel contains no private email text or secret configuration values.
+
 ## Invite URL
 
 ```bash
