@@ -127,7 +127,9 @@
           "record_miner_link",
           "pending_claw_review",
           "discord-jiphyeonjeon-miner-review",
-          "approved-manual-links"
+          "approved-manual-links",
+          "extract_page_metadata",
+          "public_html_metadata"
         ]
       },
       "service_surface": "discord_openclaw_bridge",
@@ -144,7 +146,7 @@
         "pending_queue_as_manual_links_input",
         "private_or_userinfo_url"
       ],
-      "output_contract": "Locked JSONL intake/review-queue records marked pending_claw_review, append-only decision audit rows, and approved-only manual_links export for 집현전-클로-approved items.",
+      "output_contract": "Locked JSONL intake/review-queue records marked pending_claw_review, append-only decision audit rows, and approved-only manual_links export for 집현전-클로-approved items with bounded public HTML metadata enrichment for missing/fallback title, summary, and article date.",
       "validation": [
         "skills/discord-openclaw-bridge/project/tests/test_miner.py",
         "skills/discord-openclaw-bridge/project/tests/test_miner_bot.py",
@@ -153,7 +155,9 @@
         "skills/discord-openclaw-bridge/project/tests/test_miner_review.py",
         "approved_only_export_gate",
         "locked_jsonl_append",
-        "private_host_rejection"
+        "private_host_rejection",
+        "metadata_enrichment",
+        "offline_no_enrich_export"
       ],
       "metrics": [
         "source_stats",

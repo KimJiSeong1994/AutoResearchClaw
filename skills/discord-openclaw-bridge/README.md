@@ -38,7 +38,7 @@ Deep build plan for the review workflow:
 - Keep Miner intake collection-only: sanitize URL risk, append the original pending record to intake and review queue, and leave all inclusion decisions to 집현전-클로.
 - Make JSONL writes repairable and locked: every append uses a sidecar lock and `fsync`; duplicate checks repair a missing intake or queue row instead of suppressing it.
 - Store decisions as audit events: `discord-jiphyeonjeon-miner-review approve|reject|hold <intake_id>` appends to `link-review-decisions.jsonl` without mutating the pending queue.
-- Export only after approval: `discord-jiphyeonjeon-miner-review export` joins the queue with latest decisions and writes `approved-manual-links.jsonl` atomically for `manual_links` compatibility.
+- Export only after approval: `discord-jiphyeonjeon-miner-review export` joins the queue with latest decisions, enriches missing/fallback metadata from the public HTML page, and writes `approved-manual-links.jsonl` atomically for `manual_links` compatibility.
 - Verify the boundary with tests before pointing downstream jobs at the export path.
 
 Operator CLI:
@@ -51,6 +51,8 @@ uv run discord-jiphyeonjeon-miner-review approve miner_<id> --reason "source che
 uv run discord-jiphyeonjeon-miner-review reject miner_<id> --reason "off-topic or unsafe"
 uv run discord-jiphyeonjeon-miner-review hold miner_<id> --reason "needs source verification"
 uv run discord-jiphyeonjeon-miner-review export
+# Deterministic/offline export without public page metadata fetch:
+uv run discord-jiphyeonjeon-miner-review export --no-enrich
 ```
 
 Default paths:

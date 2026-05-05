@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
+from urllib.parse import urlsplit
 
 from .miner import AGENT_ID, PENDING_STATUS, REVIEWER_ID, clean_text, locked_jsonl_paths, read_jsonl, sanitize_url
 
@@ -15,6 +17,15 @@ Decision = Literal["approve", "reject", "hold"]
 _APPROVED_STATUS = "approved_for_manual_links"
 _APPROVED_BY_TAG = "approved-by-jiphyeonjeon-claw"
 _VALID_DECISIONS: set[str] = {"approve", "reject", "hold"}
+_METADATA_MAX_CHARS = 500_000
+_METADATA_TIMEOUT_SEC = 5.0
+
+
+@dataclass(frozen=True)
+class PageMetadata:
+    title: str = ""
+    summary: str = ""
+    published_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,8 +96,11 @@ def export_approved_manual_links(
     queue_path: Path,
     decisions_path: Path,
     output_path: Path,
+    enrich: bool = False,
+    metadata_fetcher: Callable[[str], PageMetadata | None] | None = None,
+    metadata_timeout_sec: float = _METADATA_TIMEOUT_SEC,
 ) -> list[dict[str, Any]]:
-    with locked_jsonl_paths(queue_path, decisions_path, output_path):
+    with locked_jsonl_paths(queue_path, decisions_path):
         queue = read_jsonl(queue_path)
         latest = latest_decisions(decisions_path)
         items = [ReviewQueueItem(record=row, decision=latest.get(str(row.get("intake_id") or ""))) for row in queue]
@@ -97,6 +111,9 @@ def export_approved_manual_links(
             for row in [_manual_link_row(item)]
             if row is not None
         ]
+    if enrich:
+        approved = _enrich_manual_link_rows(approved, metadata_fetcher=metadata_fetcher, timeout_sec=metadata_timeout_sec)
+    with locked_jsonl_paths(output_path):
         _write_jsonl_atomic(output_path, approved)
     return approved
 
@@ -168,6 +185,147 @@ def _write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
         os.fsync(fh.fileno())
         tmp = Path(fh.name)
     tmp.replace(path)
+
+
+def _enrich_manual_link_rows(
+    rows: list[dict[str, Any]],
+    *,
+    metadata_fetcher: Callable[[str], PageMetadata | None] | None,
+    timeout_sec: float,
+) -> list[dict[str, Any]]:
+    fetcher = metadata_fetcher or (lambda url: _fetch_page_metadata(url, timeout_sec=timeout_sec))
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        url = str(row.get("url") or "")
+        try:
+            metadata = fetcher(url) if url else None
+        except Exception:
+            metadata = None
+        enriched.append(_apply_page_metadata(row, metadata) if metadata else row)
+    return enriched
+
+
+def _apply_page_metadata(row: dict[str, Any], metadata: PageMetadata) -> dict[str, Any]:
+    out = dict(row)
+    title = clean_text(metadata.title, limit=180)
+    summary = clean_text(metadata.summary, limit=700)
+    published_at = _published_date(metadata.published_at)
+    if title and _should_replace_title(str(out.get("title") or ""), str(out.get("url") or "")):
+        out["title"] = title
+    if summary and not clean_text(out.get("summary"), limit=700):
+        out["summary"] = summary
+    if published_at:
+        out["published_at"] = published_at
+    if title or summary or published_at:
+        out["enrichment"] = {
+            "source": "public_html_metadata",
+            "title_applied": bool(title and out.get("title") == title),
+            "summary_applied": bool(summary and out.get("summary") == summary),
+            "published_at_applied": bool(published_at and out.get("published_at") == published_at),
+        }
+    return out
+
+
+def _should_replace_title(title: str, url: str) -> bool:
+    current = clean_text(title, limit=500).lower()
+    if not current:
+        return True
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    host_without_www = host.removeprefix("www.")
+    return (
+        current == host
+        or current == host_without_www
+        or current.startswith(f"{host}/")
+        or current.startswith(f"{host_without_www}/")
+    )
+
+
+def _published_date(value: str) -> str:
+    text = clean_text(value, limit=80)
+    if len(text) >= 10 and text[:4].isdigit() and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    return ""
+
+
+def _fetch_page_metadata(url: str, *, timeout_sec: float) -> PageMetadata | None:
+    try:
+        import httpx
+
+        safe_url = sanitize_url(url)
+        if not safe_url:
+            return None
+        with httpx.stream(
+            "GET",
+            safe_url,
+            follow_redirects=True,
+            timeout=max(0.1, timeout_sec),
+            headers={"User-Agent": "jiphyeonjeon-miner-review/0.1"},
+        ) as response:
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").lower()
+            if "html" not in content_type:
+                return None
+            chunks: list[bytes] = []
+            remaining = _METADATA_MAX_CHARS
+            for chunk in response.iter_bytes():
+                if not chunk or remaining <= 0:
+                    break
+                chunks.append(chunk[:remaining])
+                remaining -= len(chunks[-1])
+            encoding = response.encoding or "utf-8"
+        html = b"".join(chunks).decode(encoding, errors="replace")
+        return extract_page_metadata(html)
+    except Exception:
+        return None
+
+
+def extract_page_metadata(html: str) -> PageMetadata:
+    parser = _PageMetadataParser()
+    parser.feed(html[:_METADATA_MAX_CHARS])
+    return parser.metadata()
+
+
+class _PageMetadataParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capture_title = False
+        self._title_parts: list[str] = []
+        self._meta: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "title":
+            self._capture_title = True
+            return
+        if tag.lower() != "meta":
+            return
+        values = {name.lower(): value or "" for name, value in attrs}
+        key = (values.get("property") or values.get("name") or "").lower()
+        content = clean_text(values.get("content"), limit=1000)
+        if key and content and key not in self._meta:
+            self._meta[key] = content
+
+    def handle_data(self, data: str) -> None:
+        if self._capture_title:
+            self._title_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "title":
+            self._capture_title = False
+
+    def metadata(self) -> PageMetadata:
+        title = (
+            self._meta.get("og:title")
+            or self._meta.get("twitter:title")
+            or clean_text(" ".join(self._title_parts), limit=500)
+        )
+        summary = (
+            self._meta.get("og:description")
+            or self._meta.get("twitter:description")
+            or self._meta.get("description")
+        )
+        published_at = self._meta.get("article:published_time") or self._meta.get("date") or ""
+        return PageMetadata(title=title, summary=summary, published_at=published_at)
 
 
 def _append_jsonl_unlocked(path: Path, record: dict[str, Any]) -> None:

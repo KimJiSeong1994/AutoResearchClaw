@@ -43,6 +43,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     export_p = sub.add_parser("export", help="write approved-only manual_links JSONL")
     export_p.add_argument("--output", type=Path, default=DEFAULT_EXPORT)
+    export_p.add_argument(
+        "--enrich",
+        dest="enrich",
+        action="store_true",
+        default=True,
+        help="fetch public HTML metadata to improve empty/fallback title, summary, and article date (default)",
+    )
+    export_p.add_argument("--no-enrich", dest="enrich", action="store_false", help="skip public HTML metadata fetch")
+    export_p.add_argument("--metadata-timeout-sec", type=float, default=5.0, help="per-link metadata fetch timeout")
     return parser
 
 
@@ -80,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
                 queue_path=args.queue.expanduser(),
                 decisions_path=args.decisions.expanduser(),
                 output_path=args.output.expanduser(),
+                enrich=args.enrich,
+                metadata_timeout_sec=args.metadata_timeout_sec,
             )
             print(f"exported {len(rows)} approved manual links to {args.output.expanduser()}")
             return 0

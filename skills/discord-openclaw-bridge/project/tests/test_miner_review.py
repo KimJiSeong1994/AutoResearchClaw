@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from discord_openclaw_bridge.miner import DiscordLinkMetadata, record_miner_link, sanitize_url
-from discord_openclaw_bridge.review import export_approved_manual_links, record_decision
+from discord_openclaw_bridge.review import PageMetadata, export_approved_manual_links, extract_page_metadata, record_decision
 from discord_openclaw_bridge.review_cli import main
 
 
@@ -135,7 +135,7 @@ def test_review_cli_list_show_decide_and_export(tmp_path: Path, capsys: pytest.C
     assert main(["--queue", str(queue_path), "--decisions", str(decisions_path), "show", intake_id]) == 0
     assert '"latest_decision"' in capsys.readouterr().out
 
-    assert main(["--queue", str(queue_path), "--decisions", str(decisions_path), "export", "--output", str(export_path)]) == 0
+    assert main(["--queue", str(queue_path), "--decisions", str(decisions_path), "export", "--output", str(export_path), "--no-enrich"]) == 0
     assert "exported 1 approved" in capsys.readouterr().out
     assert _read_jsonl(export_path)[0]["url"] == "https://example.com/research?ok=1"
 
@@ -165,3 +165,80 @@ def test_record_decision_rejects_unsafe_queue_url(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsafe url"):
         record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id="miner_bad", decision="approve")
+
+
+def test_extract_page_metadata_prefers_social_tags() -> None:
+    metadata = extract_page_metadata(
+        """
+        <html><head>
+          <title>Fallback Title</title>
+          <meta property="og:title" content="Ranking Engineer Agent (REA)">
+          <meta name="description" content="Fallback description">
+          <meta property="og:description" content="Autonomous ML experimentation at Meta.">
+          <meta property="article:published_time" content="2026-03-17T12:00:00Z">
+        </head></html>
+        """
+    )
+
+    assert metadata.title == "Ranking Engineer Agent (REA)"
+    assert metadata.summary == "Autonomous ML experimentation at Meta."
+    assert metadata.published_at == "2026-03-17T12:00:00Z"
+
+
+def test_export_enriches_fallback_title_summary_and_article_date(tmp_path: Path) -> None:
+    intake_path = tmp_path / "intake.jsonl"
+    queue_path = tmp_path / "queue.jsonl"
+    decisions_path = tmp_path / "decisions.jsonl"
+    export_path = tmp_path / "approved.jsonl"
+    result = record_miner_link(
+        url="https://engineering.fb.com/2026/03/17/developer-tools/ranking-engineer-agent-rea/",
+        intake_path=intake_path,
+        review_queue_path=queue_path,
+        created_at=datetime(2026, 5, 5, 1, 2, 3, tzinfo=timezone.utc),
+    )
+    record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id=result.intake_id, decision="approve")
+
+    rows = export_approved_manual_links(
+        queue_path=queue_path,
+        decisions_path=decisions_path,
+        output_path=export_path,
+        enrich=True,
+        metadata_fetcher=lambda _: PageMetadata(
+            title="Ranking Engineer Agent (REA): The Autonomous AI Agent",
+            summary="Meta describes a long-running autonomous AI agent for ML experimentation.",
+            published_at="2026-03-17T00:00:00Z",
+        ),
+    )
+
+    assert rows[0]["title"] == "Ranking Engineer Agent (REA): The Autonomous AI Agent"
+    assert rows[0]["summary"] == "Meta describes a long-running autonomous AI agent for ML experimentation."
+    assert rows[0]["published_at"] == "2026-03-17"
+    assert rows[0]["enrichment"]["source"] == "public_html_metadata"
+
+
+def test_export_enrichment_failure_keeps_approved_export(tmp_path: Path) -> None:
+    intake_path = tmp_path / "intake.jsonl"
+    queue_path = tmp_path / "queue.jsonl"
+    decisions_path = tmp_path / "decisions.jsonl"
+    export_path = tmp_path / "approved.jsonl"
+    result = record_miner_link(
+        url="https://example.com/fallback-title",
+        intake_path=intake_path,
+        review_queue_path=queue_path,
+    )
+    record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id=result.intake_id, decision="approve")
+
+    def failing_fetcher(_: str) -> PageMetadata:
+        raise RuntimeError("metadata service unavailable")
+
+    rows = export_approved_manual_links(
+        queue_path=queue_path,
+        decisions_path=decisions_path,
+        output_path=export_path,
+        enrich=True,
+        metadata_fetcher=failing_fetcher,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://example.com/fallback-title"
+    assert "enrichment" not in rows[0]
