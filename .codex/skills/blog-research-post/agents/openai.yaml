@@ -1,0 +1,8 @@
+interface:
+  display_name: "Blog Research Post"
+  short_description: "뉴스레터를 논증형 기술 블로그로 변환"
+  brand_color: "#1F3A5F"
+  default_prompt: "Use $blog-research-post to turn this technical briefing into a sourced Korean blog post with a top hero image."
+policy:
+  allow_implicit_invocation: true
+
