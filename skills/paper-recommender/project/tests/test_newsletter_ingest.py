@@ -215,16 +215,75 @@ def test_topic_briefing_groups_items_without_email_body(tmp_path: Path, capsys) 
     briefing = briefing_path.read_text(encoding="utf-8")
     assert "집현전-Claw 기술 브리핑 카드뉴스" in briefing
     assert "검색/RAG/지식그래프" in briefing
-    assert "## 오늘의 카드뉴스 흐름" in briefing
     assert "- 훅:" in briefing
     assert "- 맥락:" in briefing
     assert "- 핵심 변화:" in briefing
     assert "- 왜 중요한가:" in briefing
-    assert "- 근거/출처:" in briefing
+    assert "- 근거:" in briefing
+    assert "- 시사점:" in briefing
     assert "- CTA/저장 포인트:" in briefing
+    assert "- 출처 링크:" in briefing
     assert "https://arxiv.org/abs/2605.00001" in briefing
     assert "Private body" not in briefing
 
+
+
+def test_topic_briefing_cardnews_contract_keeps_privacy_boundary() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-05",
+        items=[
+            {
+                "title": "Private digest subject",
+                "article_title": "GraphRAG carousel-ready benchmark",
+                "kind": "post",
+                "url": "https://example.com/graphrag",
+                "sender": "Digest <digest@example.com>",
+                "received_at": "Mon, 04 May 2026 07:00:00 +0900",
+                "summary_lines": [
+                    "Public article introduces a graph-grounded retrieval benchmark.",
+                    "It matters because RAG quality now depends on index and query-planning choices.",
+                    "The public evidence compares accuracy, latency, and grounding trade-offs.",
+                ],
+                "classification_text": "PRIVATE paid newsletter note token=secret",
+            }
+        ],
+        source_name="newsletters.jsonl",
+    )
+
+    ordered_markers = [
+        "- 구성: 훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트",
+        "- 훅:",
+        "- 맥락:",
+        "  - 핵심 변화:",
+        "  - 왜 중요한가:",
+        "  - 근거:",
+        "  - 시사점:",
+        "  - CTA/저장 포인트:",
+        "  - 출처 링크:",
+    ]
+    cursor = -1
+    for marker in ordered_markers:
+        found = briefing.find(marker)
+        assert found > cursor, marker
+        cursor = found
+    assert "GraphRAG carousel-ready benchmark" in briefing
+    assert "PRIVATE paid newsletter" not in briefing
+    assert "token=secret" not in briefing
+
+
+def test_apps_script_briefing_renderer_mentions_cardnews_contract() -> None:
+    script = (Path(__file__).resolve().parents[4] / "integrations" / "google-apps-script" / "newsletter_archive_to_discord.gs").read_text(encoding="utf-8")
+
+    for marker in [
+        "집현전-Claw 기술 브리핑 카드뉴스",
+        "## 카드뉴스 발행 템플릿",
+        "훅 → 맥락 → 핵심 변화 → 왜 중요한가 → 근거 → 시사점 → CTA/저장 포인트",
+        "  - 핵심 변화: ",
+        "  - 왜 중요한가: ",
+        "  - CTA/저장 포인트: ",
+        "메일 본문/개인정보는 게시하지",
+    ]:
+        assert marker in script
 
 def test_topic_classifier_uses_token_boundaries_not_substrings() -> None:
     item = {
@@ -478,6 +537,9 @@ def test_apps_script_relay_ingest_normalizes_public_payload_and_omits_private_co
     assert "classification_text" not in dumped
     briefing = (tmp_path / "briefing.md").read_text(encoding="utf-8")
     assert "RAG orchestration" in briefing
+    assert "- 핵심 변화:" in briefing
+    assert "- 왜 중요한가:" in briefing
+    assert "- CTA/저장 포인트:" in briefing
 
 
 def test_apps_script_relay_ingest_filters_linkedin_job_posts(tmp_path: Path) -> None:

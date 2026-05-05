@@ -92,6 +92,36 @@ def test_rich_card_uses_essay_paragraphs_with_connective() -> None:
     assert len(paragraphs) >= 3, paragraphs
 
 
+
+def test_card_news_renderer_accepts_briefing_template_alias_fields() -> None:
+    payload = {
+        "date": "2026-05-05",
+        "items": [
+            {
+                "article_title": "GraphRAG carousel benchmark",
+                "url": "https://example.com/graphrag",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "topic_confidence": 0.88,
+                "topic_reasons": ["rag", "knowledge graph"],
+                "hook": "RAG 평가가 그래프 근거 중심으로 이동하고 있습니다.",
+                "context": "검색 품질은 인덱스와 쿼리 플래닝 선택에 좌우됩니다.",
+                "core_change": "그래프 기반 검색은 카드뉴스의 핵심 변화로 설명해야 합니다.",
+                "why_matters": "운영자는 정확도와 지연시간 trade-off를 함께 봐야 합니다.",
+                "cta": "저장 후 원문의 평가 조건을 확인하세요.",
+                "source_name": "Newsletter A",
+            }
+        ],
+    }
+
+    card = render_card_news_messages(payload, max_cards=1)[1]
+
+    assert "RAG 평가가 그래프 근거 중심으로 이동하고 있습니다" in card
+    assert "그래프 기반 검색은 카드뉴스의 핵심 변화" in card
+    assert "검색 품질은 인덱스와 쿼리 플래닝" in card
+    assert "운영자는 정확도와 지연시간 trade-off" in card
+    assert "저장 후 원문의 평가 조건을 확인하세요" in card
+    assert "rag" in card
+
 def test_rich_card_omits_next_question_when_no_specific_input() -> None:
     payload = {
         "items": [

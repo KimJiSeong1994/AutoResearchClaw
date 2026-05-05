@@ -269,10 +269,12 @@ def _dedup_paragraphs(paragraphs: list[str]) -> list[str]:
 
 def _richness(item: dict[str, Any], *, raw_title: str) -> str:
     if (
-        _clean(item.get("why_now"))
-        or _clean(item.get("claim") or item.get("thesis"))
-        or _clean(item.get("mechanism") or item.get("claim_mechanism"))
+        _clean(item.get("hook") or item.get("why_now"))
+        or _clean(item.get("core_change") or item.get("claim") or item.get("thesis"))
+        or _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"))
+        or _clean(item.get("why_matters"))
         or _clean(item.get("evidence"))
+        or _clean(item.get("cta") or item.get("save_point"))
         or _summary_lines(item)
     ):
         return "rich"
@@ -487,10 +489,11 @@ def _render_rich_card(
     frame: int = 1,
 ) -> str:
     summary = _summary_lines(item)
-    why_now = _normalize_register(_clean(item.get("why_now"), limit=240))
-    claim = _normalize_register(_clean(item.get("claim") or item.get("thesis"), limit=220))
-    mechanism = _normalize_register(_clean(item.get("mechanism") or item.get("claim_mechanism"), limit=220))
-    evidence = _normalize_register(_clean(item.get("evidence"), limit=220))
+    why_now = _normalize_register(_clean(item.get("hook") or item.get("why_now"), limit=240))
+    claim = _normalize_register(_clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=220))
+    mechanism = _normalize_register(_clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=220))
+    evidence = _normalize_register(_clean(item.get("why_matters") or item.get("evidence"), limit=220))
+    cta = _normalize_register(_clean(item.get("cta") or item.get("save_point"), limit=180))
 
     if frame == 2:
         paragraphs = _build_frame2_paragraphs(
@@ -511,6 +514,9 @@ def _render_rich_card(
             source=source,
         )
         emit_next_question_label = True
+
+    if cta and not any(_has_substring_overlap(p, cta) for p in paragraphs):
+        paragraphs.append(cta)
 
     paragraphs = _dedup_paragraphs(paragraphs)
 
