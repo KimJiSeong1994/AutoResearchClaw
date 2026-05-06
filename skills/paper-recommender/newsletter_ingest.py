@@ -62,6 +62,123 @@ _RESEARCH_HOST_HINTS = (
     "github.com",
 )
 
+_ACADEMIC_HOST_HINTS = (
+    "arxiv.org",
+    "doi.org",
+    "openreview.net",
+    "semanticscholar.org",
+    "paperswithcode.com",
+    "aclanthology.org",
+    "proceedings.mlr.press",
+    "neurips.cc",
+    "icml.cc",
+)
+
+_TECHNICAL_REPORT_HOST_HINTS = (
+    "engineering.fb.com",
+    "openai.com",
+    "anthropic.com",
+    "deepmind.google",
+    "ai.googleblog.com",
+    "github.com",
+    "huggingface.co",
+    "pytorch.org",
+    "tensorflow.org",
+)
+
+_TECHNICAL_SIGNAL_PHRASES = (
+    "knowledge graph",
+    "semantic search",
+    "vector database",
+    "machine learning",
+    "language model",
+    "large language model",
+    "tool use",
+    "coding agent",
+    "llm agent",
+    "open source",
+    "inference serving",
+    "eval pipeline",
+    "red team",
+)
+
+_TECHNICAL_SIGNAL_TERMS = (
+    "academic",
+    "agent",
+    "algorithm",
+    "architecture",
+    "arxiv",
+    "benchmark",
+    "cuda",
+    "dataset",
+    "database",
+    "developer",
+    "embedding",
+    "evaluation",
+    "framework",
+    "graph",
+    "gpu",
+    "inference",
+    "knowledge",
+    "latency",
+    "library",
+    "llm",
+    "mlops",
+    "model",
+    "multimodal",
+    "paper",
+    "rag",
+    "reasoning",
+    "report",
+    "research",
+    "retrieval",
+    "security",
+    "serving",
+    "vector",
+    "vision",
+    "workflow",
+    "technical",
+    "검색",
+    "논문",
+    "리서치",
+    "모델",
+    "벤치마크",
+    "에이전트",
+    "지식그래프",
+)
+
+_OUT_OF_SCOPE_HINTS = (
+    "analytics",
+    "career ladder",
+    "feed/update",
+    "funding",
+    "hiring",
+    "impressions",
+    "job alert",
+    "job recommendation",
+    "jobs/view",
+    "login",
+    "market",
+    "notifications",
+    "partnership",
+    "preferences",
+    "pricing",
+    "profile views",
+    "settings",
+    "signin",
+    "signup",
+    "terms",
+    "unsubscribe",
+    "weekly stats",
+    "구인",
+    "노출수",
+    "님 업데이트",
+    "업데이트했습니다",
+    "지원하기",
+    "채용",
+    "프로필 조회",
+)
+
 _DEFAULT_MAX_MESSAGES = 500
 
 @dataclass(frozen=True)
@@ -264,6 +381,18 @@ class NewsletterMessage:
     body: str
 
 
+@dataclass(frozen=True)
+class EligibilityDecision:
+    verdict: str
+    bucket: str
+    reason: str
+    evidence: tuple[str, ...] = ()
+
+    @property
+    def eligible(self) -> bool:
+        return self.verdict == "eligible"
+
+
 def _clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
@@ -454,29 +583,129 @@ def is_research_url(url: str) -> bool:
 
 def is_private_utility_url(url: str) -> bool:
     lower = url.lower()
-    blocked = (
-        "myaccount.google.com",
-        "accounts.google.com",
-        "mail.google.com",
-        "support.google.com",
-        "google.com/analytics/answer",
-        "unsubscribe",
-        "preferences",
-        "privacy",
-        "terms",
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    path_parts = {part.lower() for part in parsed.path.split("/") if part}
+    if host in {"myaccount.google.com", "accounts.google.com", "mail.google.com"}:
+        return True
+    if host == "support.google.com" and path_parts & {"accounts", "analytics"}:
+        return True
+    blocked_path_parts = {
+        "account",
         "login",
+        "preferences",
+        "settings",
         "signin",
         "signup",
-        "account",
-        "settings",
-    )
-    if any(token in lower for token in blocked):
+        "terms",
+        "unsubscribe",
+    }
+    if path_parts & blocked_path_parts:
+        return True
+    if "google.com/analytics/answer" in lower:
         return True
     try:
-        query_keys = {key.lower() for key, _value in parse_qsl(urlsplit(url).query, keep_blank_values=True)}
+        query_keys = {key.lower() for key, _value in parse_qsl(parsed.query, keep_blank_values=True)}
     except ValueError:
         return False
     return bool(query_keys & _SENSITIVE_QUERY_KEYS)
+
+
+def _hostname_matches(host: str, hint: str) -> bool:
+    host = host.lower().removeprefix("www.")
+    hint = hint.lower().removeprefix("www.")
+    return host == hint or host.endswith(f".{hint}")
+
+
+def _has_public_technical_signal(text: str) -> tuple[int, list[str]]:
+    lower = text.lower()
+    score = 0
+    evidence: list[str] = []
+    for phrase in _TECHNICAL_SIGNAL_PHRASES:
+        if _has_token_phrase(lower, phrase):
+            score += 3
+            evidence.append(phrase)
+    for term in _TECHNICAL_SIGNAL_TERMS:
+        if _has_token_phrase(lower, term):
+            score += 1
+            evidence.append(term)
+    # URL/path tokens often use separators, so keep a bounded substring path
+    # for signals such as `graph-rag`, `llm-agent`, or `cuda`.
+    for term in ("rag", "llm", "agent", "benchmark", "research", "paper", "retrieval", "graph", "model"):
+        if term in lower.replace("-", " ").replace("_", " ") and term not in evidence:
+            score += 1
+            evidence.append(term)
+    return score, evidence[:5]
+
+
+def _contains_out_of_scope_hint(text: str) -> str:
+    lower = text.lower()
+    for hint in _OUT_OF_SCOPE_HINTS:
+        if hint in lower:
+            return hint
+    return ""
+
+
+def academic_technical_eligibility(item: Mapping[str, object]) -> EligibilityDecision:
+    """Classify whether an item belongs in academic-search/technical-report intake.
+
+    This mirrors the `academic-technical-filter` agent skill: use public URL,
+    title, article metadata, and public summaries only; never private mailbox
+    bodies or secret values.
+    """
+
+    url = sanitize_public_url(str(item.get("url") or ""))
+    title = _clean_text(str(item.get("article_title") or item.get("title") or ""))
+    public_text = " ".join(
+        _clean_text(str(item.get(key) or ""))
+        for key in (
+            "article_description",
+            "public_excerpt",
+            "summary",
+            "snippet",
+            "kind",
+            "primary_topic_display",
+        )
+    )
+    summary_lines = item.get("summary_lines") or item.get("summaryLines") or []
+    if isinstance(summary_lines, list):
+        public_text = " ".join([public_text, *(_clean_text(str(line)) for line in summary_lines)])
+    haystack = _clean_text(" ".join([url, title, public_text]))
+    lower_haystack = haystack.lower()
+    try:
+        parsed_url = urlsplit(url)
+        host = (parsed_url.hostname or "").lower()
+        path_parts = [part for part in parsed_url.path.split("/") if part]
+    except ValueError:
+        host = ""
+        path_parts = []
+
+    if not url:
+        return EligibilityDecision("reject", "out_of_scope", "missing_public_url")
+    if is_private_utility_url(url):
+        return EligibilityDecision("reject", "out_of_scope", "private_or_utility_url")
+
+    if any(_hostname_matches(host, hint) for hint in _ACADEMIC_HOST_HINTS):
+        return EligibilityDecision("eligible", "academic_search", "academic_host", (host,))
+
+    if _hostname_matches(host, "github.com") and len(path_parts) >= 2:
+        return EligibilityDecision("eligible", "technical_report", "open_source_repository", ("github.com",))
+
+    out_of_scope = _contains_out_of_scope_hint(lower_haystack)
+    score, evidence = _has_public_technical_signal(haystack)
+    if out_of_scope and score < 3:
+        return EligibilityDecision("reject", "out_of_scope", f"non_technical_hint:{out_of_scope}", tuple(evidence))
+
+    if any(_hostname_matches(host, hint) for hint in _TECHNICAL_REPORT_HOST_HINTS) and score >= 1:
+        return EligibilityDecision("eligible", "technical_report", "technical_host_with_signal", tuple(evidence))
+
+    if score >= 2:
+        return EligibilityDecision("eligible", "technical_report", "public_technical_signal", tuple(evidence))
+
+    return EligibilityDecision("reject", "out_of_scope", "insufficient_academic_or_technical_signal", tuple(evidence))
 
 
 def select_items(
@@ -499,19 +728,20 @@ def select_items(
                 continue
             if not include_all_urls and not is_research_url(url):
                 continue
+            candidate = {
+                "title": msg.subject or "(untitled newsletter item)",
+                "url": url,
+                "kind": classify_url(url),
+                "sender": msg.sender,
+                "received_at": msg.received_at,
+            }
+            if not academic_technical_eligibility(candidate).eligible:
+                continue
             key = (msg.subject, url)
             if key in seen:
                 continue
             seen.add(key)
-            items.append(
-                {
-                    "title": msg.subject or "(untitled newsletter item)",
-                    "url": url,
-                    "kind": classify_url(url),
-                    "sender": msg.sender,
-                    "received_at": msg.received_at,
-                }
-            )
+            items.append(candidate)
     return items
 
 

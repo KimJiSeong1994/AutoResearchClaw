@@ -729,6 +729,82 @@ def test_apps_script_relay_ingest_filters_notion_update_notifications(tmp_path: 
     assert items[0]["article_title"] == "RAG agent systems"
 
 
+def test_apps_script_relay_ingest_keeps_only_academic_or_technical_reports(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "How AI-Native Products Grow Differently",
+                        "url": "https://www.linkedin.com/comm/pulse/how-ai-native-products-grow-differently",
+                        "kind": "post",
+                        "sender": "Newsletters <newsletters-noreply@linkedin.com>",
+                        "articleTitle": "How AI-Native Products Grow Differently",
+                        "articleDescription": "A market growth and product positioning essay.",
+                    },
+                    {
+                        "title": "How to Climb the New Career Ladder in the AI Era",
+                        "url": "https://www.linkedin.com/comm/pulse/how-climb-new-career-ladder-ai-era",
+                        "kind": "post",
+                        "sender": "Newsletters <newsletters-noreply@linkedin.com>",
+                        "articleTitle": "How to Climb the New Career Ladder in the AI Era",
+                        "articleDescription": "Career advice for managers.",
+                    },
+                    {
+                        "title": "Ranking Engineer Agent (REA)",
+                        "url": "https://engineering.fb.com/2026/03/17/developer-tools/ranking-engineer-agent-rea/",
+                        "kind": "post",
+                        "sender": "Engineering at Meta <digest@example.com>",
+                        "articleTitle": "Ranking Engineer Agent (REA)",
+                        "articleDescription": "Meta describes an autonomous AI agent for machine learning experimentation.",
+                    },
+                    {
+                        "title": "GraphRAG benchmark",
+                        "url": "https://arxiv.org/abs/2605.00001",
+                        "kind": "paper:arxiv",
+                        "sender": "Paper Digest <digest@example.com>",
+                        "articleTitle": "GraphRAG benchmark",
+                        "articleDescription": "A retrieval benchmark for knowledge graph grounded agents.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _payload, items = apps_script_relay_ingest.load_relay_items(payload_path)
+
+    titles = [item["article_title"] for item in items]
+    assert titles == ["Ranking Engineer Agent (REA)", "GraphRAG benchmark"]
+
+
+def test_academic_technical_eligibility_uses_parsed_hosts_not_query_spoofing() -> None:
+    decision = newsletter_ingest.academic_technical_eligibility(
+            {
+                "title": "Generic newsletter",
+                "url": "https://example.com/post?next=arxiv.org",
+                "article_description": "General commentary.",
+            }
+        )
+
+    assert not decision.eligible
+    assert decision.reason == "insufficient_academic_or_technical_signal"
+
+
+def test_academic_technical_eligibility_keeps_privacy_security_evaluation_reports() -> None:
+    decision = newsletter_ingest.academic_technical_eligibility(
+        {
+            "title": "Privacy evaluation benchmark",
+            "url": "https://example.com/research/privacy-evaluation-benchmark",
+            "article_description": "A security privacy evaluation benchmark for LLM agents.",
+        }
+    )
+
+    assert decision.eligible
+    assert decision.bucket == "technical_report"
+
+
 def test_topic_taxonomy_parity_fixture_matches_apps_script_smoke_intent() -> None:
     """Lock Python behavior to the GAS README parity smoke checklist."""
     cases = [

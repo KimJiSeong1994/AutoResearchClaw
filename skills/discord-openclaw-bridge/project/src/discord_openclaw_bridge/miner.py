@@ -67,6 +67,94 @@ _TRACKING_QUERY_KEYS = {
 }
 _BLOCKED_HOSTS = {"localhost", "localhost.localdomain"}
 _BLOCKED_HOST_SUFFIXES = (".local", ".localhost")
+_ACADEMIC_TECH_HOST_HINTS = (
+    "aclanthology.org",
+    "ai.googleblog.com",
+    "anthropic.com",
+    "arxiv.org",
+    "deepmind.google",
+    "doi.org",
+    "engineering.fb.com",
+    "github.com",
+    "huggingface.co",
+    "icml.cc",
+    "neurips.cc",
+    "openai.com",
+    "openreview.net",
+    "paperswithcode.com",
+    "proceedings.mlr.press",
+    "pytorch.org",
+    "semanticscholar.org",
+    "tensorflow.org",
+)
+_ACADEMIC_TECH_TERMS = (
+    "academic",
+    "agent",
+    "algorithm",
+    "architecture",
+    "arxiv",
+    "benchmark",
+    "cuda",
+    "dataset",
+    "developer",
+    "embedding",
+    "evaluation",
+    "framework",
+    "graph",
+    "gpu",
+    "inference",
+    "knowledge",
+    "latency",
+    "library",
+    "llm",
+    "machine learning",
+    "mlops",
+    "model",
+    "multimodal",
+    "paper",
+    "rag",
+    "reasoning",
+    "report",
+    "research",
+    "retrieval",
+    "security",
+    "serving",
+    "vector",
+    "vision",
+    "workflow",
+    "technical",
+    "검색",
+    "논문",
+    "리서치",
+    "모델",
+    "벤치마크",
+    "에이전트",
+    "지식그래프",
+)
+_OUT_OF_SCOPE_TERMS = (
+    "analytics",
+    "career ladder",
+    "feed/update",
+    "funding",
+    "hiring",
+    "impressions",
+    "job alert",
+    "job recommendation",
+    "jobs/view",
+    "market",
+    "notifications",
+    "partnership",
+    "preferences",
+    "pricing",
+    "profile views",
+    "unsubscribe",
+    "weekly stats",
+    "구인",
+    "노출수",
+    "지원하기",
+    "채용",
+    "프로필 조회",
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +173,7 @@ class MinerRecordResult:
     title: str
     intake_path: Path
     review_queue_path: Path
+    reason: str = ""
 
     @property
     def accepted(self) -> bool:
@@ -93,6 +182,10 @@ class MinerRecordResult:
     @property
     def duplicate(self) -> bool:
         return self.status == "duplicate"
+
+    @property
+    def rejected(self) -> bool:
+        return self.status == "rejected"
 
 
 def clean_text(value: object, *, limit: int = 500) -> str:
@@ -145,6 +238,29 @@ def extract_urls(text: object) -> list[str]:
     return urls
 
 
+def _looks_academic_or_technical(*, url: str, title: str = "", note: str = "") -> tuple[bool, str]:
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower().removeprefix("www.")
+        path_parts = [part for part in parsed.path.split("/") if part]
+    except ValueError:
+        host = ""
+        path_parts = []
+        parsed = urlsplit("")
+    public_url_text = " ".join([host, parsed.path]).lower().replace("-", " ").replace("_", " ")
+    text = " ".join([public_url_text, title, note]).lower().replace("-", " ").replace("_", " ")
+    if any(term in text for term in _OUT_OF_SCOPE_TERMS):
+        return False, "학술검색/기술리포트 범위 밖 링크입니다."
+    if (host == "github.com" or host.endswith(".github.com")) and len(path_parts) >= 2:
+        return True, "open_source_repository"
+    if any(host == hint or host.endswith(f".{hint}") for hint in _ACADEMIC_TECH_HOST_HINTS):
+        return True, "academic_or_technical_host"
+    signal_count = sum(1 for term in _ACADEMIC_TECH_TERMS if term in text)
+    if signal_count >= 1:
+        return True, "academic_or_technical_signal"
+    return False, "학술검색/기술리포트 관련 공개 단서가 부족합니다."
+
+
 def record_miner_link(
     *,
     url: str,
@@ -161,6 +277,17 @@ def record_miner_link(
 
     intake_id = _intake_id(safe_url)
     safe_title = clean_text(title, limit=180) or _fallback_title(safe_url)
+    eligible, reason = _looks_academic_or_technical(url=safe_url, title=safe_title, note=clean_text(note, limit=500))
+    if not eligible:
+        return MinerRecordResult(
+            status="rejected",
+            intake_id=intake_id,
+            url=safe_url,
+            title=safe_title,
+            intake_path=intake_path,
+            review_queue_path=review_queue_path,
+            reason=reason,
+        )
     record = _build_record(
         intake_id=intake_id,
         url=safe_url,
@@ -188,6 +315,7 @@ def record_miner_link(
         title=safe_title,
         intake_path=intake_path,
         review_queue_path=review_queue_path,
+        reason=reason,
     )
 
 
@@ -214,11 +342,18 @@ def record_message_links(
 def render_ack(results: list[MinerRecordResult]) -> str:
     accepted = sum(1 for result in results if result.accepted)
     duplicates = sum(1 for result in results if result.duplicate)
+    rejected = sum(1 for result in results if result.rejected)
     if not results:
         return "집현전-광부가 수집할 http/https 링크를 찾지 못했습니다."
+    if not accepted and not duplicates:
+        reason = next((result.reason for result in results if result.rejected and result.reason), "")
+        suffix = f" 사유: {reason}" if reason else ""
+        return f"⛏️ 집현전-광부: 학술검색/기술리포트 관련 링크가 없어 {rejected}개를 수집 제외했습니다.{suffix}"
     parts = [f"⛏️ 집현전-광부: 링크 {accepted}개를 집현전-클로 검토 큐에 등록했습니다."]
     if duplicates:
         parts.append(f"중복 {duplicates}개는 기존 검토 큐를 유지했습니다.")
+    if rejected:
+        parts.append(f"학술검색/기술리포트 범위 밖 {rejected}개는 수집 제외했습니다.")
     parts.append("검토 전에는 뉴스레터 아카이브/뉴스레터에 자동 반영하지 않습니다.")
     return " ".join(parts)
 

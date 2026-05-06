@@ -205,6 +205,10 @@ def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
     return item
 
 
+def is_academic_or_technical_item(item: dict[str, object]) -> bool:
+    return newsletter_ingest.academic_technical_eligibility(item).eligible
+
+
 def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[str, object]]]:
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     if payload.get("error"):
@@ -230,6 +234,8 @@ def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[s
         if newsletter_ingest.is_private_utility_url(url) or _is_tracking_url(url):
             continue
         normalized_item = normalize_relay_item(item)
+        if not is_academic_or_technical_item(normalized_item):
+            continue
         key = (
             str(normalized_item.get("article_title") or normalized_item.get("title") or "").lower(),
             str(normalized_item.get("url") or "").lower(),
@@ -300,6 +306,8 @@ def normalize_manual_link_item(raw: dict[str, object]) -> dict[str, object] | No
             "topic_reasons": list(classification.reasons),
         }
     )
+    if not is_academic_or_technical_item(item):
+        return None
     return item
 
 

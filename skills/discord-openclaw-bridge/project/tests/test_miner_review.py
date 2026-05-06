@@ -45,9 +45,9 @@ def test_record_miner_link_repairs_missing_review_queue_row(tmp_path: Path) -> N
     intake_path = tmp_path / "links.jsonl"
     review_path = tmp_path / "queue.jsonl"
 
-    first = record_miner_link(url="https://example.com/a", intake_path=intake_path, review_queue_path=review_path)
+    first = record_miner_link(url="https://example.com/rag-a", intake_path=intake_path, review_queue_path=review_path)
     review_path.unlink()
-    repaired = record_miner_link(url="https://example.com/a", intake_path=intake_path, review_queue_path=review_path)
+    repaired = record_miner_link(url="https://example.com/rag-a", intake_path=intake_path, review_queue_path=review_path)
 
     assert first.accepted
     assert repaired.accepted
@@ -87,9 +87,9 @@ def test_record_decision_rejects_unknown_id_and_invalid_decision(tmp_path: Path)
 
 def test_approved_manual_link_export_excludes_pending_rejected_and_held(tmp_path: Path) -> None:
     intake_path, queue_path, decisions_path, approved_id = _queue(tmp_path)
-    rejected = record_miner_link(url="https://example.com/rejected", intake_path=intake_path, review_queue_path=queue_path)
-    held = record_miner_link(url="https://example.com/held", intake_path=intake_path, review_queue_path=queue_path)
-    pending = record_miner_link(url="https://example.com/pending", intake_path=intake_path, review_queue_path=queue_path)
+    rejected = record_miner_link(url="https://example.com/rag-rejected", intake_path=intake_path, review_queue_path=queue_path)
+    held = record_miner_link(url="https://example.com/rag-held", intake_path=intake_path, review_queue_path=queue_path)
+    pending = record_miner_link(url="https://example.com/rag-pending", intake_path=intake_path, review_queue_path=queue_path)
     record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id=approved_id, decision="approve")
     record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id=rejected.intake_id, decision="reject")
     record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id=held.intake_id, decision="hold")
@@ -222,7 +222,7 @@ def test_export_enrichment_failure_keeps_approved_export(tmp_path: Path) -> None
     decisions_path = tmp_path / "decisions.jsonl"
     export_path = tmp_path / "approved.jsonl"
     result = record_miner_link(
-        url="https://example.com/fallback-title",
+        url="https://example.com/rag-fallback-title",
         intake_path=intake_path,
         review_queue_path=queue_path,
     )
@@ -240,5 +240,5 @@ def test_export_enrichment_failure_keeps_approved_export(tmp_path: Path) -> None
     )
 
     assert len(rows) == 1
-    assert rows[0]["url"] == "https://example.com/fallback-title"
+    assert rows[0]["url"] == "https://example.com/rag-fallback-title"
     assert "enrichment" not in rows[0]

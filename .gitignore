@@ -10,6 +10,10 @@
 # --- personal / nested workspaces ---
 .openclaw-local-paperedit/
 .codex/
+!.codex/
+!.codex/skills/
+!.codex/skills/academic-technical-filter/
+!.codex/skills/academic-technical-filter/**
 .omx/
 .claude/settings.local.json
 .claude/.session*
