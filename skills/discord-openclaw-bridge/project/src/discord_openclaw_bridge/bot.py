@@ -9,7 +9,6 @@ from discord import app_commands
 
 from .briefing import render_briefing
 from .config import BridgeConfig, ConfigError, load_config
-from .miner import DiscordLinkMetadata, record_message_links, record_miner_link, render_ack
 from .openclaw import OpenClawClient
 
 LOG = logging.getLogger("discord_openclaw_bridge")
@@ -24,7 +23,7 @@ def _trim(text: str, limit: int) -> str:
 class OpenClawDiscordBot(discord.Client):
     def __init__(self, config: BridgeConfig):
         intents = discord.Intents.default()
-        intents.message_content = config.enable_mention_responses or config.miner_enable_channel_collection
+        intents.message_content = config.enable_mention_responses
         super().__init__(intents=intents)
         self.config = config
         self.tree = app_commands.CommandTree(self)
@@ -55,31 +54,8 @@ class OpenClawDiscordBot(discord.Client):
             return
         if message.guild.id != self.config.guild_id:
             return
-
-        if self.config.miner_enable_channel_collection and message.channel.id == self.config.miner_channel_id:
-            try:
-                results = record_message_links(
-                    message_text=message.content,
-                    intake_path=self.config.miner_intake_path,
-                    review_queue_path=self.config.miner_review_queue_path,
-                    discord=DiscordLinkMetadata(
-                        guild_id=message.guild.id,
-                        channel_id=message.channel.id,
-                        message_id=message.id,
-                        user_id=message.author.id,
-                    ),
-                )
-            except Exception:
-                LOG.exception(
-                    "miner channel collection failed guild=%s channel=%s user=%s",
-                    message.guild.id,
-                    message.channel.id,
-                    message.author.id,
-                )
-                await message.reply("집현전-광부 링크 수집에 실패했습니다. 운영 로그를 확인해 주세요.", mention_author=False)
-                return
-            if results:
-                await message.reply(render_ack(results), mention_author=False)
+        if message.channel.id == self.config.miner_channel_id:
+            return
 
         if not self.config.enable_mention_responses:
             return
@@ -108,15 +84,6 @@ class OpenClawDiscordBot(discord.Client):
             and interaction.channel is not None
             and interaction.channel.id == self.config.allowed_channel_id
         )
-
-    def miner_channel_allowed(self, interaction: discord.Interaction) -> bool:
-        return bool(
-            interaction.guild is not None
-            and interaction.guild.id == self.config.guild_id
-            and interaction.channel is not None
-            and interaction.channel.id == self.config.miner_channel_id
-        )
-
 
 async def _openclaw_command(interaction: discord.Interaction, prompt: str) -> None:
     bot = interaction.client
@@ -181,46 +148,11 @@ async def _status_command(interaction: discord.Interaction) -> None:
     await interaction.followup.send(f"OpenClaw gateway health: {status}")
 
 
-async def _mine_command(
-    interaction: discord.Interaction,
-    url: str,
-    title: str | None = None,
-    note: str | None = None,
-) -> None:
-    bot = interaction.client
-    assert isinstance(bot, OpenClawDiscordBot)
-    if not bot.miner_channel_allowed(interaction):
-        await interaction.response.send_message("집현전-광부 링크 수집은 지정된 채널에서만 사용할 수 있습니다.", ephemeral=True)
-        return
-    try:
-        result = record_miner_link(
-            url=url,
-            title=title,
-            note=note,
-            intake_path=bot.config.miner_intake_path,
-            review_queue_path=bot.config.miner_review_queue_path,
-            discord=DiscordLinkMetadata(
-                guild_id=interaction.guild_id,
-                channel_id=interaction.channel_id,
-                user_id=interaction.user.id if interaction.user else None,
-            ),
-        )
-    except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    except Exception:
-        LOG.exception("miner slash request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
-        await interaction.response.send_message("집현전-광부 링크 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
-        return
-    await interaction.response.send_message(render_ack([result]), ephemeral=True)
-
-
 def build_bot(config: BridgeConfig) -> OpenClawDiscordBot:
     bot = OpenClawDiscordBot(config)
     bot.tree.command(name="openclaw", description="Ask OpenClaw from the allowlisted channel")(_openclaw_command)
     bot.tree.command(name="jiphyeonjeon_briefing", description="Post the latest Jiphyeonjeon-Claw AI briefing")(_briefing_command)
     bot.tree.command(name="openclaw_status", description="Check the loopback OpenClaw gateway")(_status_command)
-    bot.tree.command(name="jiphyeonjeon_mine", description="Collect a link for Jiphyeonjeon-Claw review")(_mine_command)
     return bot
 
 

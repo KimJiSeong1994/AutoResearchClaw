@@ -13,10 +13,13 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 - `/openclaw prompt:<text>` — ask OpenClaw from the allowlisted channel
 - `/openclaw_status` — lightweight OpenClaw health check
 - `/jiphyeonjeon_briefing` — post the latest Jiphyeonjeon-Claw AI briefing from `DISCORD_BRIEFING_SOURCE`
-- `/jiphyeonjeon_mine url:<link> [title] [note]` — register a Discord-requested link for 집현전-광부 intake and 집현전-클로 content review
 - standalone `discord-jiphyeonjeon-miner.service` for running 집현전-광부 as an individual Discord bot with `DISCORD_MINER_BOT_TOKEN`
 - one-shot newsletter/card-news publishers from the installed project scripts
 - mention replies, only if `DISCORD_ENABLE_MENTION_RESPONSES=1`
+
+The main OpenClaw bridge intentionally does not collect links or register
+`/jiphyeonjeon_mine`; the dedicated Miner bot is the only application that
+responds in `DISCORD_MINER_CHANNEL_ID`.
 
 ## 집현전-광부 link-intake path
 
@@ -24,8 +27,8 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 
 Flow:
 
-1. A user runs `/jiphyeonjeon_mine` in `DISCORD_MINER_CHANNEL_ID`, or a dedicated intake channel is enabled with `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION=1`.
-2. The bridge extracts and sanitizes HTTP(S) links, stripping secret/tracking query keys such as tokens and `utm_*`.
+1. A user runs the Miner app's `/jiphyeonjeon_mine` in `DISCORD_MINER_CHANNEL_ID`, or the dedicated intake channel is enabled with `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION=1`.
+2. The Miner bot extracts and sanitizes HTTP(S) links, stripping secret/tracking query keys such as tokens and `utm_*`.
 3. Pending records are appended to both:
    - `JIPHYEONJEON_MINER_INTAKE_PATH`
    - `JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH`
@@ -64,9 +67,10 @@ Default paths:
 Operational controls:
 
 - `DISCORD_MINER_CHANNEL_ID` defaults to `DISCORD_ALLOWED_CHANNEL_ID` when unset.
-- `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires Discord `MESSAGE_CONTENT` intent.
+- `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires the Miner bot's Discord `MESSAGE_CONTENT` intent.
 - `JIPHYEONJEON_MINER_DECISIONS_PATH` and `JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH` control the review audit log and approved-only `manual_links` export path.
 - For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
+- The main OpenClaw bot ignores normal messages in `DISCORD_MINER_CHANNEL_ID` and no longer registers the Miner intake command. If you also need to hide unrelated OpenClaw slash commands from the Miner channel UI, set that in Discord's integration command permissions; Discord rejects that endpoint for bot tokens.
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue; use an approved-only JSONL file after 집현전-클로 review.
 
