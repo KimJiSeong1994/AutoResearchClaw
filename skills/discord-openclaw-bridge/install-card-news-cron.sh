@@ -9,6 +9,7 @@
 #   bash skills/discord-openclaw-bridge/install-card-news-cron.sh
 #   CARD_NEWS_CRON_SCHEDULE="0 23 * * *" bash skills/discord-openclaw-bridge/install-card-news-cron.sh
 #   CARD_NEWS_DELAY_SECONDS=0 bash skills/discord-openclaw-bridge/install-card-news-cron.sh
+#   CARD_NEWS_CHANNEL_ID=1501211608104566854 bash skills/discord-openclaw-bridge/install-card-news-cron.sh
 set -euo pipefail
 
 KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
@@ -21,6 +22,7 @@ CARD_NEWS_CRON_SCHEDULE="${CARD_NEWS_CRON_SCHEDULE:-0 23 * * *}"
 CARD_NEWS_DELAY_SECONDS="${CARD_NEWS_DELAY_SECONDS:-900}"
 CARD_NEWS_MAX_CARDS="${CARD_NEWS_MAX_CARDS:-8}"
 CARD_NEWS_HERO_IMAGE_PATH="${CARD_NEWS_HERO_IMAGE_PATH:-assets/cardnews-hero-2026-05-05-ai.png}"
+CARD_NEWS_CHANNEL_ID="${CARD_NEWS_CHANNEL_ID:-1501211608104566854}"
 
 ssh -i "$KEY_FILE" "$REMOTE_HOST" \
   "REMOTE_WORKSPACE='$REMOTE_WORKSPACE' \
@@ -28,6 +30,7 @@ ssh -i "$KEY_FILE" "$REMOTE_HOST" \
    CARD_NEWS_DELAY_SECONDS='$CARD_NEWS_DELAY_SECONDS' \
    CARD_NEWS_MAX_CARDS='$CARD_NEWS_MAX_CARDS' \
    CARD_NEWS_HERO_IMAGE_PATH='$CARD_NEWS_HERO_IMAGE_PATH' \
+   CARD_NEWS_CHANNEL_ID='$CARD_NEWS_CHANNEL_ID' \
    bash -s" <<'REMOTE'
 set -euo pipefail
 WORKSPACE="${REMOTE_WORKSPACE/#\~/$HOME}"
@@ -54,6 +57,7 @@ if [ "\$DELAY" -gt 0 ]; then
 fi
 
 cd "\$PROJECT"
+export DISCORD_CARD_NEWS_CHANNEL_ID="\${DISCORD_CARD_NEWS_CHANNEL_ID:-$CARD_NEWS_CHANNEL_ID}"
 export DISCORD_CARD_NEWS_MAX_CARDS="\${DISCORD_CARD_NEWS_MAX_CARDS:-$CARD_NEWS_MAX_CARDS}"
 export DISCORD_CARD_NEWS_HERO_IMAGE_PATH="\${DISCORD_CARD_NEWS_HERO_IMAGE_PATH:-$CARD_NEWS_HERO_IMAGE_PATH}"
 
@@ -63,6 +67,7 @@ fi
 
 if [ "\${CARD_NEWS_DRY_RUN:-0}" = "1" ]; then
   echo "dry-run: would run .venv/bin/discord-openclaw-post-card-news"
+  echo "dry-run: DISCORD_CARD_NEWS_CHANNEL_ID=\$DISCORD_CARD_NEWS_CHANNEL_ID"
   echo "dry-run: DISCORD_CARD_NEWS_MAX_CARDS=\$DISCORD_CARD_NEWS_MAX_CARDS"
   echo "dry-run: DISCORD_CARD_NEWS_HERO_IMAGE_PATH=\$DISCORD_CARD_NEWS_HERO_IMAGE_PATH"
   printf "[%s] card-news discord dry-run complete\\n" "\$(date -Is)"
