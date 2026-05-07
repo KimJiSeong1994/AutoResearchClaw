@@ -6,6 +6,8 @@ import sys
 from email.message import EmailMessage
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "newsletter_ingest.py"
 spec = importlib.util.spec_from_file_location("newsletter_ingest", SCRIPT)
@@ -542,7 +544,7 @@ def test_apps_script_relay_ingest_normalizes_public_payload_and_omits_private_co
     assert "- CTA/저장 포인트:" in briefing
 
 
-def test_apps_script_relay_ingest_merges_approved_miner_manual_links(tmp_path: Path) -> None:
+def test_apps_script_relay_ingest_excludes_approved_miner_manual_links(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     payload_path = tmp_path / "relay.json"
     payload_path.write_text(
         json.dumps(
@@ -557,6 +559,15 @@ def test_apps_script_relay_ingest_merges_approved_miner_manual_links(tmp_path: P
                         "receivedAt": "2026-05-05 08:00",
                         "articleTitle": "RAG relay item",
                         "articleDescription": "Public relay item about retrieval agents.",
+                    },
+                    {
+                        "title": "Ranking Engineer Agent (REA): The Autonomous AI Agent",
+                        "url": "https://engineering.fb.com/2026/03/17/developer-tools/ranking-engineer-agent-rea/",
+                        "kind": "post",
+                        "sender": "Digest <digest@example.com>",
+                        "receivedAt": "2026-05-05 08:00",
+                        "articleTitle": "Ranking Engineer Agent (REA): The Autonomous AI Agent",
+                        "articleDescription": "Meta describes an autonomous AI agent for machine learning experimentation.",
                     }
                 ],
             }
@@ -609,25 +620,24 @@ def test_apps_script_relay_ingest_merges_approved_miner_manual_links(tmp_path: P
             str(tmp_path / "briefing.md"),
             "--manual-links-path",
             str(manual_path),
+            "--miner-exclusion-path",
+            str(manual_path),
         ]
     )
 
     assert rc == 0
     raw = json.loads((tmp_path / "wiki" / "raw" / "newsletters" / "2026-05-05" / "items.json").read_text())
     titles = [item["article_title"] for item in raw["items"]]
-    assert titles == [
-        "Ranking Engineer Agent (REA): The Autonomous AI Agent",
-        "RAG relay item",
-    ]
-    manual_item = raw["items"][0]
-    assert manual_item["kind"] == "manual-link"
-    assert manual_item["sender"] == "집현전-광부 승인 큐"
-    assert manual_item["primary_topic_display"] == "LLM/에이전트"
+    assert titles == ["RAG relay item"]
     dumped = json.dumps(raw, ensure_ascii=False)
+    assert "Ranking Engineer Agent" not in dumped
     assert "Pending broad source" not in dumped
     briefing = (tmp_path / "briefing.md").read_text(encoding="utf-8")
-    assert "집현전-광부 승인 링크 1건" in briefing
-    assert "Ranking Engineer Agent" in briefing
+    assert "집현전-광부 승인 링크" not in briefing
+    assert "Ranking Engineer Agent" not in briefing
+    captured = capsys.readouterr()
+    assert f"manual_links_excluded: 1 from {manual_path}" in captured.out
+    assert "relay_items_excluded: 1" in captured.out
 
 
 def test_apps_script_relay_ingest_filters_linkedin_job_posts(tmp_path: Path) -> None:

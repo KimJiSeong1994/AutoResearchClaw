@@ -18,6 +18,7 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _create_forum_card_news_thread,
     _is_card_news_bot_message,
     _purge_previous_card_news_messages,
+    _purge_previous_card_news_threads,
     _sanitize_public_url,
     _split_discord_content,
     enrich_public_metadata,
@@ -756,6 +757,47 @@ def test_card_news_purge_deletes_only_prior_card_news_messages() -> None:
 
     assert purged == 1
     assert deleted == ["1"]
+
+
+def test_card_news_thread_purge_archives_when_delete_is_forbidden() -> None:
+    import httpx
+
+    patched: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "threads": [
+                        {
+                            "id": "1501834279691489420",
+                            "name": "2026-05-07 기술 브리핑 카드뉴스",
+                            "parent_id": "1501211608104566854",
+                        }
+                    ]
+                },
+                request=request,
+            )
+        if request.method == "DELETE":
+            return httpx.Response(403, json={"code": 50013, "message": "Missing Permissions"}, request=request)
+        if request.method == "PATCH":
+            patched.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={"id": "1501834279691489420"}, request=request)
+        raise AssertionError(json.dumps({"method": request.method}))
+
+    async def scenario() -> int:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await _purge_previous_card_news_threads(
+                client,
+                "https://discord.com/api/v10/guilds/1/threads/active",
+                headers={"Authorization": "Bot test"},
+            )
+
+    purged = asyncio.run(scenario())
+
+    assert purged == 1
+    assert patched == [{"archived": True, "locked": False}]
 
 
 def test_forum_thread_creation_uses_thread_starter_with_suppressed_embeds() -> None:

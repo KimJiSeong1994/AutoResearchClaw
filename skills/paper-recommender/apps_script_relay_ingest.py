@@ -331,24 +331,42 @@ def load_manual_link_items(path: Path) -> list[dict[str, object]]:
     return out
 
 
-def merge_manual_link_items(
-    relay_items: list[dict[str, object]],
-    manual_items: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    merged: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
-    # Claw-approved Miner links are explicit operator selections, so keep them
-    # ahead of bulk relay items; otherwise topic/card limits can hide them.
-    for item in [*manual_items, *relay_items]:
-        key = (
-            str(item.get("article_title") or item.get("title") or "").lower(),
-            str(item.get("url") or "").lower(),
-        )
-        if key in seen:
+def load_miner_exclusion_urls(paths: list[Path]) -> set[str]:
+    urls: set[str] = set()
+    for path in paths:
+        if not path.exists():
             continue
-        seen.add(key)
-        merged.append(item)
-    return merged
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_no}: invalid Miner exclusion JSONL: {exc}") from exc
+            if not isinstance(raw, dict):
+                continue
+            url = newsletter_ingest.sanitize_public_url(_clean(raw.get("url")))
+            if url:
+                urls.add(url.lower())
+    return urls
+
+
+def exclude_miner_collected_items(
+    items: list[dict[str, object]],
+    excluded_urls: set[str],
+) -> tuple[list[dict[str, object]], int]:
+    if not excluded_urls:
+        return items, 0
+    kept: list[dict[str, object]] = []
+    removed = 0
+    for item in items:
+        url = newsletter_ingest.sanitize_public_url(_clean(item.get("url"))).lower()
+        if url and url in excluded_urls:
+            removed += 1
+            continue
+        kept.append(item)
+    return kept, removed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -361,7 +379,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--manual-links-path",
         default="",
-        help="Optional approved 집현전-광부 manual_links JSONL to merge after Claw review",
+        help="Optional approved 집현전-광부 manual_links JSONL; counted/excluded but never merged into newsletter archive/card-news",
+    )
+    parser.add_argument(
+        "--miner-exclusion-path",
+        action="append",
+        default=[],
+        help="Optional 집현전-광부 intake/review/approved JSONL whose URLs must be excluded from newsletter archive/card-news",
     )
     args = parser.parse_args(argv)
 
@@ -369,10 +393,18 @@ def main(argv: list[str] | None = None) -> int:
     wiki_root = Path(args.wiki_root).expanduser()
     briefing_path = Path(args.briefing_path).expanduser()
     manual_links_path = Path(args.manual_links_path).expanduser() if args.manual_links_path else None
+    miner_exclusion_paths = [Path(path).expanduser() for path in args.miner_exclusion_path]
+    if manual_links_path and manual_links_path not in miner_exclusion_paths:
+        miner_exclusion_paths.append(manual_links_path)
     try:
         payload, items = load_relay_items(payload_path)
-        manual_items = load_manual_link_items(manual_links_path) if manual_links_path else []
-        items = merge_manual_link_items(items, manual_items)
+        # Miner-collected links are review/audit records. Once a link has
+        # entered the Miner path, do not inject it back into the newsletter raw
+        # archive or card-news source; otherwise the same operator-submitted item
+        # is duplicated across collection and newsletter surfaces.
+        excluded_manual_items = load_manual_link_items(manual_links_path) if manual_links_path else []
+        excluded_urls = load_miner_exclusion_urls(miner_exclusion_paths)
+        items, excluded_relay_items = exclude_miner_collected_items(items, excluded_urls)
         raw_path, page_path = newsletter_ingest.publish_items(
             wiki_root=wiki_root,
             run_date=args.date,
@@ -381,8 +413,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         briefing_path.parent.mkdir(parents=True, exist_ok=True)
         source_name = f"Apps Script relay `{payload.get('query') or 'GmailApp search'}`"
-        if manual_items:
-            source_name += f" + 집현전-광부 승인 링크 {len(manual_items)}건"
         newsletter_ingest._atomic_write_text(  # noqa: SLF001 - shared atomic writer
             briefing_path,
             newsletter_ingest.render_topic_briefing(
@@ -399,7 +429,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {page_path}")
     print(f"wrote {briefing_path}")
     if manual_links_path:
-        print(f"manual_links: {len(manual_items)} from {manual_links_path}")
+        print(f"manual_links_excluded: {len(excluded_manual_items)} from {manual_links_path}")
+    if miner_exclusion_paths:
+        print(f"miner_url_exclusions: {len(excluded_urls)} urls; relay_items_excluded: {excluded_relay_items}")
     print(f"items: {len(items)}")
     return 0
 

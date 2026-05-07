@@ -34,7 +34,7 @@ Flow:
    - `JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH`
 4. Each record is marked `status=pending_claw_review`, `agent=jiphyeonjeon-miner`, and `reviewer=jiphyeonjeon-claw`.
 5. 집현전-클로 records an append-only decision in `link-review-decisions.jsonl` with `approve`, `reject`, or `hold`.
-6. Only the approved-only export `approved-manual-links.jsonl` may be used as a paper-recommender `manual_links` input; pending queue files are never newsletter inputs.
+6. The approved-only export `approved-manual-links.jsonl` remains an audit/reuse artifact, but Miner-collected links are not injected into the newsletter raw archive or card-news source; pending queue files are never newsletter inputs.
 
 Deep build plan for the review workflow:
 
@@ -72,7 +72,7 @@ Operational controls:
 - For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
 - The main OpenClaw bot ignores normal messages in `DISCORD_MINER_CHANNEL_ID` and no longer registers the Miner intake command. If you also need to hide unrelated OpenClaw slash commands from the Miner channel UI, set that in Discord's integration command permissions; Discord rejects that endpoint for bot tokens.
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
-- Do not point the paper-recommender `manual_links` source at the pending intake/review queue; use an approved-only JSONL file after 집현전-클로 review.
+- Do not point the paper-recommender `manual_links` source at the pending intake/review queue. Newsletter archive/card-news jobs count approved Miner links for exclusion evidence but do not merge them into the public newsletter surfaces.
 
 ## Setup on EC2
 

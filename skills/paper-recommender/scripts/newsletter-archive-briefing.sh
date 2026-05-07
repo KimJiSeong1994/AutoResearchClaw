@@ -19,6 +19,8 @@ NEWSLETTER_SENDER_ALLOWLIST="${NEWSLETTER_SENDER_ALLOWLIST:-}"
 NEWSLETTER_MAX_MESSAGES="${NEWSLETTER_MAX_MESSAGES:-500}"
 NEWSLETTER_MAX_SOURCE_BYTES="${NEWSLETTER_MAX_SOURCE_BYTES:-52428800}"
 NEWSLETTER_DATE="${NEWSLETTER_DATE:-$(TZ=Asia/Seoul date +%F)}"
+JIPHYEONJEON_MINER_INTAKE_PATH="${JIPHYEONJEON_MINER_INTAKE_PATH:-$HOME/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl}"
+JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH:-$HOME/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl}"
 JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-$HOME/.openclaw/workspace/manual_links/approved-manual-links.jsonl}"
 
 mkdir -p "$(dirname "$NEWSLETTER_REPORT_PATH")"
@@ -43,6 +45,15 @@ if [[ "$NEWSLETTER_SOURCE_MODE" == "apps_script_pull" ]]; then
     --date "$NEWSLETTER_DATE"
     --briefing-path "$NEWSLETTER_REPORT_PATH"
   )
+  for miner_exclusion_path in \
+    "$JIPHYEONJEON_MINER_INTAKE_PATH" \
+    "$JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH" \
+    "$JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH"
+  do
+    if [[ -f "$miner_exclusion_path" ]]; then
+      args+=(--miner-exclusion-path "$miner_exclusion_path")
+    fi
+  done
   if [[ -f "$JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH" ]]; then
     args+=(--manual-links-path "$JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH")
   fi

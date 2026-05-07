@@ -1569,7 +1569,18 @@ async def _purge_previous_card_news_threads(
                 headers=headers,
             )
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in {403, 404}:
+            if exc.response.status_code == 403:
+                patch = await client.patch(
+                    f"https://discord.com/api/v10/channels/{thread_id}",
+                    headers=headers,
+                    json={"archived": True, "locked": False},
+                )
+                if patch.status_code == 404:
+                    continue
+                patch.raise_for_status()
+                purged += 1
+                continue
+            if exc.response.status_code != 404:
                 raise
             continue
         else:
