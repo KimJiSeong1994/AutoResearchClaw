@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import ipaddress
 import json
 import os
@@ -10,7 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 try:
     import fcntl
@@ -73,6 +75,7 @@ _ACADEMIC_TECH_HOST_HINTS = (
     "anthropic.com",
     "arxiv.org",
     "deepmind.google",
+    "deeplearning.ai",
     "doi.org",
     "engineering.fb.com",
     "github.com",
@@ -86,6 +89,7 @@ _ACADEMIC_TECH_HOST_HINTS = (
     "pytorch.org",
     "semanticscholar.org",
     "tensorflow.org",
+    "alphaxiv.org",
 )
 _ACADEMIC_TECH_TERMS = (
     "academic",
@@ -158,6 +162,9 @@ _OUT_OF_SCOPE_TERMS = (
 _OUT_OF_SCOPE_HOST_HINTS = (
     "slack.com",
 )
+_COLLECTION_EXPANSION_MAX_LINKS = int(os.environ.get("JIPHYEONJEON_MINER_COLLECTION_EXPANSION_MAX_LINKS", "10"))
+_COLLECTION_FETCH_TIMEOUT_SEC = float(os.environ.get("JIPHYEONJEON_MINER_COLLECTION_FETCH_TIMEOUT_SEC", "12"))
+_COLLECTION_USER_AGENT = "jiphyeonjeon-miner-link-expander/0.1"
 
 
 @dataclass(frozen=True)
@@ -239,6 +246,90 @@ def extract_urls(text: object) -> list[str]:
         seen.add(url)
         urls.append(url)
     return urls
+
+
+def _fetch_public_html(url: str) -> str:
+    request = Request(url, headers={"User-Agent": _COLLECTION_USER_AGENT, "Accept": "text/html"})
+    with urlopen(request, timeout=_COLLECTION_FETCH_TIMEOUT_SEC) as response:
+        content_type = response.headers.get("Content-Type", "")
+        if content_type and "html" not in content_type.lower():
+            return ""
+        return response.read(800_000).decode("utf-8", "replace")
+
+
+def _html_links(base_url: str, html_text: str) -> list[str]:
+    links: list[str] = []
+    seen: set[str] = set()
+    for raw_href in re.findall(r"""href=["']([^"']+)["']""", html_text, flags=re.IGNORECASE):
+        href = html.unescape(raw_href).strip()
+        if not href or href.startswith(("#", "mailto:", "javascript:")):
+            continue
+        url = sanitize_url(urljoin(base_url, href))
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        links.append(url)
+    return links
+
+
+def _is_alphaxiv_collection(url: str) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    return host == "alphaxiv.org" and parsed.path.rstrip("/") in {"", "/"}
+
+
+def _is_the_batch_collection(url: str) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    return host == "deeplearning.ai" and parsed.path.rstrip("/") == "/the-batch"
+
+
+def expand_collection_links(url: str) -> list[str]:
+    """Expand supported public index pages into bounded post/paper links."""
+
+    safe_url = sanitize_url(url)
+    if not safe_url:
+        return []
+    if _COLLECTION_EXPANSION_MAX_LINKS < 1:
+        return []
+
+    if _is_the_batch_collection(safe_url):
+        safe_url = urlunsplit(("https", "www.deeplearning.ai", "/the-batch", "", ""))
+
+    if not (_is_alphaxiv_collection(safe_url) or _is_the_batch_collection(safe_url)):
+        return []
+
+    try:
+        html_text = _fetch_public_html(safe_url)
+    except Exception:
+        return []
+
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for link in _html_links(safe_url, html_text):
+        parsed = urlsplit(link)
+        host = (parsed.hostname or "").lower().removeprefix("www.")
+        path = parsed.path.rstrip("/")
+        keep = False
+        if _is_alphaxiv_collection(safe_url):
+            keep = host == "alphaxiv.org" and path.startswith("/abs/") and len(path.split("/")) >= 3
+        elif _is_the_batch_collection(safe_url):
+            keep = host == "deeplearning.ai" and re.fullmatch(r"/the-batch/issue-\d+", path) is not None
+        if not keep:
+            continue
+        canonical = urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        expanded.append(canonical)
+        if len(expanded) >= _COLLECTION_EXPANSION_MAX_LINKS:
+            break
+    return expanded
+
+
+def _expand_or_keep_url(url: str) -> list[str]:
+    expanded = expand_collection_links(url)
+    return expanded or [url]
 
 
 def _looks_academic_or_technical(*, url: str, title: str = "", note: str = "") -> tuple[bool, str]:
@@ -332,16 +423,50 @@ def record_message_links(
     discord: DiscordLinkMetadata | None = None,
     created_at: datetime | None = None,
 ) -> list[MinerRecordResult]:
-    return [
-        record_miner_link(
-            url=url,
-            intake_path=intake_path,
-            review_queue_path=review_queue_path,
-            discord=discord,
-            created_at=created_at,
+    results: list[MinerRecordResult] = []
+    seen: set[str] = set()
+    for url in extract_urls(message_text):
+        for candidate_url in _expand_or_keep_url(url):
+            safe_url = sanitize_url(candidate_url)
+            if not safe_url or safe_url in seen:
+                continue
+            seen.add(safe_url)
+            results.append(
+                record_miner_link(
+                    url=safe_url,
+                    intake_path=intake_path,
+                    review_queue_path=review_queue_path,
+                    discord=discord,
+                    created_at=created_at,
+                )
+            )
+    return results
+
+
+def record_requested_links(
+    *,
+    url: str,
+    title: str | None = None,
+    note: str | None = None,
+    intake_path: Path,
+    review_queue_path: Path,
+    discord: DiscordLinkMetadata | None = None,
+    created_at: datetime | None = None,
+) -> list[MinerRecordResult]:
+    results: list[MinerRecordResult] = []
+    for candidate_url in _expand_or_keep_url(url):
+        results.append(
+            record_miner_link(
+                url=candidate_url,
+                title=title if candidate_url == url else None,
+                note=note,
+                intake_path=intake_path,
+                review_queue_path=review_queue_path,
+                discord=discord,
+                created_at=created_at,
+            )
         )
-        for url in extract_urls(message_text)
-    ]
+    return results
 
 
 def render_ack(results: list[MinerRecordResult]) -> str:

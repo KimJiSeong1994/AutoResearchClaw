@@ -92,7 +92,7 @@ then publish extracted research/post links into the LLM Wiki:
 python3 skills/paper-recommender/newsletter_ingest.py \
   --source ~/Downloads/google-newsletters.mbox \
   --wiki-root "/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki" \
-  --sender-allowlist "newsletter,research,arxiv"
+  --sender-allowlist "newsletter,research,arxiv,substack,medium,openai,deepmind,google research,anthropic,semanticscholar,paperswithcode,hugging face,huggingface,nvidia,the gradient,interconnects,ahead of ai,alpha signal,import ai,the batch,latent space"
 ```
 
 Outputs are raw-first and idempotent for the selected date:
@@ -114,6 +114,31 @@ source size/message count by default so broad Gmail exports are not processed
 accidentally. See
 `skills/paper-recommender/newsletter-config.example.json` for a non-secret
 configuration template.
+
+### Recommended academic/technical source priority
+
+The current default newsletter allowlist reflects the 2026-05 source review
+for 집현전-광부 / 뉴스레터 수집. Treat this as candidate admission only; the
+academic/technical filter still rejects jobs, social/admin notifications,
+generic market items, and non-technical posts.
+
+1. Semantic Scholar Research Feeds / Alerts
+2. Hugging Face Daily Papers
+3. Anthropic Research / News
+4. Google DeepMind / Google Research
+5. OpenAI News RSS
+6. Interconnects AI
+7. Ahead of AI
+8. NVIDIA Developer Blog RSS
+9. The Gradient
+10. Medium RSS topic/publication feeds
+
+RSS/Atom adapters should use only configured feed URLs and feed metadata. Good
+initial feed candidates are `https://openai.com/news/rss.xml`,
+`https://developer.nvidia.com/blog/feed/`, `https://medium.com/feed/tag/llm`,
+and `https://medium.com/feed/tag/agentic-ai`. First-party pages without a
+stable RSS endpoint should enter through newsletter allowlists or
+operator-provided `manual_links`, not scraping.
 
 ### Direct Gmail API collection
 

@@ -4,10 +4,91 @@
   "sender_allowlist": [
     "newsletter",
     "research",
-    "arxiv"
+    "arxiv",
+    "substack",
+    "medium",
+    "openai",
+    "deepmind",
+    "google research",
+    "anthropic",
+    "semanticscholar",
+    "paperswithcode",
+    "hugging face",
+    "huggingface",
+    "nvidia",
+    "the gradient",
+    "interconnects",
+    "ahead of ai",
+    "alpha signal",
+    "import ai",
+    "the batch",
+    "latent space"
+  ],
+  "recommended_priority_sources": [
+    {
+      "priority": 1,
+      "name": "Semantic Scholar Research Feeds / Alerts",
+      "type": "paper-alert",
+      "policy": "eligible when the item resolves to a paper, DOI, or technical report"
+    },
+    {
+      "priority": 2,
+      "name": "Hugging Face Daily Papers",
+      "type": "paper-hotlist",
+      "policy": "eligible; prefer paper URLs over discussion-only pages"
+    },
+    {
+      "priority": 3,
+      "name": "Anthropic Research / News",
+      "type": "first-party-ai-lab",
+      "policy": "eligible for research, safety, engineering, and evaluation posts"
+    },
+    {
+      "priority": 4,
+      "name": "Google DeepMind / Google Research",
+      "type": "first-party-ai-lab",
+      "policy": "eligible for research, model, science-AI, safety, and evaluation posts"
+    },
+    {
+      "priority": 5,
+      "name": "OpenAI News RSS",
+      "type": "first-party-ai-lab",
+      "policy": "eligible for research, engineering, safety, security, and agent/API posts"
+    },
+    {
+      "priority": 6,
+      "name": "Interconnects AI",
+      "type": "technical-newsletter",
+      "policy": "needs_review unless the item links to a public technical article or paper"
+    },
+    {
+      "priority": 7,
+      "name": "Ahead of AI",
+      "type": "technical-newsletter",
+      "policy": "needs_review unless the item links to a public technical article or paper"
+    },
+    {
+      "priority": 8,
+      "name": "NVIDIA Developer Blog RSS",
+      "type": "engineering-blog",
+      "policy": "eligible for CUDA, inference, serving, GPU, and MLOps technical posts"
+    },
+    {
+      "priority": 9,
+      "name": "The Gradient",
+      "type": "research-essay",
+      "policy": "eligible for research essays with paper/model/evaluation evidence"
+    },
+    {
+      "priority": 10,
+      "name": "Medium RSS topic/publication feeds",
+      "type": "rss-metadata",
+      "policy": "needs_review; use official RSS feeds only, never scraping"
+    }
   ],
   "notes": [
     "Example only; do not commit real mailbox exports or credentials.",
-    "newsletter_ingest.py reads local .mbox/.jsonl exports and does not authenticate to Google."
+    "newsletter_ingest.py reads local .mbox/.jsonl exports and does not authenticate to Google.",
+    "Allowlist entries admit candidate messages only; academic_technical_eligibility still rejects jobs, social/admin notices, generic market items, and non-technical posts."
   ]
 }

@@ -4,11 +4,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import discord_openclaw_bridge.miner as miner_module
 from discord_openclaw_bridge.miner import (
     DiscordLinkMetadata,
+    expand_collection_links,
     extract_urls,
     record_message_links,
     record_miner_link,
+    record_requested_links,
     render_ack,
     sanitize_url,
 )
@@ -105,6 +108,67 @@ def test_record_message_links_renders_discord_ack(tmp_path: Path) -> None:
     assert [result.status for result in results] == ["accepted", "accepted"]
     assert "링크 2개" in render_ack(results)
     assert "집현전-클로 검토 큐" in render_ack(results)
+
+
+def test_expand_collection_links_extracts_alphaxiv_abs_links(monkeypatch) -> None:
+    monkeypatch.setattr(
+        miner_module,
+        "_fetch_public_html",
+        lambda _url: """
+        <a href="/abs/2605.02881">paper</a>
+        <a href="/overview/2605.02881">overview</a>
+        <a href="/abs/2605.02881">duplicate</a>
+        <a href="https://github.com/example/repo">repo</a>
+        <a href="/abs/on-policy-distillation">paper</a>
+        """,
+    )
+
+    links = expand_collection_links("https://www.alphaxiv.org/?sort=Hot")
+
+    assert links == ["https://www.alphaxiv.org/abs/2605.02881", "https://www.alphaxiv.org/abs/on-policy-distillation"]
+
+
+def test_record_message_links_expands_the_batch_index(monkeypatch, tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+    monkeypatch.setattr(
+        miner_module,
+        "_fetch_public_html",
+        lambda _url: """
+        <a href="/the-batch/issue-351">Issue 351</a>
+        <a href="/the-batch/tag/research">Research tag</a>
+        <a href="/the-batch/issue-350">Issue 350</a>
+        """,
+    )
+
+    results = record_message_links(
+        message_text="검토 부탁 https://www.deeplearning.ai/the-batch/",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert [result.url for result in results] == [
+        "https://www.deeplearning.ai/the-batch/issue-351",
+        "https://www.deeplearning.ai/the-batch/issue-350",
+    ]
+    assert [result.status for result in results] == ["accepted", "accepted"]
+    assert len(_read_jsonl(intake_path)) == 2
+
+
+def test_record_requested_links_expands_collection_url(monkeypatch, tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+    monkeypatch.setattr(miner_module, "_fetch_public_html", lambda _url: '<a href="/abs/2605.02881">paper</a>')
+
+    results = record_requested_links(
+        url="https://www.alphaxiv.org/?sort=Hot",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert len(results) == 1
+    assert results[0].url == "https://www.alphaxiv.org/abs/2605.02881"
+    assert results[0].accepted
 
 
 def test_record_miner_link_rejects_non_academic_non_technical_links(tmp_path: Path) -> None:

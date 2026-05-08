@@ -139,6 +139,14 @@ daily_research:
     # RSS/Atom metadata only; does not fetch full article pages. Medium examples:
     #   https://medium.com/feed/tag/agentic-ai
     #   https://medium.com/feed/@username
+    # High-priority academic/technical feed candidates from the 2026-05 source
+    # review. Keep commented until each URL is smoke-tested in deployment:
+    #   OpenAI News: https://openai.com/news/rss.xml
+    #   NVIDIA Developer Blog: https://developer.nvidia.com/blog/feed/
+    #   Medium topic: https://medium.com/feed/tag/llm
+    #   Medium topic: https://medium.com/feed/tag/agentic-ai
+    # First-party lab pages without stable RSS should enter through newsletter
+    # allowlists or manual_links, not scraping.
     rss_feeds: []  # legacy alias for rss.feed_urls
     rss:
       feed_urls: []
@@ -157,6 +165,12 @@ daily_research:
     # allowlists are configured.
     google_newsletters:
       mbox_paths: []
+      # Recommended allowlist seeds, ordered around academic/technical signal:
+      # newsletter, research, arxiv, substack, medium, openai, deepmind,
+      # google research, anthropic, semanticscholar, paperswithcode,
+      # hugging face, huggingface, nvidia, the gradient, interconnects,
+      # ahead of ai, alpha signal, import ai, the batch, latent space.
+      # Keep empty here until explicit local export paths are configured.
       sender_allowlist: []
       subject_allowlist: []
       max_messages: 200

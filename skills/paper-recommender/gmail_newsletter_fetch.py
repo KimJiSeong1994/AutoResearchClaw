@@ -37,6 +37,12 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
 DEFAULT_ROOT = Path.home() / "Desktop" / "paper-wiki"
 DEFAULT_OAUTH_DIR = DEFAULT_ROOT / "google-oauth"
 DEFAULT_EXPORT_DIR = DEFAULT_ROOT / "newsletter-exports"
+DEFAULT_SENDER_ALLOWLIST = (
+    "newsletter,research,arxiv,substack,medium,"
+    "openai,deepmind,google research,anthropic,semanticscholar,paperswithcode,"
+    "hugging face,huggingface,nvidia,the gradient,interconnects,ahead of ai,"
+    "alpha signal,import ai,the batch,latent space"
+)
 
 
 def _post_form(url: str, data: dict[str, str], *, timeout: int = 60) -> dict[str, Any]:
@@ -319,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--export", default="", help="Output JSONL path; default newsletter-exports/gmail-api-DATE.jsonl")
     p.add_argument("--date", default=_date.today().isoformat())
     p.add_argument("--wiki-root", default="/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki")
-    p.add_argument("--sender-allowlist", default="newsletter,research,arxiv,substack,medium,openai,deepmind,anthropic,semanticscholar,paperswithcode,alpha signal,import ai,the batch,latent space")
+    p.add_argument("--sender-allowlist", default=DEFAULT_SENDER_ALLOWLIST)
     p.add_argument("--publish", action="store_true", help="Run newsletter_ingest.py after fetching JSONL")
     args = p.parse_args(argv)
 

@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from .config import ConfigError, MinerBotConfig, load_miner_config
-from .miner import DiscordLinkMetadata, record_message_links, record_miner_link, render_ack
+from .miner import DiscordLinkMetadata, record_message_links, record_requested_links, render_ack
 
 LOG = logging.getLogger("discord_jiphyeonjeon_miner")
 
@@ -88,7 +88,7 @@ async def _mine_command(
         await interaction.response.send_message("집현전-광부 링크 수집은 지정된 채널에서만 사용할 수 있습니다.", ephemeral=True)
         return
     try:
-        result = record_miner_link(
+        results = record_requested_links(
             url=url,
             title=title,
             note=note,
@@ -107,7 +107,7 @@ async def _mine_command(
         LOG.exception("miner slash request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
         await interaction.response.send_message("집현전-광부 링크 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
         return
-    await interaction.response.send_message(render_ack([result]), ephemeral=True)
+    await interaction.response.send_message(render_ack(results), ephemeral=True)
 
 
 def build_miner_bot(config: MinerBotConfig) -> JiphyeonjeonMinerBot:

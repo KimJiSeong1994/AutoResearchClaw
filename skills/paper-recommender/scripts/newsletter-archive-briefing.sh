@@ -15,7 +15,7 @@ NEWSLETTER_EXPORT_PATH="${NEWSLETTER_EXPORT_PATH:-$HOME/.openclaw/workspace/news
 NEWSLETTER_SOURCE_MODE="${NEWSLETTER_SOURCE_MODE:-export}"
 NEWSLETTER_WIKI_ROOT="${NEWSLETTER_WIKI_ROOT:-$HOME/.openclaw/workspace/wiki}"
 NEWSLETTER_REPORT_PATH="${NEWSLETTER_REPORT_PATH:-$HOME/.openclaw/workspace/reports/newsletter-briefing-latest.md}"
-NEWSLETTER_SENDER_ALLOWLIST="${NEWSLETTER_SENDER_ALLOWLIST:-}"
+NEWSLETTER_SENDER_ALLOWLIST="${NEWSLETTER_SENDER_ALLOWLIST:-newsletter,research,arxiv,substack,medium,openai,deepmind,google research,anthropic,semanticscholar,paperswithcode,hugging face,huggingface,nvidia,the gradient,interconnects,ahead of ai,alpha signal,import ai,the batch,latent space}"
 NEWSLETTER_MAX_MESSAGES="${NEWSLETTER_MAX_MESSAGES:-500}"
 NEWSLETTER_MAX_SOURCE_BYTES="${NEWSLETTER_MAX_SOURCE_BYTES:-52428800}"
 NEWSLETTER_DATE="${NEWSLETTER_DATE:-$(TZ=Asia/Seoul date +%F)}"
