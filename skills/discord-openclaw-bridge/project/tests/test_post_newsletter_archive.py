@@ -108,6 +108,40 @@ def test_newsletter_archive_deduplicates_sanitized_original_urls() -> None:
     assert "token=secret" not in rendered
 
 
+def test_newsletter_archive_deduplicates_same_content_across_different_urls() -> None:
+    payload = {
+        "date": "2026-05-05",
+        "items": [
+            {
+                "article_title": "LLMs, RAG, Agents, MCP",
+                "url": "https://medium.com/@one/rag-agent-mcp",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "public_excerpt": "A visual explanation of RAG and agent orchestration.",
+            },
+            {
+                "article_title": "LLMs, RAG, Agents, MCP",
+                "url": "https://medium.com/@two/rag-agent-mcp-copy",
+                "primary_topic_display": "LLM/에이전트",
+                "public_excerpt": "A visual explanation of RAG and agent orchestration.",
+            },
+            {
+                "article_title": "Different RAG benchmark",
+                "url": "https://example.com/rag-benchmark",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "public_excerpt": "A distinct public benchmark summary.",
+            },
+        ],
+    }
+
+    rendered = "\n".join(render_newsletter_archive_messages(payload, max_items_per_topic=12))
+
+    assert "공개 원본 링크: 2개" in rendered
+    assert "중복 제거: 1개" in rendered
+    assert rendered.count("LLMs, RAG, Agents, MCP") == 1
+    assert "rag-agent-mcp-copy" not in rendered
+    assert "Different RAG benchmark" in rendered
+
+
 def test_newsletter_archive_bot_message_matcher_targets_only_archive_bot_messages() -> None:
     assert _is_newsletter_archive_bot_message(
         {"content": f"**{NEWSLETTER_ARCHIVE_TITLE} — 2026-05-05**", "author": {"bot": True}}

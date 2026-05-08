@@ -739,6 +739,48 @@ def test_apps_script_relay_ingest_filters_notion_update_notifications(tmp_path: 
     assert items[0]["article_title"] == "RAG agent systems"
 
 
+def test_apps_script_relay_ingest_filters_slack_items(tmp_path: Path) -> None:
+    payload_path = tmp_path / "relay.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "title": "Slack Pricing Plans: Find the Right Fit for Your Team",
+                        "url": "https://slack.com/pricing",
+                        "kind": "post",
+                        "sender": "Slack <no-reply@slack.com>",
+                        "articleTitle": "Slack Pricing Plans: Find the Right Fit for Your Team",
+                        "articleDescription": "Slack plan and workspace pricing notice.",
+                    },
+                    {
+                        "title": "Slack Blog",
+                        "url": "https://slackhq.com",
+                        "kind": "post",
+                        "sender": "Slack <no-reply@slack.com>",
+                        "articleTitle": "Slack Blog",
+                        "articleDescription": "Slack product updates and workspace news.",
+                    },
+                    {
+                        "title": "RAG agent systems",
+                        "url": "https://example.com/rag-agent",
+                        "kind": "post",
+                        "sender": "Digest <digest@example.com>",
+                        "articleTitle": "RAG agent systems",
+                        "articleDescription": "Public article describes retrieval agents for knowledge graph search.",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _payload, items = apps_script_relay_ingest.load_relay_items(payload_path)
+
+    assert len(items) == 1
+    assert items[0]["article_title"] == "RAG agent systems"
+
+
 def test_apps_script_relay_ingest_keeps_only_academic_or_technical_reports(tmp_path: Path) -> None:
     payload_path = tmp_path / "relay.json"
     payload_path.write_text(

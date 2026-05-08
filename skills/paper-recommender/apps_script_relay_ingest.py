@@ -72,6 +72,16 @@ _NON_NEWSLETTER_SENDER_HINTS = (
     "security-noreply@",
 )
 
+_SLACK_URL_HINTS = (
+    "slack.com/",
+    "slackhq.com/",
+)
+
+_SLACK_SENDER_HINTS = (
+    "no-reply@slack.com",
+    "slack.com",
+)
+
 _NOTION_UPDATE_URL_HINTS = (
     "mail.notion.so/",
     "notion.so/notifications",
@@ -143,6 +153,12 @@ def is_notion_update_item(raw: dict[str, object]) -> bool:
         or ("notion" in text and any(hint in text for hint in _NOTION_UPDATE_TEXT_HINTS))
         or ("노션" in text and any(hint in text for hint in _NOTION_UPDATE_TEXT_HINTS))
     )
+
+
+def is_slack_item(raw: dict[str, object]) -> bool:
+    url = _clean(raw.get("url")).lower()
+    sender = _clean(raw.get("sender")).lower()
+    return any(hint in url for hint in _SLACK_URL_HINTS) or any(hint in sender for hint in _SLACK_SENDER_HINTS)
 
 
 def normalize_relay_item(raw: dict[str, object]) -> dict[str, object]:
@@ -228,6 +244,8 @@ def load_relay_items(payload_path: Path) -> tuple[dict[str, object], list[dict[s
         if is_job_related_item(item):
             continue
         if is_non_technical_notification_item(item):
+            continue
+        if is_slack_item(item):
             continue
         if is_notion_update_item(item):
             continue

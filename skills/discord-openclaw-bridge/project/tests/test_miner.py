@@ -140,6 +140,23 @@ def test_record_miner_link_does_not_accept_allowlist_host_in_query(tmp_path: Pat
     assert not intake_path.exists()
 
 
+def test_record_miner_link_rejects_slack_links_even_with_technical_terms(tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    result = record_miner_link(
+        url="https://openclaw.slack.com/archives/C123/p456",
+        title="LLM agent benchmark discussion",
+        note="technical research thread",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert result.rejected
+    assert not intake_path.exists()
+    assert not review_path.exists()
+
+
 def test_record_miner_link_accepts_privacy_security_evaluation_reports(tmp_path: Path) -> None:
     intake_path = tmp_path / "links.jsonl"
     review_path = tmp_path / "queue.jsonl"

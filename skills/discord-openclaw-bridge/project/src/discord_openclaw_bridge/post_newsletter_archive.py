@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import os
 import sys
 from collections import OrderedDict
@@ -86,18 +87,31 @@ def _canonical_dedupe_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
 
 
+def _canonical_content_key(item: dict[str, Any]) -> str:
+    title = _title(item).lower()
+    description = _description(item, limit=240).lower()
+    text = f"{title} {description}"
+    text = text.replace("&amp;", "&")
+    text = re.sub(r"[\\|:;,.!?\"'`()[\\]{}<>]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _dedupe_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     deduped: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    seen_content: set[str] = set()
     duplicate_count = 0
     for item in items:
         url_key = _canonical_dedupe_url(_clean(item.get("url")))
         if not url_key:
             continue
-        if url_key in seen_urls:
+        content_key = _canonical_content_key(item)
+        if url_key in seen_urls or (content_key and content_key in seen_content):
             duplicate_count += 1
             continue
         seen_urls.add(url_key)
+        if content_key:
+            seen_content.add(content_key)
         deduped.append(item)
     return deduped, duplicate_count
 

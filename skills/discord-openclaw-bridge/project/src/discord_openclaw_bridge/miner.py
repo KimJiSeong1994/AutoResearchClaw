@@ -155,6 +155,9 @@ _OUT_OF_SCOPE_TERMS = (
     "채용",
     "프로필 조회",
 )
+_OUT_OF_SCOPE_HOST_HINTS = (
+    "slack.com",
+)
 
 
 @dataclass(frozen=True)
@@ -249,6 +252,8 @@ def _looks_academic_or_technical(*, url: str, title: str = "", note: str = "") -
         parsed = urlsplit("")
     public_url_text = " ".join([host, parsed.path]).lower().replace("-", " ").replace("_", " ")
     text = " ".join([public_url_text, title, note]).lower().replace("-", " ").replace("_", " ")
+    if any(host == hint or host.endswith(f".{hint}") for hint in _OUT_OF_SCOPE_HOST_HINTS):
+        return False, "학술검색/기술리포트 범위 밖 링크입니다."
     if any(term in text for term in _OUT_OF_SCOPE_TERMS):
         return False, "학술검색/기술리포트 범위 밖 링크입니다."
     if (host == "github.com" or host.endswith(".github.com")) and len(path_parts) >= 2:
