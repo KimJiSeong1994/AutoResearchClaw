@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1298,6 +1299,40 @@ def test_quality_audit_jsonl_is_sanitized(tmp_path: Path) -> None:
     assert _load_recent_published_identities(audit_path, history_days=14) == set()
 
 
+def test_quality_history_loader_uses_recent_publish_identities_only(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    recent_identity = _card_identity_fingerprint(_quality_card(1))
+    old_identity = _card_identity_fingerprint(_quality_card(2))
+    skipped_identity = _card_identity_fingerprint(_quality_card(3))
+    records = [
+        {"not": "json"},
+        {
+            "decision": "publish",
+            "timestamp": (now - timedelta(days=2)).isoformat(),
+            "cards": [{"identity_fingerprint": recent_identity}],
+        },
+        {
+            "decision": "publish",
+            "timestamp": (now - timedelta(days=30)).isoformat(),
+            "cards": [{"identity_fingerprint": old_identity}],
+        },
+        {
+            "decision": "skip",
+            "timestamp": now.isoformat(),
+            "cards": [{"identity_fingerprint": skipped_identity}],
+        },
+    ]
+    audit_path.write_text(
+        "\n".join(["{malformed", *(json.dumps(record) for record in records)]) + "\n",
+        encoding="utf-8",
+    )
+
+    identities = _load_recent_published_identities(audit_path, history_days=14, now=now)
+
+    assert identities == {recent_identity}
+
+
 def test_render_uses_same_selected_cards_that_gate_evaluates() -> None:
     payload = {"date": "2026-05-09", "items": [_quality_card(idx) for idx in range(4)]}
     cards = _select_cards([item for item in payload["items"] if isinstance(item, dict)], max_cards=3)
@@ -1346,6 +1381,56 @@ def test_run_skips_before_discord_calls_and_writes_audit(tmp_path: Path, monkeyp
     assert "skipped card news quality_gate" in out
     record = json.loads(audit_path.read_text(encoding="utf-8"))
     assert record["decision"] == "skip"
+
+
+def test_run_quality_gate_disable_bypasses_skip_and_audit(tmp_path: Path, monkeypatch, capsys) -> None:
+    source = tmp_path / "items.json"
+    source.write_text(json.dumps({"date": "2026-05-09", "items": [_quality_card(1)]}), encoding="utf-8")
+    audit_path = tmp_path / "audit.jsonl"
+    requests: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            requests.append(f"GET {url}")
+            return post_card_news.httpx.Response(
+                200,
+                json={"id": "1501211608104566854", "type": 0},
+                request=post_card_news.httpx.Request("GET", url),
+            )
+
+        async def post(self, url, *args, **kwargs):
+            requests.append(f"POST {url}")
+            return post_card_news.httpx.Response(200, json={"id": "m1"}, request=post_card_news.httpx.Request("POST", url))
+
+    monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_QUALITY_GATE", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "2")
+    monkeypatch.setenv("DISCORD_PURGE_PREVIOUS_CARD_NEWS", "0")
+
+    asyncio.run(run())
+
+    out = capsys.readouterr().out
+    assert "skipped card news quality_gate" not in out
+    assert "posted card news to channel=1501211608104566854" in out
+    assert any(request.startswith("GET https://discord.com/api/v10/channels/1501211608104566854") for request in requests)
+    assert any(request.startswith("POST https://discord.com/api/v10/channels/1501211608104566854/messages") for request in requests)
+    assert not audit_path.exists()
 
 
 def test_run_writes_publish_and_failure_audits(tmp_path: Path, monkeypatch) -> None:
