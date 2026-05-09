@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import os
 import re
 import sys
 from collections import OrderedDict
-from datetime import date
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -213,6 +216,17 @@ _TECH_RELEVANCE_TERMS = (
 )
 
 
+@dataclass(frozen=True)
+class CardNewsQualityGateConfig:
+    enabled: bool = True
+    audit_path: Path | None = None
+    history_days: int = 14
+    min_publishable_cards: int = 3
+    min_new_cards: int = 3
+    max_previous_overlap_ratio: float = 0.5
+    min_evidence_cards: int = 2
+
+
 def _clean(value: object, *, limit: int | None = None) -> str:
     text = " ".join(str(value or "").split()).strip()
     if limit is not None and len(text) > limit:
@@ -352,6 +366,29 @@ def _sanitize_public_url(url: str) -> str:
         if compacted == text:
             return text
         text = compacted
+
+
+def _sanitized_audit_url(url: str) -> str:
+    """Return public URL with tracking/secret params removed for audit storage."""
+    sanitized = _sanitize_public_url(url)
+    if not sanitized:
+        return ""
+    try:
+        parts = urlsplit(sanitized)
+    except ValueError:
+        return ""
+    kept: list[tuple[str, str]] = []
+    blocked = {key.lower() for key in _SENSITIVE_QUERY_KEYS | _TRACKING_QUERY_KEYS}
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        key_lower = key.lower()
+        if key_lower.startswith("utm_") or key_lower in blocked:
+            continue
+        kept.append((key, value))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept, doseq=True), parts.fragment))
+
+
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _strip_html(value: str) -> str:
@@ -667,6 +704,213 @@ def _publishable_card(item: dict[str, Any]) -> bool:
     # The fallback path in _select_cards still preserves a minimal card for
     # fully thin synthetic or edge-case archives.
     return False
+
+
+def _env_flag(name: str, default: str = "1") -> bool:
+    return os.environ.get(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise NewsletterPostConfigError(f"invalid integer env var {name}: {raw}") from exc
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise NewsletterPostConfigError(f"invalid float env var {name}: {raw}") from exc
+
+
+def _default_card_news_audit_path() -> Path:
+    override = os.environ.get("DISCORD_CARD_NEWS_AUDIT_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    wiki_root = os.environ.get("NEWSLETTER_WIKI_ROOT", "").strip()
+    if wiki_root:
+        return Path(wiki_root).expanduser() / "state" / "card-news-publication-audit.jsonl"
+    return Path.home() / ".openclaw" / "state" / "discord-openclaw-bridge" / "card-news-publication-audit.jsonl"
+
+
+def _card_news_quality_gate_config_from_env() -> CardNewsQualityGateConfig:
+    return CardNewsQualityGateConfig(
+        enabled=_env_flag("DISCORD_CARD_NEWS_QUALITY_GATE", "1"),
+        audit_path=_default_card_news_audit_path(),
+        history_days=_env_int("DISCORD_CARD_NEWS_HISTORY_DAYS", 14),
+        min_publishable_cards=_env_int("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", 3),
+        min_new_cards=_env_int("DISCORD_CARD_NEWS_MIN_NEW_CARDS", 3),
+        max_previous_overlap_ratio=_env_float("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", 0.5),
+        min_evidence_cards=_env_int("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", 2),
+    )
+
+
+def _card_identity_fingerprint(item: dict[str, Any]) -> str:
+    url = _sanitized_audit_url(_clean(item.get("url")))
+    if url:
+        return "url:" + _hash_text(url.lower())
+    story = _story_key(item) or _canonical_title_key(item)
+    return "story:" + _hash_text(story.lower()) if story else ""
+
+
+def _card_content_fingerprint(item: dict[str, Any]) -> str:
+    parts = [
+        _title(item),
+        _clean(item.get("primary_topic_display") or GENERIC_TOPIC),
+        _evidence_snippet(item, limit=360),
+        _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
+    ]
+    return _hash_text("\n".join(parts).lower())
+
+
+def _load_recent_published_identities(audit_path: Path, *, history_days: int, now: datetime | None = None) -> set[str]:
+    if not audit_path.exists():
+        return set()
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=max(0, history_days))
+    identities: set[str] = set()
+    try:
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("decision") != "publish":
+            continue
+        timestamp = _clean(record.get("timestamp"))
+        if timestamp:
+            try:
+                seen_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                seen_at = None
+            if seen_at and seen_at < cutoff:
+                continue
+        for card in record.get("cards") or []:
+            if isinstance(card, dict):
+                identity = _clean(card.get("identity_fingerprint"))
+                if identity:
+                    identities.add(identity)
+    return identities
+
+
+def _quality_thresholds(config: CardNewsQualityGateConfig) -> dict[str, int | float]:
+    return {
+        "history_days": config.history_days,
+        "min_publishable_cards": config.min_publishable_cards,
+        "min_new_cards": config.min_new_cards,
+        "max_previous_overlap_ratio": config.max_previous_overlap_ratio,
+        "min_evidence_cards": config.min_evidence_cards,
+    }
+
+
+def _evaluate_card_news_quality(
+    cards: list[dict[str, Any]],
+    previous_identities: set[str],
+    config: CardNewsQualityGateConfig,
+) -> dict[str, Any]:
+    identities = [_card_identity_fingerprint(item) for item in cards]
+    selected_count = len(cards)
+    publishable_count = sum(1 for item in cards if _publishable_card(item))
+    evidence_count = sum(1 for item in cards if _has_card_evidence(item))
+    repeated_count = sum(1 for identity in identities if identity and identity in previous_identities)
+    new_count = sum(1 for identity in identities if identity and identity not in previous_identities)
+    overlap_ratio = (repeated_count / selected_count) if selected_count else 0.0
+    reason_codes: list[str] = []
+    if publishable_count < config.min_publishable_cards:
+        reason_codes.append("min_publishable_cards")
+    if evidence_count < config.min_evidence_cards:
+        reason_codes.append("min_evidence_cards")
+    if new_count < config.min_new_cards:
+        reason_codes.append("min_new_cards")
+    if selected_count and overlap_ratio > config.max_previous_overlap_ratio:
+        reason_codes.append("max_previous_overlap_ratio")
+    if selected_count == 0:
+        reason_codes.append("no_selected_cards")
+    return {
+        "decision": "skip" if reason_codes else "publish",
+        "reason_codes": reason_codes,
+        "thresholds": _quality_thresholds(config),
+        "counts": {
+            "selected": selected_count,
+            "publishable": publishable_count,
+            "evidence": evidence_count,
+            "new": new_count,
+            "repeated": repeated_count,
+            "overlap_ratio": round(overlap_ratio, 4),
+        },
+    }
+
+
+def _source_ref(source: Path, payload: dict[str, Any]) -> str:
+    run_date = _clean(payload.get("date"))
+    if run_date:
+        return run_date
+    return f"{source.name}:sha256:{_hash_text(str(source))}"
+
+
+def _audit_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for item in cards:
+        url = _sanitized_audit_url(_clean(item.get("url")))
+        record: dict[str, Any] = {
+            "title": _title(item),
+            "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
+            "identity_fingerprint": _card_identity_fingerprint(item),
+            "content_fingerprint": _card_content_fingerprint(item),
+            "evidence_kind": _richness(item, raw_title=_raw_title(item)),
+            "has_evidence": _has_card_evidence(item),
+        }
+        if url:
+            record["url"] = url
+        elif _clean(item.get("url")):
+            record["url_hash"] = _hash_text(_clean(item.get("url")))
+        records.append(record)
+    return records
+
+
+def _build_card_news_audit_record(
+    *,
+    decision: str,
+    payload: dict[str, Any],
+    source: Path,
+    cards: list[dict[str, Any]],
+    evaluation: dict[str, Any],
+    publish_metadata: dict[str, Any] | None = None,
+    failure_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "run_date": _clean(payload.get("date") or date.today().isoformat()),
+        "decision": decision,
+        "source_ref": _source_ref(source, payload),
+        "thresholds": evaluation.get("thresholds", {}),
+        "counts": evaluation.get("counts", {}),
+        "reason_codes": evaluation.get("reason_codes", []),
+        "cards": _audit_cards(cards),
+    }
+    if publish_metadata:
+        record["publish"] = publish_metadata
+    if failure_metadata:
+        record["failure"] = failure_metadata
+    return record
+
+
+def _append_card_news_audit(audit_path: Path, record: dict[str, Any]) -> None:
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    with audit_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def _sort_by_quality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1416,12 +1660,15 @@ def _publication_header(cards: list[dict[str, Any]], *, run_date: str, total_cou
     ]
     return "\n".join(lines)
 
-def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) -> list[str]:
-    items = [item for item in payload.get("items", []) if isinstance(item, dict)]
-    cards = _select_cards(items, max_cards=max_cards)
+def _render_card_news_messages_from_cards(
+    payload: dict[str, Any],
+    cards: list[dict[str, Any]],
+    *,
+    item_count: int,
+) -> list[str]:
     run_date = _clean(payload.get("date") or date.today().isoformat())
 
-    header = _render_article_header(cards, run_date=run_date, item_count=len(items))
+    header = _render_article_header(cards, run_date=run_date, item_count=item_count)
     messages = [header]
     topic_index: dict[str, int] = {}
 
@@ -1475,6 +1722,12 @@ def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) ->
                 _render_skeletal_card(title=title, topic=topic, url=url, bucket=bucket)
             )
     return messages
+
+
+def render_card_news_messages(payload: dict[str, Any], *, max_cards: int = 8) -> list[str]:
+    items = [item for item in payload.get("items", []) if isinstance(item, dict)]
+    cards = _select_cards(items, max_cards=max_cards)
+    return _render_card_news_messages_from_cards(payload, cards, item_count=len(items))
 
 
 def _split_discord_content(content: str, *, limit: int = 1900) -> list[str]:
@@ -1652,51 +1905,132 @@ async def run() -> None:
     }
     enrich_limit = int(os.environ.get("DISCORD_CARD_NEWS_ENRICH_LIMIT", "80"))
     headers = {"Authorization": f"Bot {token}"}
+    quality_gate = _card_news_quality_gate_config_from_env()
+    side_effect_stage = "not_started"
+    evaluation: dict[str, Any] = {}
+    cards: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=30) as client:
         if enrich_public_urls:
             payload = await enrich_public_metadata(payload, client, max_items=enrich_limit)
-        messages = render_card_news_messages(payload, max_cards=max_cards)
-        channel_response = await client.get(f"https://discord.com/api/v10/channels/{channel_id}", headers=headers)
-        channel_response.raise_for_status()
-        channel_data = channel_response.json()
-        channel_type = int(channel_data.get("type", 0))
-        guild_id = str(channel_data.get("guild_id") or "")
-        purged = 0
-        target_channel_id = channel_id
-        thread_id = ""
-        if channel_type in FORUM_CHANNEL_TYPES:
-            forum_url = f"https://discord.com/api/v10/channels/{channel_id}"
-            if purge_previous and guild_id:
-                purged = await _purge_previous_card_news_threads(
-                    client,
-                    f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
-                    headers=headers,
+        items = [item for item in payload.get("items", []) if isinstance(item, dict)]
+        cards = _select_cards(items, max_cards=max_cards)
+        audit_path = quality_gate.audit_path or _default_card_news_audit_path()
+        if quality_gate.enabled:
+            previous_identities = _load_recent_published_identities(
+                audit_path,
+                history_days=quality_gate.history_days,
+            )
+            evaluation = _evaluate_card_news_quality(cards, previous_identities, quality_gate)
+            if evaluation["decision"] == "skip":
+                record = _build_card_news_audit_record(
+                    decision="skip",
+                    payload=payload,
+                    source=source,
+                    cards=cards,
+                    evaluation=evaluation,
                 )
-            header_chunks = _split_discord_content(messages[0])
-            thread_id = await _create_forum_card_news_thread(
-                client,
-                forum_url,
-                headers=headers,
-                name=f"{_clean(payload.get('date') or date.today().isoformat())} 기술 브리핑 카드뉴스",
-                content=header_chunks[0],
-                hero_image_path=hero_image_path,
-            )
-            target_channel_id = int(thread_id)
-            messages_to_post = [*header_chunks[1:], *messages[1:]]
+                _append_card_news_audit(audit_path, record)
+                counts = evaluation["counts"]
+                print(
+                    "skipped card news quality_gate "
+                    f"reason={','.join(evaluation['reason_codes'])} "
+                    f"source={_source_ref(source, payload)} selected={counts['selected']} "
+                    f"new={counts['new']} overlap={counts['overlap_ratio']} audit={audit_path}"
+                )
+                return
         else:
-            url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
-            if purge_previous:
-                purged = await _purge_previous_card_news_messages(client, url, headers=headers)
-            messages_to_post = [chunk for message in messages for chunk in _split_discord_content(message)]
-        post_url = f"https://discord.com/api/v10/channels/{target_channel_id}/messages"
-        for message in messages_to_post:
-            await _post_message_with_rate_limit(
-                client,
-                post_url,
-                headers=headers,
-                content=message,
-                suppress_embeds=True,
-            )
+            evaluation = {
+                "decision": "publish",
+                "reason_codes": ["quality_gate_disabled"],
+                "thresholds": _quality_thresholds(quality_gate),
+                "counts": {
+                    "selected": len(cards),
+                    "publishable": sum(1 for item in cards if _publishable_card(item)),
+                    "evidence": sum(1 for item in cards if _has_card_evidence(item)),
+                    "new": len(cards),
+                    "repeated": 0,
+                    "overlap_ratio": 0.0,
+                },
+            }
+        messages = _render_card_news_messages_from_cards(payload, cards, item_count=len(items))
+        purged = 0
+        thread_id = ""
+        try:
+            side_effect_stage = "channel_lookup"
+            channel_response = await client.get(f"https://discord.com/api/v10/channels/{channel_id}", headers=headers)
+            channel_response.raise_for_status()
+            channel_data = channel_response.json()
+            channel_type = int(channel_data.get("type", 0))
+            guild_id = str(channel_data.get("guild_id") or "")
+            target_channel_id = channel_id
+            if channel_type in FORUM_CHANNEL_TYPES:
+                forum_url = f"https://discord.com/api/v10/channels/{channel_id}"
+                if purge_previous and guild_id:
+                    side_effect_stage = "purge_threads"
+                    purged = await _purge_previous_card_news_threads(
+                        client,
+                        f"https://discord.com/api/v10/guilds/{guild_id}/threads/active",
+                        headers=headers,
+                    )
+                header_chunks = _split_discord_content(messages[0])
+                side_effect_stage = "create_thread"
+                thread_id = await _create_forum_card_news_thread(
+                    client,
+                    forum_url,
+                    headers=headers,
+                    name=f"{_clean(payload.get('date') or date.today().isoformat())} 기술 브리핑 카드뉴스",
+                    content=header_chunks[0],
+                    hero_image_path=hero_image_path,
+                )
+                target_channel_id = int(thread_id)
+                messages_to_post = [*header_chunks[1:], *messages[1:]]
+            else:
+                url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+                if purge_previous:
+                    side_effect_stage = "purge_messages"
+                    purged = await _purge_previous_card_news_messages(client, url, headers=headers)
+                messages_to_post = [chunk for message in messages for chunk in _split_discord_content(message)]
+            post_url = f"https://discord.com/api/v10/channels/{target_channel_id}/messages"
+            side_effect_stage = "post_messages"
+            for message in messages_to_post:
+                await _post_message_with_rate_limit(
+                    client,
+                    post_url,
+                    headers=headers,
+                    content=message,
+                    suppress_embeds=True,
+                )
+        except httpx.HTTPError as exc:
+            if quality_gate.enabled:
+                failure_record = _build_card_news_audit_record(
+                    decision="failure",
+                    payload=payload,
+                    source=source,
+                    cards=cards,
+                    evaluation=evaluation,
+                    failure_metadata={"stage": side_effect_stage, "error_class": exc.__class__.__name__},
+                )
+                try:
+                    _append_card_news_audit(audit_path, failure_record)
+                except OSError as audit_exc:
+                    print(f"card news failure audit write failed: {audit_exc}", file=sys.stderr)
+            raise
+    publish_metadata = {"message_count": len(messages), "purged_count": purged}
+    if thread_id:
+        publish_metadata["thread_id"] = thread_id
+    if quality_gate.enabled:
+        publish_record = _build_card_news_audit_record(
+            decision="publish",
+            payload=payload,
+            source=source,
+            cards=cards,
+            evaluation=evaluation,
+            publish_metadata=publish_metadata,
+        )
+        try:
+            _append_card_news_audit(audit_path, publish_record)
+        except OSError as exc:
+            print(f"card news publish audit write failed: {exc}", file=sys.stderr)
     thread_note = f" thread={thread_id}" if thread_id else ""
     print(f"posted card news to channel={channel_id}{thread_note} source={source} messages={len(messages)} purged={purged}")
 
