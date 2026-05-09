@@ -9,20 +9,31 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import discord_openclaw_bridge.post_card_news as post_card_news  # noqa: E402
 from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     CARD_NEWS_TITLE,
     CARD_SEPARATOR,
     DISCORD_SUPPRESS_EMBEDS_FLAG,
     LEAN_DISCLAIMER_WITH_EXCERPT,
     LEAN_DISCLAIMER_WITHOUT_EXCERPT,
+    CardNewsQualityGateConfig,
+    _append_card_news_audit,
+    _build_card_news_audit_record,
+    _card_content_fingerprint,
+    _card_identity_fingerprint,
+    _card_news_quality_gate_config_from_env,
     _create_forum_card_news_thread,
+    _evaluate_card_news_quality,
     _is_card_news_bot_message,
+    _load_recent_published_identities,
     _purge_previous_card_news_messages,
     _purge_previous_card_news_threads,
     _sanitize_public_url,
+    _select_cards,
     _split_discord_content,
     enrich_public_metadata,
     render_card_news_messages,
+    run,
 )
 
 
@@ -989,3 +1000,264 @@ def test_public_metadata_enrichment_adds_article_description_before_render() -> 
     assert "그래프 구조가 근거 선택" in joined
     assert "token=secret" not in joined
     assert "utm_source" not in joined
+
+
+def _quality_card(idx: int, *, url: str | None = None, topic: str = "LLM/에이전트") -> dict[str, object]:
+    return {
+        "article_title": f"Agent memory evaluation {idx}",
+        "url": url or f"https://example.com/articles/{idx}?utm_source=newsletter&token=secret&id={idx}",
+        "primary_topic_display": topic,
+        "topic_confidence": 0.82,
+        "claim": f"에이전트 메모리 평가 {idx}는 운영 비용과 검색 품질을 함께 바꿉니다.",
+        "mechanism": "검색 근거와 장기 실행 로그가 의사결정 기준을 바꿉니다.",
+        "evidence": "공개 벤치마크에서 정확도와 지연시간 trade-off가 함께 측정되었습니다.",
+        "summary_lines": [
+            "운영 환경에서 메모리 설계 차이를 비교합니다.",
+            "검색 근거와 비용을 함께 검증합니다.",
+            "이 결과가 다른 운영 환경에서도 유지되는가?",
+        ],
+        "source_name": "Agent Weekly",
+    }
+
+
+def test_quality_fingerprints_separate_identity_from_content() -> None:
+    base = _quality_card(1, url="https://example.com/post?utm_source=x&token=secret&id=7")
+    changed = dict(base)
+    changed["evidence"] = "새 공개 실험에서 비용 절감 효과가 추가로 보고되었습니다."
+
+    assert _card_identity_fingerprint(base) == _card_identity_fingerprint(changed)
+    assert _card_content_fingerprint(base) != _card_content_fingerprint(changed)
+
+
+def test_quality_history_overlap_skips_and_new_cards_pass() -> None:
+    cards = [_quality_card(idx) for idx in range(7)]
+    config = CardNewsQualityGateConfig(
+        audit_path=Path("unused"),
+        min_publishable_cards=3,
+        min_new_cards=3,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=2,
+    )
+    previous = {_card_identity_fingerprint(card) for card in cards[:5]}
+
+    skipped = _evaluate_card_news_quality(cards, previous, config)
+
+    assert skipped["decision"] == "skip"
+    assert skipped["counts"]["repeated"] == 5
+    assert skipped["counts"]["new"] == 2
+    assert skipped["counts"]["overlap_ratio"] > 0.5
+    assert "max_previous_overlap_ratio" in skipped["reason_codes"]
+    assert "min_new_cards" in skipped["reason_codes"]
+
+    passed = _evaluate_card_news_quality(cards[:4], set(), config)
+    assert passed["decision"] == "publish"
+    assert passed["reason_codes"] == []
+
+
+def test_quality_substance_threshold_skips_skeletal_cards() -> None:
+    cards = [
+        {
+            "article_title": f"Title only {idx}",
+            "url": f"https://example.com/thin/{idx}",
+            "primary_topic_display": "오픈소스/코드",
+            "topic_confidence": 0.3,
+        }
+        for idx in range(3)
+    ]
+    config = CardNewsQualityGateConfig(audit_path=Path("unused"))
+
+    result = _evaluate_card_news_quality(cards, set(), config)
+
+    assert result["decision"] == "skip"
+    assert result["counts"]["publishable"] == 0
+    assert result["counts"]["evidence"] == 0
+    assert "min_publishable_cards" in result["reason_codes"]
+    assert "min_evidence_cards" in result["reason_codes"]
+
+
+def test_quality_gate_config_defaults_and_env_overrides(monkeypatch) -> None:
+    for key in (
+        "DISCORD_CARD_NEWS_QUALITY_GATE",
+        "DISCORD_CARD_NEWS_AUDIT_PATH",
+        "DISCORD_CARD_NEWS_HISTORY_DAYS",
+        "DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS",
+        "DISCORD_CARD_NEWS_MIN_NEW_CARDS",
+        "DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO",
+        "DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS",
+        "NEWSLETTER_WIKI_ROOT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    defaults = _card_news_quality_gate_config_from_env()
+    assert defaults.enabled is True
+    assert defaults.history_days == 14
+    assert defaults.min_publishable_cards == 3
+    assert defaults.min_new_cards == 3
+    assert defaults.max_previous_overlap_ratio == 0.5
+    assert defaults.min_evidence_cards == 2
+    assert str(defaults.audit_path).endswith(".openclaw/state/discord-openclaw-bridge/card-news-publication-audit.jsonl")
+
+    monkeypatch.setenv("DISCORD_CARD_NEWS_QUALITY_GATE", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", "/tmp/card-audit.jsonl")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_HISTORY_DAYS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "4")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "2")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", "0.25")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "5")
+
+    overridden = _card_news_quality_gate_config_from_env()
+    assert overridden.enabled is False
+    assert overridden.audit_path == Path("/tmp/card-audit.jsonl")
+    assert overridden.history_days == 3
+    assert overridden.min_publishable_cards == 4
+    assert overridden.min_new_cards == 2
+    assert overridden.max_previous_overlap_ratio == 0.25
+    assert overridden.min_evidence_cards == 5
+
+
+def test_quality_audit_jsonl_is_sanitized(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    secret_card = _quality_card(1, url="https://example.com/post?token=secret&utm_source=x&id=7")
+    evaluation = _evaluate_card_news_quality([secret_card], set(), CardNewsQualityGateConfig(audit_path=audit_path))
+    record = _build_card_news_audit_record(
+        decision="skip",
+        payload={"date": "2026-05-09"},
+        source=tmp_path / "raw" / "newsletters" / "2026-05-09" / "items.json",
+        cards=[secret_card],
+        evaluation=evaluation,
+    )
+
+    _append_card_news_audit(audit_path, record)
+
+    raw = audit_path.read_text(encoding="utf-8")
+    stored = json.loads(raw)
+    assert "token=secret" not in raw
+    assert "utm_source" not in raw
+    assert stored["source_ref"] == "2026-05-09"
+    assert stored["cards"][0]["url"] == "https://example.com/post?id=7"
+    assert stored["cards"][0]["identity_fingerprint"].startswith("url:")
+    assert _load_recent_published_identities(audit_path, history_days=14) == set()
+
+
+def test_render_uses_same_selected_cards_that_gate_evaluates() -> None:
+    payload = {"date": "2026-05-09", "items": [_quality_card(idx) for idx in range(4)]}
+    cards = _select_cards([item for item in payload["items"] if isinstance(item, dict)], max_cards=3)
+    evaluation = _evaluate_card_news_quality(cards, set(), CardNewsQualityGateConfig(audit_path=Path("unused")))
+    rendered = render_card_news_messages(payload, max_cards=3)
+
+    assert evaluation["counts"]["selected"] == 3
+    for item in cards:
+        assert str(item["article_title"]) in "\n".join(rendered)
+
+
+def test_run_skips_before_discord_calls_and_writes_audit(tmp_path: Path, monkeypatch, capsys) -> None:
+    source = tmp_path / "items.json"
+    source.write_text(json.dumps({"date": "2026-05-09", "items": [_quality_card(1)]}), encoding="utf-8")
+    audit_path = tmp_path / "audit.jsonl"
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            calls.append("get")
+            raise AssertionError("Discord GET should not run on quality-gate skip")
+
+    monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "2")
+
+    asyncio.run(run())
+
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "skipped card news quality_gate" in out
+    record = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert record["decision"] == "skip"
+
+
+def test_run_writes_publish_and_failure_audits(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "items.json"
+    source.write_text(
+        json.dumps({"date": "2026-05-09", "items": [_quality_card(idx) for idx in range(3)]}),
+        encoding="utf-8",
+    )
+    audit_path = tmp_path / "audit.jsonl"
+    requests: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            requests.append(f"GET {url}")
+            if "/messages" in url:
+                return post_card_news.httpx.Response(200, json=[], request=post_card_news.httpx.Request("GET", url))
+            return post_card_news.httpx.Response(
+                200,
+                json={"id": "1501211608104566854", "type": 0},
+                request=post_card_news.httpx.Request("GET", url),
+            )
+
+        async def post(self, url, *args, **kwargs):
+            requests.append(f"POST {url}")
+            return post_card_news.httpx.Response(200, json={"id": "m1"}, request=post_card_news.httpx.Request("POST", url))
+
+    monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
+    monkeypatch.setenv("DISCORD_PURGE_PREVIOUS_CARD_NEWS", "0")
+
+    asyncio.run(run())
+
+    assert any(request.startswith("GET https://discord.com/api/v10/channels/1501211608104566854") for request in requests)
+    assert any(request.startswith("POST https://discord.com/api/v10/channels/1501211608104566854/messages") for request in requests)
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert records[-1]["decision"] == "publish"
+    assert records[-1]["publish"]["message_count"] == 4
+
+    class FailingClient(FakeClient):
+        async def post(self, url, *args, **kwargs):
+            requests.append(f"POST_FAIL {url}")
+            return post_card_news.httpx.Response(
+                500,
+                json={"message": "boom"},
+                request=post_card_news.httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FailingClient)
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", "1.0")
+
+    try:
+        asyncio.run(run())
+    except post_card_news.httpx.HTTPStatusError:
+        pass
+    else:
+        raise AssertionError("expected post failure")
+
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert records[-1]["decision"] == "failure"
+    assert records[-1]["failure"]["stage"] == "post_messages"
