@@ -1002,6 +1002,205 @@ def test_public_metadata_enrichment_adds_article_description_before_render() -> 
     assert "utm_source" not in joined
 
 
+def _gate_card(idx: int, *, url: str | None = None, evidence: bool = True) -> dict[str, object]:
+    card: dict[str, object] = {
+        "article_title": f"Gate Card {idx}",
+        "url": url or f"https://example.com/research/{idx}?utm_source=newsletter&token=secret-{idx}",
+        "primary_topic_display": "LLM/에이전트",
+        "source_name": "Gate Weekly",
+    }
+    if evidence:
+        card["public_excerpt"] = f"에이전트 메모리 설계와 검색 근거를 비교하는 공개 요약 {idx}입니다."
+    return card
+
+
+def test_quality_gate_config_defaults_and_env_overrides(monkeypatch, tmp_path) -> None:
+    for name in (
+        "DISCORD_CARD_NEWS_QUALITY_GATE",
+        "DISCORD_CARD_NEWS_AUDIT_PATH",
+        "DISCORD_CARD_NEWS_HISTORY_DAYS",
+        "DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS",
+        "DISCORD_CARD_NEWS_MIN_NEW_CARDS",
+        "DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO",
+        "DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS",
+        "NEWSLETTER_WIKI_ROOT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    default_config = _card_news_quality_gate_config_from_env()
+
+    assert default_config.enabled is True
+    assert default_config.history_days == 14
+    assert default_config.min_publishable_cards == 3
+    assert default_config.min_new_cards == 3
+    assert default_config.max_previous_overlap_ratio == 0.5
+    assert default_config.min_evidence_cards == 2
+
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("DISCORD_CARD_NEWS_QUALITY_GATE", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_HISTORY_DAYS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "4")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "2")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", "0.25")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "3")
+
+    override_config = _card_news_quality_gate_config_from_env()
+
+    assert override_config.enabled is False
+    assert override_config.audit_path == audit_path
+    assert override_config.history_days == 3
+    assert override_config.min_publishable_cards == 4
+    assert override_config.min_new_cards == 2
+    assert override_config.max_previous_overlap_ratio == 0.25
+    assert override_config.min_evidence_cards == 3
+
+
+def test_identity_fingerprint_uses_sanitized_url_but_content_tracks_evidence() -> None:
+    base = _gate_card(1, url="https://example.com/post?utm_source=mail&token=secret&id=7")
+    changed = {
+        **base,
+        "public_excerpt": "새로운 실험 조건과 평가 결과를 설명하는 공개 요약입니다.",
+    }
+
+    assert _card_identity_fingerprint(base) == _card_identity_fingerprint(changed)
+    assert _card_content_fingerprint(base) != _card_content_fingerprint(changed)
+    assert "secret" not in _card_identity_fingerprint(base)
+    assert "utm_source" not in _card_identity_fingerprint(base)
+
+
+def test_quality_gate_skips_when_previous_overlap_exceeds_threshold() -> None:
+    cards = [_gate_card(idx) for idx in range(7)]
+    previous = {_card_identity_fingerprint(card) for card in cards[:5]}
+    config = CardNewsQualityGateConfig(
+        min_publishable_cards=3,
+        min_new_cards=1,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=2,
+    )
+
+    evaluation = _evaluate_card_news_quality(cards, previous, config)
+
+    assert evaluation["decision"] == "skip"
+    assert "max_previous_overlap_ratio" in evaluation["reason_codes"]
+    assert evaluation["counts"]["selected"] == 7
+    assert evaluation["counts"]["repeated"] == 5
+    assert evaluation["counts"]["new"] == 2
+
+
+def test_quality_gate_allows_enough_new_publishable_evidence_cards() -> None:
+    cards = [_gate_card(idx) for idx in range(3)]
+    config = CardNewsQualityGateConfig(
+        min_publishable_cards=3,
+        min_new_cards=3,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=2,
+    )
+
+    evaluation = _evaluate_card_news_quality(cards, set(), config)
+
+    assert evaluation["decision"] == "publish"
+    assert evaluation["reason_codes"] == []
+    assert evaluation["counts"]["publishable"] == 3
+    assert evaluation["counts"]["evidence"] == 3
+
+
+def test_quality_gate_skips_skeletal_fallback_cards() -> None:
+    cards = [_gate_card(idx, evidence=False) for idx in range(3)]
+    config = CardNewsQualityGateConfig(
+        min_publishable_cards=3,
+        min_new_cards=3,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=2,
+    )
+
+    evaluation = _evaluate_card_news_quality(cards, set(), config)
+
+    assert evaluation["decision"] == "skip"
+    assert "min_publishable_cards" in evaluation["reason_codes"]
+    assert "min_evidence_cards" in evaluation["reason_codes"]
+    assert evaluation["counts"]["publishable"] == 0
+    assert evaluation["counts"]["evidence"] == 0
+
+
+def test_audit_jsonl_is_sanitized_and_history_reads_recent_publish(tmp_path) -> None:
+    audit_path = tmp_path / "card-news-audit.jsonl"
+    cards = [_gate_card(1)]
+    evaluation = {
+        "thresholds": {"min_new_cards": 1},
+        "counts": {"selected": 1, "publishable": 1, "evidence": 1, "new": 1, "repeated": 0, "overlap_ratio": 0.0},
+        "reason_codes": [],
+    }
+
+    record = _build_card_news_audit_record(
+        decision="publish",
+        payload={"date": "2026-05-09"},
+        source=tmp_path / "raw" / "newsletters" / "2026-05-09" / "items.json",
+        cards=cards,
+        evaluation=evaluation,
+        publish_metadata={"message_count": 2, "purged_count": 0},
+    )
+    _append_card_news_audit(audit_path, record)
+
+    raw = audit_path.read_text(encoding="utf-8")
+    stored = json.loads(raw)
+
+    assert stored["decision"] == "publish"
+    assert stored["source_ref"] == "2026-05-09"
+    assert stored["cards"][0]["url"] == "https://example.com/research/1"
+    assert "secret" not in raw
+    assert "utm_source" not in raw
+    assert _load_recent_published_identities(audit_path, history_days=14) == {
+        _card_identity_fingerprint(cards[0])
+    }
+
+
+def test_run_skips_before_discord_calls_when_quality_gate_fails(monkeypatch, tmp_path, capsys) -> None:
+    source = tmp_path / "items.json"
+    audit_path = tmp_path / "audit.jsonl"
+    previous_cards = [_gate_card(idx) for idx in range(5)]
+    current_cards = [*previous_cards, _gate_card(6), _gate_card(7)]
+    source.write_text(json.dumps({"date": "2026-05-09", "items": current_cards}), encoding="utf-8")
+    previous_record = _build_card_news_audit_record(
+        decision="publish",
+        payload={"date": "2026-05-08"},
+        source=tmp_path / "items-prev.json",
+        cards=previous_cards,
+        evaluation={
+            "thresholds": {},
+            "counts": {"selected": 5, "publishable": 5, "evidence": 5, "new": 5, "repeated": 0, "overlap_ratio": 0.0},
+            "reason_codes": [],
+        },
+    )
+    _append_card_news_audit(audit_path, previous_record)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_CARDS", "7")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
+
+    asyncio.run(run())
+
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert "skipped card news quality_gate" in output
+    assert records[-1]["decision"] == "skip"
+    assert "max_previous_overlap_ratio" in records[-1]["reason_codes"]
+
+
+def test_selection_used_for_gate_matches_rendered_card_count() -> None:
+    payload = {"date": "2026-05-09", "items": [_gate_card(idx) for idx in range(4)]}
+    cards = _select_cards([item for item in payload["items"] if isinstance(item, dict)], max_cards=3)
+    messages = render_card_news_messages(payload, max_cards=3)
+
+    assert len(cards) == 3
+    assert len(messages) == len(cards) + 1
+    for card in cards:
+        assert str(card["article_title"]) in "\n".join(messages)
+
+
 def _quality_card(idx: int, *, url: str | None = None, topic: str = "LLM/에이전트") -> dict[str, object]:
     return {
         "article_title": f"Agent memory evaluation {idx}",
@@ -1073,46 +1272,6 @@ def test_quality_substance_threshold_skips_skeletal_cards() -> None:
     assert result["counts"]["evidence"] == 0
     assert "min_publishable_cards" in result["reason_codes"]
     assert "min_evidence_cards" in result["reason_codes"]
-
-
-def test_quality_gate_config_defaults_and_env_overrides(monkeypatch) -> None:
-    for key in (
-        "DISCORD_CARD_NEWS_QUALITY_GATE",
-        "DISCORD_CARD_NEWS_AUDIT_PATH",
-        "DISCORD_CARD_NEWS_HISTORY_DAYS",
-        "DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS",
-        "DISCORD_CARD_NEWS_MIN_NEW_CARDS",
-        "DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO",
-        "DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS",
-        "NEWSLETTER_WIKI_ROOT",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
-    defaults = _card_news_quality_gate_config_from_env()
-    assert defaults.enabled is True
-    assert defaults.history_days == 14
-    assert defaults.min_publishable_cards == 3
-    assert defaults.min_new_cards == 3
-    assert defaults.max_previous_overlap_ratio == 0.5
-    assert defaults.min_evidence_cards == 2
-    assert str(defaults.audit_path).endswith(".openclaw/state/discord-openclaw-bridge/card-news-publication-audit.jsonl")
-
-    monkeypatch.setenv("DISCORD_CARD_NEWS_QUALITY_GATE", "0")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", "/tmp/card-audit.jsonl")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_HISTORY_DAYS", "3")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "4")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "2")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", "0.25")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "5")
-
-    overridden = _card_news_quality_gate_config_from_env()
-    assert overridden.enabled is False
-    assert overridden.audit_path == Path("/tmp/card-audit.jsonl")
-    assert overridden.history_days == 3
-    assert overridden.min_publishable_cards == 4
-    assert overridden.min_new_cards == 2
-    assert overridden.max_previous_overlap_ratio == 0.25
-    assert overridden.min_evidence_cards == 5
 
 
 def test_quality_audit_jsonl_is_sanitized(tmp_path: Path) -> None:
