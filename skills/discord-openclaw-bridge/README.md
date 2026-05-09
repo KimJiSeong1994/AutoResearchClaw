@@ -136,6 +136,18 @@ Operational controls:
 - `DISCORD_CARD_NEWS_MAX_CARDS` defaults to `8` to keep the Discord thread compact.
 - `DISCORD_CARD_NEWS_HERO_IMAGE_PATH` optionally attaches a PNG hero image when posting to a Discord forum channel.
 - `DISCORD_PURGE_PREVIOUS_CARD_NEWS` defaults to enabled; previous bot-authored card-news posts/active threads are removed before reposting.
+- `DISCORD_CARD_NEWS_QUALITY_GATE` defaults to enabled (`1`). Set it to `0` to roll back to the previous publish behavior without novelty/substance gating.
+- `DISCORD_CARD_NEWS_AUDIT_PATH` optionally overrides the JSONL audit/history path. If unset, the path is `$NEWSLETTER_WIKI_ROOT/state/card-news-publication-audit.jsonl`, or `~/.openclaw/state/discord-openclaw-bridge/card-news-publication-audit.jsonl` when `NEWSLETTER_WIKI_ROOT` is unset.
+- `DISCORD_CARD_NEWS_HISTORY_DAYS` defaults to `14`; only recent successful `decision=publish` audit records are used for previous-publication overlap.
+- `DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS` defaults to `3`, `DISCORD_CARD_NEWS_MIN_NEW_CARDS` defaults to `3`, `DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS` defaults to `2`, and `DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO` defaults to `0.5`.
+
+Quality gate behavior:
+
+- The gate runs after archive load and optional public metadata enrichment, then evaluates the exact selected cards that will be rendered.
+- A skip appends one sanitized audit record, prints `skipped card news quality_gate ...`, and exits before Discord channel lookup, purge, thread creation, or message posting. Existing Discord card-news is left untouched.
+- A successful publish appends a sanitized `decision=publish` record with counts, thresholds, card fingerprints, message count, purge count, and thread ID when a forum thread is created.
+- If a Discord side effect starts and later fails, the publisher best-effort appends `decision=failure` with the failed stage and sanitized counts before propagating the error.
+- Audit records store public titles, sanitized URLs or URL hashes, topic labels, fingerprints, evidence kind/richness, counts, thresholds, and reason codes. Do not add raw Gmail bodies, secrets, tokens, webhook URLs, private env values, or unsanitized source paths to this audit.
 
 Privacy boundary: the renderer uses sanitized archive fields (`article_title`, `summary_lines`, `why_now`, `claim`, `mechanism`, `evidence`, public excerpt/description, source name, URL, topic labels/reasons). It does not read or post Gmail bodies, OAuth tokens, Script Properties, webhook URLs, relay tokens, or OpenClaw gateway secrets. Discord embeds are suppressed for posted messages.
 
@@ -161,6 +173,7 @@ Pre-publish checks:
 - Confirm `DISCORD_CARD_NEWS_SOURCE` points to a sanitized `items.json`; if unset, the script uses the latest archive under `NEWSLETTER_WIKI_ROOT/raw/newsletters/`.
 - Inspect a rendered fixture with `discord_openclaw_bridge.post_card_news.render_card_news_messages(...)` and assert no raw Gmail body snippets, OAuth tokens, Script Properties, webhook URLs, relay tokens, or gateway tokens appear.
 - Keep `DISCORD_CARD_NEWS_MAX_CARDS` small enough for a readable thread; default is `8`.
+- If the quality gate skips a legitimate urgent follow-up, temporarily relax `DISCORD_CARD_NEWS_MIN_NEW_CARDS` / `DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO` or set `DISCORD_CARD_NEWS_QUALITY_GATE=0`, then keep the audit line for follow-up calibration.
 - Review `DISCORD_PURGE_PREVIOUS_CARD_NEWS` before production posting. It defaults to enabled for replacement posts and removes prior bot-authored card-news posts/active card-news forum threads.
 - If using `DISCORD_CARD_NEWS_HERO_IMAGE_PATH`, use a non-secret PNG asset intended for public Discord posting.
 
@@ -168,6 +181,7 @@ Post-publish checks:
 
 - Confirm the header card shows date, theme, and selected/collected counts.
 - Confirm item cards keep the card-news narrative arc and suppress link embeds.
+- Confirm the audit JSONL contains exactly one sanitized decision record for the run (`publish`, `skip`, or `failure`) and no raw email text or secret-like values.
 - Confirm Discord thread/channel contains no private email text or secret configuration values.
 
 ## Invite URL
