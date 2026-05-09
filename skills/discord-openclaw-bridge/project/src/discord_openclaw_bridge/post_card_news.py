@@ -764,11 +764,6 @@ def _card_content_fingerprint(item: dict[str, Any]) -> str:
     parts = [
         _title(item),
         _clean(item.get("primary_topic_display") or GENERIC_TOPIC),
-        _clean(item.get("hook") or item.get("why_now"), limit=360),
-        _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
-        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
-        _clean(item.get("why_matters") or item.get("evidence"), limit=360),
-        " ".join(_summary_lines(item)),
         _evidence_snippet(item, limit=360),
         _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
     ]
