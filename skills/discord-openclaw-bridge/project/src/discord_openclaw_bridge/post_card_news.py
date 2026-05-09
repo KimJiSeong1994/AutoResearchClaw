@@ -764,6 +764,11 @@ def _card_content_fingerprint(item: dict[str, Any]) -> str:
     parts = [
         _title(item),
         _clean(item.get("primary_topic_display") or GENERIC_TOPIC),
+        _clean(item.get("hook") or item.get("why_now"), limit=360),
+        _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
+        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
+        _clean(item.get("why_matters") or item.get("evidence"), limit=360),
+        " ".join(_summary_lines(item)),
         _evidence_snippet(item, limit=360),
         _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
     ]
@@ -1886,7 +1891,8 @@ async def run() -> None:
     channel_raw = os.environ.get("DISCORD_CARD_NEWS_CHANNEL_ID", DEFAULT_CARD_NEWS_CHANNEL_ID).strip()
     os.environ["DISCORD_CARD_NEWS_CHANNEL_ID"] = channel_raw
     channel_id = _required_snowflake("DISCORD_CARD_NEWS_CHANNEL_ID")
-    source = Path(os.environ.get("DISCORD_CARD_NEWS_SOURCE", str(_latest_archive_path()))).expanduser()
+    source_raw = os.environ.get("DISCORD_CARD_NEWS_SOURCE", "").strip()
+    source = Path(source_raw).expanduser() if source_raw else _latest_archive_path()
     max_cards = int(os.environ.get("DISCORD_CARD_NEWS_MAX_CARDS", "8"))
     hero_image_raw = os.environ.get("DISCORD_CARD_NEWS_HERO_IMAGE_PATH", "").strip()
     hero_image_path = Path(hero_image_raw).expanduser() if hero_image_raw else None
