@@ -149,7 +149,26 @@ Quality gate behavior:
 - If a Discord side effect starts and later fails, the publisher best-effort appends `decision=failure` with the failed stage and sanitized counts before propagating the error.
 - Audit records store public titles, sanitized URLs or URL hashes, topic labels, fingerprints, evidence kind/richness, counts, thresholds, and reason codes. Do not add raw Gmail bodies, secrets, tokens, webhook URLs, private env values, or unsanitized source paths to this audit.
 
-Privacy boundary: the renderer uses sanitized archive fields (`article_title`, `summary_lines`, `why_now`, `claim`, `mechanism`, `evidence`, public excerpt/description, source name, URL, topic labels/reasons). It does not read or post Gmail bodies, OAuth tokens, Script Properties, webhook URLs, relay tokens, or OpenClaw gateway secrets. Discord embeds are suppressed for posted messages.
+Publication quality gate controls:
+
+- `DISCORD_CARD_NEWS_QUALITY_GATE` defaults to enabled (`1`). Set it to `0` for the fastest rollback to the previous publish behavior; leave the audit file in place unless you are intentionally resetting history.
+- `DISCORD_CARD_NEWS_HISTORY_DAYS` defaults to `14` and limits how far back the gate reads previous `decision=publish` audit records for novelty/overlap checks.
+- `DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS` defaults to `3`; skeletal fallback cards do not count toward this threshold.
+- `DISCORD_CARD_NEWS_MIN_NEW_CARDS` defaults to `3`; cards are considered new when their sanitized identity fingerprint is absent from recent published audit history.
+- `DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO` defaults to `0.5`; runs above this repeated-card ratio are skipped before Discord channel lookup, purge, thread creation, or message posting.
+- `DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS` defaults to `2` so thin/title-only selections do not become public daily card-news.
+- `DISCORD_CARD_NEWS_AUDIT_PATH` optionally overrides the JSONL audit/history file. If unset, the default path is `$NEWSLETTER_WIKI_ROOT/state/card-news-publication-audit.jsonl` when `NEWSLETTER_WIKI_ROOT` is configured, otherwise `~/.openclaw/state/discord-openclaw-bridge/card-news-publication-audit.jsonl`.
+
+Quality gate behavior:
+
+- The gate affects only public Discord card-news publication. It does not modify raw newsletter archive creation, newsletter wiki files, or the source `items.json`.
+- On a skip decision, the publisher writes a sanitized audit record, prints a one-line `skipped card news quality_gate ...` result with reason/count fields, and exits before Discord side effects. Existing card-news posts are not purged on skip.
+- Skip reason codes are threshold-oriented: not enough publishable cards, not enough evidence-backed cards, not enough new cards, or too much overlap with recent published card-news. Operators should inspect the audit record before relaxing thresholds.
+- On a publish decision, the audit record includes sanitized thresholds/counts and optional Discord result metadata such as message count, purged count, and thread id.
+- If a failure occurs after Discord side effects have begun, the publisher makes a best-effort `decision=failure` audit entry with the failed stage and sanitized counts/error class before surfacing the error. Treat this as the first place to check after a partial purge/thread/post failure.
+- Audit records must contain only public/sanitized metadata: public titles, sanitized URLs or URL hashes, topic labels, fingerprints, evidence kind/richness, thresholds, counts, reason codes, and publish metadata. They must not contain raw Gmail bodies, OAuth tokens, Discord tokens, relay/gateway tokens, webhook URLs, full env dumps, or absolute local/EC2 source paths by default.
+
+Privacy boundary: the renderer and quality gate use sanitized archive fields (`article_title`, `summary_lines`, `why_now`, `claim`, `mechanism`, `evidence`, public excerpt/description, source name, URL, topic labels/reasons). They do not read or post Gmail bodies, OAuth tokens, Script Properties, webhook URLs, relay tokens, or OpenClaw gateway secrets. Discord embeds are suppressed for posted messages.
 
 
 ## Lane3 verification checklist
