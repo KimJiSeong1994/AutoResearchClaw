@@ -34,9 +34,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _WORKSPACE = Path.home() / ".openclaw" / "workspace"
-_DEFAULT_INTAKE_PATH = _WORKSPACE / "intake" / "miner-links.jsonl"
-_DEFAULT_REVIEW_QUEUE_PATH = _WORKSPACE / "review" / "queue.jsonl"
-_DEFAULT_STATUS_PATH = _WORKSPACE / "state" / "miner-seeds-last-status.json"
+# Match the production paths used by miner_bot / review_cli (see config.py
+# `_miner_intake_path` / `_miner_review_queue_path`). Env vars take precedence
+# so cron runs and the slash-command miner converge on the same JSONLs.
+_DEFAULT_INTAKE_PATH = Path(
+    os.environ.get(
+        "JIPHYEONJEON_MINER_INTAKE_PATH",
+        str(_WORKSPACE / "intake" / "jiphyeonjeon-miner" / "links.jsonl"),
+    )
+).expanduser()
+_DEFAULT_REVIEW_QUEUE_PATH = Path(
+    os.environ.get(
+        "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
+        str(_WORKSPACE / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"),
+    )
+).expanduser()
+_DEFAULT_STATUS_PATH = Path(
+    os.environ.get(
+        "MINER_SEEDS_STATUS_PATH",
+        str(_WORKSPACE / "state" / "miner-seeds-last-status.json"),
+    )
+).expanduser()
 
 
 def _write_last_status(

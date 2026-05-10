@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Callable
-from urllib.request import Request, urlopen
 
 from .miner import (
     _COLLECTION_FETCH_TIMEOUT_SEC,
     _COLLECTION_USER_AGENT,
+    _safe_url_open,
     clean_text,
 )
 
@@ -83,9 +83,8 @@ def _fetch_html_default(
     user_agent: str,
     max_bytes: int,
 ) -> str:
-    """Fetch up to *max_bytes* of HTML using urllib (no external deps)."""
-    request = Request(url, headers={"User-Agent": user_agent, "Accept": "text/html"})
-    with urlopen(request, timeout=timeout_sec) as response:
+    """Fetch up to *max_bytes* of HTML, blocking SSRF via redirect re-validation."""
+    with _safe_url_open(url, timeout=timeout_sec, user_agent=user_agent) as response:
         content_type = response.headers.get("Content-Type", "")
         if content_type and "html" not in content_type.lower():
             return ""

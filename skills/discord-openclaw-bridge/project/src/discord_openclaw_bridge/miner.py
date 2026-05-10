@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 try:
     import fcntl
@@ -249,9 +250,32 @@ def extract_urls(text: object) -> list[str]:
     return urls
 
 
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    """Re-validate every 3xx Location through sanitize_url before following.
+
+    Defends against SSRF where a public-looking seed/article URL responds with
+    a redirect to a private host (e.g. AWS instance metadata at 169.254.169.254
+    or RFC1918 ranges). The default HTTPRedirectHandler only checks scheme; it
+    has no host-allowlist. We rebuild the redirect Request through sanitize_url
+    which runs the same _public_host check used at intake time.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        safe = sanitize_url(newurl)
+        if not safe:
+            raise HTTPError(req.full_url, code, "redirect blocked: unsafe target", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, safe)
+
+
+def _safe_url_open(url: str, *, timeout: float, user_agent: str):
+    """Open *url* with redirect targets re-validated against sanitize_url."""
+    request = Request(url, headers={"User-Agent": user_agent, "Accept": "text/html"})
+    opener = build_opener(_SafeRedirectHandler())
+    return opener.open(request, timeout=timeout)
+
+
 def _fetch_public_html(url: str) -> str:
-    request = Request(url, headers={"User-Agent": _COLLECTION_USER_AGENT, "Accept": "text/html"})
-    with urlopen(request, timeout=_COLLECTION_FETCH_TIMEOUT_SEC) as response:
+    with _safe_url_open(url, timeout=_COLLECTION_FETCH_TIMEOUT_SEC, user_agent=_COLLECTION_USER_AGENT) as response:
         content_type = response.headers.get("Content-Type", "")
         if content_type and "html" not in content_type.lower():
             return ""

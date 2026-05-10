@@ -56,9 +56,29 @@ def test_title_with_errors_uses_alert_emoji() -> None:
 
 
 def test_title_zero_accepted_no_errors_uses_warning_emoji() -> None:
-    payload = {**_HEALTHY, "total_accepted": 0, "seeds_with_errors": 0}
+    """Zero accepted with no cooldown skips signals an unexpected dry run."""
+    payload = {
+        **_HEALTHY,
+        "total_accepted": 0,
+        "seeds_with_errors": 0,
+        "seeds_skipped_cooldown": 0,
+    }
     title = _format_thread_title(payload)
     assert title.startswith("⚠️")
+
+
+def test_title_all_skipped_cooldown_uses_pause_emoji_not_warning() -> None:
+    """Healthy cooldown is not an alert — ⏸️ avoids alert-fatigue noise."""
+    payload = {
+        **_HEALTHY,
+        "total_accepted": 0,
+        "seeds_with_errors": 0,
+        "seeds_total": 1,
+        "seeds_skipped_cooldown": 1,
+    }
+    title = _format_thread_title(payload)
+    assert title.startswith("⏸️")
+    assert "⚠️" not in title
 
 
 def test_body_healthy_includes_summary_and_paths() -> None:

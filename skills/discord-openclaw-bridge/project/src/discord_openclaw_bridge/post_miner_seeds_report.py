@@ -57,8 +57,15 @@ def _format_thread_title(payload: dict) -> str:
     date_label = _kst_today_label(payload.get("run_at", ""))
     errors = int(payload.get("seeds_with_errors", 0))
     accepted = int(payload.get("total_accepted", 0))
+    seeds_total = int(payload.get("seeds_total", 0))
+    seeds_skipped = int(payload.get("seeds_skipped_cooldown", 0))
     if errors:
         prefix = "🚨"
+    elif seeds_total > 0 and seeds_skipped == seeds_total:
+        # Healthy cooldown — every seed is within its 24h window. Avoid the ⚠️
+        # alert emoji here so operators don't suffer alert fatigue on the most
+        # common day-after-deploy state.
+        prefix = "⏸️"
     elif accepted == 0:
         prefix = "⚠️"
     else:

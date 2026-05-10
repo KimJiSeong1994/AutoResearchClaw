@@ -363,3 +363,74 @@ def test_record_miner_link_falls_back_to_note(tmp_path: Path) -> None:
     assert result.accepted
     row = _read_jsonl(intake_path)[0]
     assert row["summary"] == "Fallback note when no summary provided"
+
+
+# ---------------------------------------------------------------------------
+# SSRF redirect guard (security review fix)
+# ---------------------------------------------------------------------------
+
+
+def _stub_redirect_args(start_url: str, target_url: str):
+    """Build the positional args HTTPRedirectHandler.redirect_request expects.
+
+    Uses io.BytesIO so the temp-file cleanup hook in CPython's tempfile
+    module (HTTPError keeps a reference to the fp) finds a real .close()
+    and does not emit a PytestUnraisableExceptionWarning.
+    """
+    import io
+
+    from urllib.request import Request
+
+    req = Request(start_url, headers={"User-Agent": "test"})
+    return req, io.BytesIO(b""), 302, "Found", {}, target_url
+
+
+def test_safe_redirect_handler_blocks_aws_metadata_target() -> None:
+    """SSRF guard: a 3xx Location pointing at AWS IMDSv1 must be rejected."""
+    from urllib.error import HTTPError
+
+    handler = miner_module._SafeRedirectHandler()
+    args = _stub_redirect_args(
+        "https://www.nature.com/articles/s41586-024-00001-0",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    )
+
+    try:
+        handler.redirect_request(*args)
+    except HTTPError as exc:
+        assert exc.code == 302
+        assert "redirect blocked" in (exc.reason or str(exc.msg) or "").lower()
+    else:
+        raise AssertionError("expected redirect to private metadata IP to raise HTTPError")
+
+
+def test_safe_redirect_handler_blocks_rfc1918_target() -> None:
+    """SSRF guard: a 3xx Location pointing at an internal LAN host must be rejected."""
+    from urllib.error import HTTPError
+
+    handler = miner_module._SafeRedirectHandler()
+    args = _stub_redirect_args(
+        "https://www.nature.com/articles/s41586-024-00001-0",
+        "http://10.0.0.42/admin",
+    )
+
+    try:
+        handler.redirect_request(*args)
+    except HTTPError as exc:
+        assert exc.code == 302
+    else:
+        raise AssertionError("expected redirect to RFC1918 address to raise HTTPError")
+
+
+def test_safe_redirect_handler_allows_public_https_target() -> None:
+    """SSRF guard must still let legitimate http→https / canonical redirects through."""
+    handler = miner_module._SafeRedirectHandler()
+    args = _stub_redirect_args(
+        "http://www.nature.com/articles/s41586-024-00001-0",
+        "https://www.nature.com/articles/s41586-024-00001-0",
+    )
+
+    redirected = handler.redirect_request(*args)
+
+    assert redirected is not None
+    assert redirected.full_url.startswith("https://www.nature.com/")

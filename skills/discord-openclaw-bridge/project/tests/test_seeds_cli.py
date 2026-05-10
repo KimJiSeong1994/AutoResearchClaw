@@ -177,3 +177,55 @@ def test_cli_status_file_records_errors_and_cooldown(
     assert payload["seeds_skipped_cooldown"] == 1
     assert payload["total_accepted"] == 0
     assert any(s.get("error") == "empty_expansion" for s in payload["summaries"])
+
+
+# ---------------------------------------------------------------------------
+# Production default-path alignment (review fix A3)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_defaults_match_production_intake_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default intake / review-queue paths must align with miner_bot / review_cli.
+
+    Without this contract the cron-driven seed expander writes to a different
+    JSONL than the slash-command miner reads from, so seed records become
+    invisible to the Claw review pipeline.
+    """
+    monkeypatch.delenv("JIPHYEONJEON_MINER_INTAKE_PATH", raising=False)
+    monkeypatch.delenv("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", raising=False)
+    monkeypatch.delenv("MINER_SEEDS_STATUS_PATH", raising=False)
+
+    import importlib
+    import discord_openclaw_bridge.seeds_cli as cli_module
+    importlib.reload(cli_module)
+
+    expected_intake = Path.home() / ".openclaw" / "workspace" / "intake" / "jiphyeonjeon-miner" / "links.jsonl"
+    expected_review = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"
+    expected_status = Path.home() / ".openclaw" / "workspace" / "state" / "miner-seeds-last-status.json"
+
+    assert cli_module._DEFAULT_INTAKE_PATH == expected_intake
+    assert cli_module._DEFAULT_REVIEW_QUEUE_PATH == expected_review
+    assert cli_module._DEFAULT_STATUS_PATH == expected_status
+
+
+def test_cli_defaults_honor_production_env_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The production env vars used by miner_bot/config.py must override defaults."""
+    custom_intake = tmp_path / "custom-intake.jsonl"
+    custom_review = tmp_path / "custom-review.jsonl"
+    custom_status = tmp_path / "custom-status.json"
+
+    monkeypatch.setenv("JIPHYEONJEON_MINER_INTAKE_PATH", str(custom_intake))
+    monkeypatch.setenv("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", str(custom_review))
+    monkeypatch.setenv("MINER_SEEDS_STATUS_PATH", str(custom_status))
+
+    import importlib
+    import discord_openclaw_bridge.seeds_cli as cli_module
+    importlib.reload(cli_module)
+
+    assert cli_module._DEFAULT_INTAKE_PATH == custom_intake
+    assert cli_module._DEFAULT_REVIEW_QUEUE_PATH == custom_review
+    assert cli_module._DEFAULT_STATUS_PATH == custom_status
