@@ -8,8 +8,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import os
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from discord_openclaw_bridge.article_metadata import fetch_article_metadata
@@ -32,6 +36,50 @@ logger = logging.getLogger(__name__)
 _WORKSPACE = Path.home() / ".openclaw" / "workspace"
 _DEFAULT_INTAKE_PATH = _WORKSPACE / "intake" / "miner-links.jsonl"
 _DEFAULT_REVIEW_QUEUE_PATH = _WORKSPACE / "review" / "queue.jsonl"
+_DEFAULT_STATUS_PATH = _WORKSPACE / "state" / "miner-seeds-last-status.json"
+
+
+def _write_last_status(
+    path: Path,
+    *,
+    summaries: list[SeedRunSummary],
+    run_at: str,
+    duration_sec: float,
+    intake_path: Path,
+    review_queue_path: Path,
+) -> None:
+    """Atomically write the last-run status JSON for downstream reporters."""
+
+    payload = {
+        "run_at": run_at,
+        "duration_sec": round(duration_sec, 2),
+        "seeds_total": len(summaries),
+        "seeds_processed": sum(1 for s in summaries if not s.skipped_cooldown and not s.error),
+        "seeds_skipped_cooldown": sum(1 for s in summaries if s.skipped_cooldown),
+        "seeds_with_errors": sum(1 for s in summaries if s.error),
+        "total_expanded": sum(s.expanded_count for s in summaries),
+        "total_accepted": sum(s.accepted for s in summaries),
+        "total_duplicate": sum(s.duplicate for s in summaries),
+        "total_rejected": sum(s.rejected for s in summaries),
+        "intake_path": str(intake_path),
+        "review_queue_path": str(review_queue_path),
+        "summaries": [
+            {
+                "seed_url": s.seed_url,
+                "expanded_count": s.expanded_count,
+                "accepted": s.accepted,
+                "duplicate": s.duplicate,
+                "rejected": s.rejected,
+                "skipped_cooldown": s.skipped_cooldown,
+                "error": s.error,
+            }
+            for s in summaries
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -76,6 +124,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=_DEFAULT_REVIEW_QUEUE_PATH,
         help=f"Path to review queue JSONL (default: {_DEFAULT_REVIEW_QUEUE_PATH})",
+    )
+    parser.add_argument(
+        "--status-path",
+        type=Path,
+        default=_DEFAULT_STATUS_PATH,
+        help=f"Path to last-status JSON (default: {_DEFAULT_STATUS_PATH})",
     )
     return parser
 
@@ -126,6 +180,8 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("[dry-run] done — no network calls or writes performed")
         return
 
+    started = time.monotonic()
+    run_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     summaries = expand_seeds(
         seeds=seeds,
         intake_path=args.intake_path,
@@ -133,15 +189,27 @@ def main(argv: list[str] | None = None) -> None:
         state_path=args.state_path,
         fetch_metadata=_fetch_meta_wrapper,
     )
+    duration_sec = time.monotonic() - started
     _log_summaries(summaries)
+
+    _write_last_status(
+        args.status_path,
+        summaries=summaries,
+        run_at=run_at,
+        duration_sec=duration_sec,
+        intake_path=args.intake_path,
+        review_queue_path=args.review_queue_path,
+    )
 
     errors = sum(1 for s in summaries if s.error)
     total_accepted = sum(s.accepted for s in summaries)
     logger.info(
-        "Run complete: %d seed(s), %d accepted, %d error(s)",
+        "Run complete: %d seed(s), %d accepted, %d error(s) in %.1fs (status=%s)",
         len(summaries),
         total_accepted,
         errors,
+        duration_sec,
+        args.status_path,
     )
     if errors:
         sys.exit(1)

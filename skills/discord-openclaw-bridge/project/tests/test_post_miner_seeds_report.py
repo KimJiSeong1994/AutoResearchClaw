@@ -1,0 +1,149 @@
+"""Tests for discord_openclaw_bridge.post_miner_seeds_report.
+
+Cover the pure formatters (`_format_thread_title`, `_format_thread_body`).
+Discord HTTP I/O is exercised live in production; unit tests stay offline.
+"""
+from __future__ import annotations
+
+from discord_openclaw_bridge.post_miner_seeds_report import (
+    DISCORD_THREAD_TITLE_LIMIT,
+    _format_thread_body,
+    _format_thread_title,
+)
+
+
+_HEALTHY = {
+    "run_at": "2026-05-10T21:00:23Z",
+    "duration_sec": 49.3,
+    "seeds_total": 1,
+    "seeds_processed": 1,
+    "seeds_skipped_cooldown": 0,
+    "seeds_with_errors": 0,
+    "total_expanded": 10,
+    "total_accepted": 10,
+    "total_duplicate": 0,
+    "total_rejected": 0,
+    "intake_path": "/home/ubuntu/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl",
+    "review_queue_path": "/home/ubuntu/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl",
+    "summaries": [
+        {
+            "seed_url": "https://www.nature.com/nature/articles?type=article",
+            "expanded_count": 10,
+            "accepted": 10,
+            "duplicate": 0,
+            "rejected": 0,
+            "skipped_cooldown": False,
+            "error": None,
+        }
+    ],
+}
+
+
+def test_title_healthy_uses_kst_date_and_rock_emoji() -> None:
+    title = _format_thread_title(_HEALTHY)
+    assert "Miner Seeds 2026-05-11" in title  # 21:00 UTC = 06:00 KST next day
+    assert "accepted=10" in title
+    assert "errors=0" in title
+    assert title.startswith("🪨")
+    assert len(title) <= DISCORD_THREAD_TITLE_LIMIT
+
+
+def test_title_with_errors_uses_alert_emoji() -> None:
+    payload = {**_HEALTHY, "seeds_with_errors": 1, "total_accepted": 0}
+    title = _format_thread_title(payload)
+    assert title.startswith("🚨")
+    assert "errors=1" in title
+
+
+def test_title_zero_accepted_no_errors_uses_warning_emoji() -> None:
+    payload = {**_HEALTHY, "total_accepted": 0, "seeds_with_errors": 0}
+    title = _format_thread_title(payload)
+    assert title.startswith("⚠️")
+
+
+def test_body_healthy_includes_summary_and_paths() -> None:
+    body = _format_thread_body(_HEALTHY)
+    assert "Run summary" in body
+    assert "expanded=`10`" in body
+    assert "accepted=`10`" in body
+    assert "✅ Run healthy." in body
+    assert "Per-seed" in body
+    assert "✅ `https://www.nature.com/nature/articles?type=article`" in body
+    assert "intake:" in body
+    assert "review queue:" in body
+
+
+def test_body_error_path_surfaces_error() -> None:
+    payload = {
+        **_HEALTHY,
+        "seeds_with_errors": 1,
+        "total_accepted": 0,
+        "summaries": [
+            {
+                "seed_url": "https://www.nature.com/nature/articles?type=article",
+                "expanded_count": 0,
+                "accepted": 0,
+                "duplicate": 0,
+                "rejected": 0,
+                "skipped_cooldown": False,
+                "error": "empty_expansion",
+            }
+        ],
+    }
+    body = _format_thread_body(payload)
+    assert "❌ Some seeds failed" in body
+    assert "error: `empty_expansion`" in body
+
+
+def test_body_all_skipped_cooldown_path() -> None:
+    payload = {
+        **_HEALTHY,
+        "seeds_total": 2,
+        "seeds_processed": 0,
+        "seeds_skipped_cooldown": 2,
+        "seeds_with_errors": 0,
+        "total_expanded": 0,
+        "total_accepted": 0,
+        "summaries": [
+            {
+                "seed_url": "https://a/",
+                "expanded_count": 0,
+                "accepted": 0,
+                "duplicate": 0,
+                "rejected": 0,
+                "skipped_cooldown": True,
+                "error": None,
+            },
+            {
+                "seed_url": "https://b/",
+                "expanded_count": 0,
+                "accepted": 0,
+                "duplicate": 0,
+                "rejected": 0,
+                "skipped_cooldown": True,
+                "error": None,
+            },
+        ],
+    }
+    body = _format_thread_body(payload)
+    assert "⏸️ All seeds skipped (cooldown active)" in body
+    assert body.count("⏸️ `") == 2  # both per-seed lines
+
+
+def test_body_truncated_when_too_long() -> None:
+    long_summaries = [
+        {
+            "seed_url": f"https://example.com/{i}",
+            "expanded_count": 1,
+            "accepted": 1,
+            "duplicate": 0,
+            "rejected": 0,
+            "skipped_cooldown": False,
+            "error": None,
+        }
+        for i in range(200)
+    ]
+    payload = {**_HEALTHY, "summaries": long_summaries}
+    body = _format_thread_body(payload)
+    assert len(body) <= 2000
+    assert body.endswith("...")

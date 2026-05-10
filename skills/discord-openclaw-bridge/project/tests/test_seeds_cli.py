@@ -101,14 +101,79 @@ def test_cli_expand_runs_and_persists_state(
 
     monkeypatch.setattr(cli_module, "expand_seeds", _mock_expand_seeds)
 
+    status_path = tmp_path / "status.json"
     main(
         [
             "--seeds-path", str(seeds_path),
             "--state-path", str(state_path),
             "--intake-path", str(intake_path),
             "--review-queue-path", str(review_path),
+            "--status-path", str(status_path),
         ]
     )
 
     assert len(captured_calls) == 1
     assert state_path.exists()
+    assert status_path.exists(), "status JSON must be written after default-mode run"
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["seeds_total"] == 1
+    assert payload["total_accepted"] == 5
+    assert payload["seeds_with_errors"] == 0
+    assert payload["summaries"][0]["seed_url"] == _NATURE_SEED["url"]
+    assert payload["summaries"][0]["accepted"] == 5
+    assert "run_at" in payload and payload["run_at"].endswith("Z")
+
+
+def test_cli_status_file_records_errors_and_cooldown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Status JSON must surface error and cooldown skip counts for the reporter."""
+    import discord_openclaw_bridge.seeds_cli as cli_module
+    from discord_openclaw_bridge.seeds import SeedRunSummary
+
+    seeds_path = tmp_path / "seeds.json"
+    status_path = tmp_path / "status.json"
+    other_seed = {**_NATURE_SEED, "url": "https://www.alphaxiv.org/"}
+    _write_seeds(seeds_path, [_NATURE_SEED, other_seed])
+
+    def _mock_expand_seeds(**_: object) -> list[SeedRunSummary]:
+        return [
+            SeedRunSummary(
+                seed_url=_NATURE_SEED["url"],
+                expanded_count=0,
+                accepted=0,
+                duplicate=0,
+                rejected=0,
+                skipped_cooldown=False,
+                error="empty_expansion",
+            ),
+            SeedRunSummary(
+                seed_url=other_seed["url"],
+                expanded_count=0,
+                accepted=0,
+                duplicate=0,
+                rejected=0,
+                skipped_cooldown=True,
+            ),
+        ]
+
+    monkeypatch.setattr(cli_module, "expand_seeds", _mock_expand_seeds)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "--seeds-path", str(seeds_path),
+                "--state-path", str(tmp_path / "state.json"),
+                "--intake-path", str(tmp_path / "intake.jsonl"),
+                "--review-queue-path", str(tmp_path / "review.jsonl"),
+                "--status-path", str(status_path),
+            ]
+        )
+    assert excinfo.value.code == 1
+
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["seeds_total"] == 2
+    assert payload["seeds_with_errors"] == 1
+    assert payload["seeds_skipped_cooldown"] == 1
+    assert payload["total_accepted"] == 0
+    assert any(s.get("error") == "empty_expansion" for s in payload["summaries"])

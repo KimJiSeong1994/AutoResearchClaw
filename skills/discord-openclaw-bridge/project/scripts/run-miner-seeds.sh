@@ -31,5 +31,13 @@ if [ "${MINER_SEEDS_DRY_RUN:-0}" = "1" ]; then
     exit 0
 fi
 
-.venv/bin/discord-openclaw-miner-seeds
-printf "[%s] miner-seeds done\n" "$(date -Is)"
+CLI_EXIT=0
+.venv/bin/discord-openclaw-miner-seeds || CLI_EXIT=$?
+printf "[%s] miner-seeds done (exit=%s)\n" "$(date -Is)" "${CLI_EXIT}"
+
+if [ "${MINER_SEEDS_SKIP_DISCORD_REPORT:-0}" != "1" ]; then
+    .venv/bin/discord-openclaw-post-miner-seeds-report || \
+        printf "[%s] WARN miner-seeds discord report failed (continuing)\n" "$(date -Is)"
+fi
+
+exit "${CLI_EXIT}"
