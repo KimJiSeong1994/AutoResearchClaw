@@ -11,7 +11,6 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
@@ -20,7 +19,8 @@ from paper_recommender import daily_research as dr_mod
 from paper_recommender.clustering import Cluster, ClusterResult
 from paper_recommender.daily_research import RunResult, run_daily_research
 from paper_recommender.deep_bridge import DeepReport
-from paper_recommender.sources import CandidateItem, SourceLimits
+from paper_recommender.sources import CandidateItem
+from paper_recommender.sources._util import normalize_title_for_dedup
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -302,8 +302,6 @@ def test_pipeline_records_deep_seen_only_for_successful_runs(tmp_path: Path, mon
     asyncio.run(run_daily_research(config, dry_run=False, **_factories()))
 
     from paper_recommender.state import StateStore
-    from paper_recommender.sources._util import normalize_title_for_dedup
-
     store = StateStore(tmp_path / "state")
     seen = store.load_deep_seen()
     # The successful cluster's key (from "Even cluster" label) should be present.
@@ -321,7 +319,6 @@ def test_pipeline_skips_deep_seen_clusters(tmp_path: Path, monkeypatch) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir(exist_ok=True)
     from paper_recommender.state import StateStore
-    from paper_recommender.sources._util import normalize_title_for_dedup
     StateStore(state_dir).record_deep_seen([normalize_title_for_dedup("Even cluster")])
 
     seen_deep_calls: list[list[Cluster]] = []
@@ -446,9 +443,17 @@ def test_last_run_status_json_written_on_success(tmp_path: Path, monkeypatch) ->
     assert status["used_fallback"] is False
     assert status["dry_run"] is False
     assert "timestamp" in status
+    assert status["run_id"].startswith("daily-research-")
     assert "wall_clock_sec" in status
     assert status["seed_topic_count"] >= 1
     assert status["source_stats"] == {"arxiv": 4}
+    events_path = tmp_path / "state" / "runtime_events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["started", "completed"]
+    assert events[0]["job_id"] == "paper-recommender-daily-research"
+    assert events[0]["run_id"] == status["run_id"]
+    assert events[1]["run_id"] == status["run_id"]
+    assert events[1]["candidate_count"] == 4
 
 
 def test_last_run_status_written_on_dry_run_too(tmp_path: Path, monkeypatch) -> None:
@@ -462,6 +467,58 @@ def test_last_run_status_written_on_dry_run_too(tmp_path: Path, monkeypatch) -> 
     assert status_path.exists()
     status = json.loads(status_path.read_text())
     assert status["dry_run"] is True
+
+
+def test_runtime_event_failed_written_on_pipeline_error(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+
+    def bad_adapter_factory(enabled, jiphy_client):
+        raise RuntimeError("adapter boom\nwith details")
+
+    factories = _factories()
+    factories["_adapter_factory"] = bad_adapter_factory
+
+    with pytest.raises(RuntimeError, match="adapter boom"):
+        asyncio.run(run_daily_research(config, dry_run=True, **factories))
+
+    events_path = tmp_path / "state" / "runtime_events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["started", "failed"]
+    assert events[1]["error_type"] == "RuntimeError"
+    assert events[1]["error"] == "adapter boom with details"
+    assert events[1]["run_id"] == events[0]["run_id"]
+
+
+def test_runtime_event_append_failure_is_fatal(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+
+    def fail_append(self, entry):
+        raise OSError("state unwritable")
+
+    monkeypatch.setattr(dr_mod.StateStore, "append_runtime_event", fail_append)
+
+    with pytest.raises(OSError, match="state unwritable"):
+        asyncio.run(run_daily_research(config, dry_run=True, **_factories()))
+
+
+def test_same_second_runs_get_distinct_run_ids(tmp_path: Path, monkeypatch) -> None:
+    config = _write_config(tmp_path)
+    monkeypatch.setenv("JIPHY_TEST_TOKEN", "x")
+    monkeypatch.setenv("OPENCLAW_TEST_TOKEN", "x")
+    fixed_now = datetime(2026, 5, 2, 7, 0, 0, tzinfo=timezone.utc)
+
+    asyncio.run(run_daily_research(config, dry_run=True, _now=lambda: fixed_now, **_factories()))
+    asyncio.run(run_daily_research(config, dry_run=True, _now=lambda: fixed_now, **_factories()))
+
+    events_path = tmp_path / "state" / "runtime_events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    started_run_ids = [event["run_id"] for event in events if event["event"] == "started"]
+    assert len(started_run_ids) == 2
+    assert len(set(started_run_ids)) == 2
 
 
 def test_seed_topics_sorted_newest_bookmark_first(tmp_path: Path, monkeypatch) -> None:
@@ -531,7 +588,6 @@ def test_seed_topics_dedupe_bookmarks_and_explicit(tmp_path: Path, monkeypatch) 
 
     seeds = captured_topics[0]
     # Each topic should appear at most once after normalization
-    from paper_recommender.sources._util import normalize_title_for_dedup
     keys = [normalize_title_for_dedup(t) for t in seeds]
     assert len(keys) == len(set(keys))
     # Should contain bookmarks (diffusion, transformer) + explicit (graph...)

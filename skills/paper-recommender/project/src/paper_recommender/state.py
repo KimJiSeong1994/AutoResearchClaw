@@ -1,33 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+from paper_recommender.persistence import append_jsonl_record, atomic_write_text
 
 
 def _utcnow() -> datetime:
@@ -56,6 +35,10 @@ class StateStore:
     @property
     def run_log_path(self) -> Path:
         return self.root / "runs.jsonl"
+
+    @property
+    def runtime_events_path(self) -> Path:
+        return self.root / "runtime_events.jsonl"
 
     @property
     def ab_log_path(self) -> Path:
@@ -109,10 +92,9 @@ class StateStore:
         if not records:
             return
         ts = _utcnow().isoformat(timespec="seconds")
-        with self.feedback_log_path.open("a", encoding="utf-8") as f:
-            for r in records:
-                payload = {**r, "processed_at": ts}
-                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        for r in records:
+            payload = {**r, "processed_at": ts}
+            append_jsonl_record(self.feedback_log_path, payload)
 
     @property
     def soul_meta_path(self) -> Path:
@@ -130,7 +112,7 @@ class StateStore:
 
     def save_soul(self, user_id: str, md: str) -> None:
         self.souls_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write(self.soul_path(user_id), md)
+        atomic_write_text(self.soul_path(user_id), md)
 
     def load_soul_meta(self) -> dict[str, Any]:
         if not self.soul_meta_path.exists():
@@ -141,7 +123,7 @@ class StateStore:
             return {}
 
     def save_soul_meta(self, meta: dict[str, Any]) -> None:
-        _atomic_write(self.soul_meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        atomic_write_text(self.soul_meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
     def last_soul_update(self, user_id: str) -> str | None:
         entry = self.load_soul_meta().get(user_id, {})
@@ -188,13 +170,13 @@ class StateStore:
         today = date.today().isoformat()
         for pid in paper_ids:
             seen[pid] = today
-        _atomic_write(self.seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
+        atomic_write_text(self.seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
 
     def gc_seen(self, cooldown_days: int) -> None:
         seen = self.load_seen()
         cutoff = date.today() - timedelta(days=cooldown_days * 2)
         pruned = {k: v for k, v in seen.items() if _parse_day(v) and _parse_day(v) >= cutoff}
-        _atomic_write(self.seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
+        atomic_write_text(self.seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
 
     def load_profile(self, ttl_days: int) -> dict[str, Any] | None:
         if not self.profile_path.exists():
@@ -220,7 +202,7 @@ class StateStore:
     def save_profile(self, profile: dict[str, Any]) -> None:
         profile = dict(profile)
         profile.setdefault("built_at", _utcnow().isoformat(timespec="seconds"))
-        _atomic_write(self.profile_path, json.dumps(profile, ensure_ascii=False, indent=2))
+        atomic_write_text(self.profile_path, json.dumps(profile, ensure_ascii=False, indent=2))
 
     def load_narrative(self, ttl_days: int) -> str | None:
         if not self.narrative_path.exists():
@@ -231,15 +213,16 @@ class StateStore:
         return self.narrative_path.read_text(encoding="utf-8")
 
     def save_narrative(self, md: str) -> None:
-        _atomic_write(self.narrative_path, md)
+        atomic_write_text(self.narrative_path, md)
 
     def append_run(self, entry: dict[str, Any]) -> None:
-        with self.run_log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        append_jsonl_record(self.run_log_path, entry)
+
+    def append_runtime_event(self, entry: dict[str, Any]) -> None:
+        append_jsonl_record(self.runtime_events_path, entry)
 
     def append_ab_log(self, entry: dict[str, Any]) -> None:
-        with self.ab_log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        append_jsonl_record(self.ab_log_path, entry)
 
     def load_weekly_seen(self) -> dict[str, str]:
         if not self.weekly_seen_path.exists():
@@ -261,17 +244,16 @@ class StateStore:
         today = date.today().isoformat()
         for pid in paper_ids:
             seen[pid] = today
-        _atomic_write(self.weekly_seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
+        atomic_write_text(self.weekly_seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
 
     def gc_weekly_seen(self, cooldown_days: int) -> None:
         seen = self.load_weekly_seen()
         cutoff = date.today() - timedelta(days=cooldown_days * 2)
         pruned = {k: v for k, v in seen.items() if _parse_day(v) and _parse_day(v) >= cutoff}
-        _atomic_write(self.weekly_seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
+        atomic_write_text(self.weekly_seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
 
     def append_weekly_report(self, entry: dict[str, Any]) -> None:
-        with self.weekly_report_log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        append_jsonl_record(self.weekly_report_log_path, entry)
 
     # ───── Deep-seen (cluster-level) tracking ──────────────────────────
     # Separate from paper-level ``seen.json``. Used by the daily-research
@@ -304,13 +286,13 @@ class StateStore:
         for k in cluster_keys:
             if k:
                 seen[k] = today
-        _atomic_write(self.deep_seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
+        atomic_write_text(self.deep_seen_path, json.dumps(seen, ensure_ascii=False, indent=2))
 
     def gc_deep_seen(self, cooldown_days: int) -> None:
         seen = self.load_deep_seen()
         cutoff = date.today() - timedelta(days=cooldown_days * 2)
         pruned = {k: v for k, v in seen.items() if _parse_day(v) and _parse_day(v) >= cutoff}
-        _atomic_write(self.deep_seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
+        atomic_write_text(self.deep_seen_path, json.dumps(pruned, ensure_ascii=False, indent=2))
 
     def last_weekly_report_at(self) -> str | None:
         if not self.weekly_report_log_path.exists():

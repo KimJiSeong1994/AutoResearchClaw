@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from paper_recommender.cluster_select import select_top_clusters
 from paper_recommender.clustering import (
@@ -36,6 +38,7 @@ from paper_recommender.deep_bridge import (
 from paper_recommender.jiphyeonjeon import JiphyClient
 from paper_recommender.jiphyeonjeon_auth import LoginTokenProvider, TokenProvider
 from paper_recommender.llm import OpenClawLLM
+from paper_recommender.persistence import atomic_write_text
 from paper_recommender.sources import CandidateItem, SourceAdapter, fetch_all_sources
 from paper_recommender.sources._util import normalize_title_for_dedup
 from paper_recommender.sources.canonical import to_canonical_key
@@ -126,6 +129,16 @@ async def _run_impl(
 
     store = StateStore(settings.state_dir)
     now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    run_started_iso = now_fn().isoformat(timespec="seconds")
+    run_id = _new_run_id(run_started_iso)
+    _append_daily_research_event(
+        store,
+        run_id=run_id,
+        event="started",
+        timestamp=run_started_iso,
+        dry_run=dry_run,
+        config_path=str(config_path),
+    )
 
     # Build token provider + jiphy client (with test seam)
     if token_provider_factory is None:
@@ -143,18 +156,48 @@ async def _run_impl(
     else:
         jiphy_client = client_factory(settings.jiphyeonjeon, provider)
 
-    async with jiphy_client:
-        return await _run_with_deps(
-            settings=settings,
-            store=store,
-            jiphy_client=jiphy_client,
-            t0=t0,
+    try:
+        async with jiphy_client:
+            result = await _run_with_deps(
+                settings=settings,
+                store=store,
+                jiphy_client=jiphy_client,
+                t0=t0,
+                dry_run=dry_run,
+                adapter_factory=adapter_factory,
+                embed_client_factory=embed_client_factory,
+                llm_factory=llm_factory,
+                now_fn=now_fn,
+                run_id=run_id,
+            )
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        _append_daily_research_event(
+            store,
+            run_id=run_id,
+            event="failed",
+            timestamp=now_fn().isoformat(timespec="seconds"),
             dry_run=dry_run,
-            adapter_factory=adapter_factory,
-            embed_client_factory=embed_client_factory,
-            llm_factory=llm_factory,
-            now_fn=now_fn,
+            error_type=type(exc).__name__,
+            error=_safe_error_message(exc),
         )
+        raise
+
+    _append_daily_research_event(
+        store,
+        run_id=run_id,
+        event="completed",
+        timestamp=now_fn().isoformat(timespec="seconds"),
+        dry_run=dry_run,
+        candidate_count=result.candidate_count,
+        cluster_count=result.cluster_count,
+        deep_success_count=result.deep_success_count,
+        used_fallback=result.used_fallback,
+        wall_clock_sec=result.wall_clock_sec,
+        paths_written=[str(p) for p in result.paths_written],
+    )
+    return result
 
 
 async def _run_with_deps(
@@ -168,6 +211,7 @@ async def _run_with_deps(
     embed_client_factory,
     llm_factory,
     now_fn,
+    run_id: str,
 ) -> RunResult:
     dr = settings.daily_research
     assert dr is not None
@@ -324,6 +368,7 @@ async def _run_with_deps(
         deep_attempted=len(deep_reports),
         seed_topic_count=len(seed_topics),
         dry_run=dry_run,
+        run_id=run_id,
     )
 
     return result
@@ -337,8 +382,10 @@ def _write_last_run_status(
     deep_attempted: int,
     seed_topic_count: int,
     dry_run: bool,
+    run_id: str,
 ) -> None:
     status = {
+        "run_id": run_id,
         "timestamp": run_iso,
         "dry_run": dry_run,
         "candidate_count": result.candidate_count,
@@ -352,10 +399,42 @@ def _write_last_run_status(
     }
     try:
         path = store.root / "last_run_status.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(status, ensure_ascii=False, indent=2))
+        atomic_write_text(path, json.dumps(status, ensure_ascii=False, indent=2))
     except OSError as e:
         log.warning("failed to write last_run_status.json: %s", e)
+
+
+def _append_daily_research_event(
+    store: StateStore,
+    *,
+    run_id: str,
+    event: str,
+    timestamp: str,
+    dry_run: bool,
+    **fields: Any,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "job_id": "paper-recommender-daily-research",
+        "run_id": run_id,
+        "event": event,
+        "timestamp": timestamp,
+        "dry_run": dry_run,
+        **fields,
+    }
+    store.append_runtime_event(payload)
+
+
+def _new_run_id(run_started_iso: str) -> str:
+    safe_ts = run_started_iso.replace(":", "").replace("+", "Z").replace(" ", "T")
+    return f"daily-research-{safe_ts}-{os.getpid()}-{uuid4().hex[:12]}"
+
+
+def _safe_error_message(exc: BaseException, *, limit: int = 500) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    if len(message) > limit:
+        return message[: limit - 1] + "…"
+    return message
 
 
 # ─────────────── helpers ───────────────
