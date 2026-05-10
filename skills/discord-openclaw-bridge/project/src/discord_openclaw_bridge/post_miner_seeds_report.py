@@ -27,6 +27,31 @@ FORUM_CHANNEL_TYPE = 15
 DISCORD_MESSAGE_LIMIT = 2000
 DISCORD_THREAD_TITLE_LIMIT = 90
 
+# Agent identity. Mirrors the 광부/클로 (jiphyeonjeon-miner / jiphyeonjeon-claw)
+# pattern. The guard agent owns the daily ops-report posting only — it does not
+# review records or curate content.
+AGENT_ID = "jiphyeonjeon-guard"
+AGENT_DISPLAY_NAME = "집현전-경비원"
+
+
+def _resolve_bot_token() -> tuple[str, str]:
+    """Return ``(token, source_label)``, preferring the dedicated guard bot.
+
+    Falls back to the main bridge bot token so the report does not silently
+    stop posting if the operator hasn't yet provisioned the guard application.
+    The label is used in logs to make the active identity obvious.
+    """
+
+    guard_token = os.environ.get("DISCORD_GUARD_BOT_TOKEN", "").strip()
+    if guard_token:
+        return guard_token, "guard"
+    bridge_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+    if bridge_token:
+        return bridge_token, "bridge-fallback"
+    raise ReportConfigError(
+        "missing DISCORD_GUARD_BOT_TOKEN (preferred) and DISCORD_BOT_TOKEN (fallback)"
+    )
+
 
 class ReportConfigError(RuntimeError):
     """Raised when required runtime configuration is missing."""
@@ -129,6 +154,8 @@ def _format_thread_body(payload: dict) -> str:
         if review:
             lines.append(f"- review queue: `{review}`")
 
+    lines += ["", f"_Reported by {AGENT_DISPLAY_NAME} (`{AGENT_ID}`)._"]
+
     body = "\n".join(lines)
     if len(body) > DISCORD_MESSAGE_LIMIT:
         body = body[: DISCORD_MESSAGE_LIMIT - 3].rstrip() + "..."
@@ -169,9 +196,13 @@ async def _post_forum_thread(
 async def run() -> None:
     _load_dotenv(Path.cwd() / ".env")
 
-    token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    if not token:
-        raise ReportConfigError("missing required env var: DISCORD_BOT_TOKEN")
+    token, token_source = _resolve_bot_token()
+    if token_source == "bridge-fallback":
+        logger.warning(
+            "DISCORD_GUARD_BOT_TOKEN not set — falling back to main bridge bot. "
+            "Posts will appear under the bridge bot's display name, not %s.",
+            AGENT_DISPLAY_NAME,
+        )
 
     channel_id = os.environ.get("DISCORD_OPS_REPORT_CHANNEL_ID", DEFAULT_OPS_REPORT_CHANNEL_ID).strip()
     if not channel_id:
@@ -198,7 +229,12 @@ async def run() -> None:
         )
 
     logger.info(
-        "posted miner-seeds report channel=%s thread=%s title=%r", channel_id, thread_id, title
+        "posted miner-seeds report channel=%s thread=%s title=%r identity=%s (%s)",
+        channel_id,
+        thread_id,
+        title,
+        AGENT_ID,
+        token_source,
     )
 
 

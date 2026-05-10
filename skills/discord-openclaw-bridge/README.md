@@ -14,6 +14,7 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 - `/openclaw_status` — lightweight OpenClaw health check
 - `/jiphyeonjeon_briefing` — post the latest Jiphyeonjeon-Claw AI briefing from `DISCORD_BRIEFING_SOURCE`
 - standalone `discord-jiphyeonjeon-miner.service` for running 집현전-광부 as an individual Discord bot with `DISCORD_MINER_BOT_TOKEN`
+- post-only 집현전-경비원 agent (`discord-openclaw-post-miner-seeds-report`) that publishes the daily miner-seeds run summary to the 운영리포팅 forum under its own bot identity when `DISCORD_GUARD_BOT_TOKEN` is provided
 - one-shot newsletter/card-news publishers from the installed project scripts
 - mention replies, only if `DISCORD_ENABLE_MENTION_RESPONSES=1`
 
@@ -95,6 +96,25 @@ bash project/scripts/install-miner.sh
 systemctl --user start discord-jiphyeonjeon-miner.service
 bash project/scripts/status.sh
 ```
+
+집현전-경비원 (Jiphyeonjeon-Guard) is the post-only agent that publishes the
+miner-seeds daily run summary to the 운영리포팅 forum. It is not a
+long-running service — `discord-openclaw-post-miner-seeds-report` is invoked
+once per cron firing by `scripts/run-miner-seeds.sh`. To give it a dedicated
+identity in the channel author column:
+
+1. Create a new application in the Discord Developer Portal named
+   `Jiphyeonjeon-Guard`, add a bot, copy the bot token.
+2. Set `DISCORD_GUARD_BOT_TOKEN` and `DISCORD_GUARD_CLIENT_ID` in
+   `project/.env` (mode 600).
+3. Run `bash project/scripts/invite-guard-url.sh` and open the printed URL
+   to invite the bot into the guild with view/send/forum-thread permissions.
+4. Confirm the bot appears in the 운영리포팅 forum's permission list. The
+   next miner-seeds cron firing will post under 집현전-경비원.
+
+Without `DISCORD_GUARD_BOT_TOKEN` the report falls back to the main bridge
+bot (still functional, just visually identified as the bridge instead of the
+guard agent).
 
 To publish briefings immediately after the token is configured:
 

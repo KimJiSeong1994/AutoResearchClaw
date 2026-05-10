@@ -5,10 +5,16 @@ Discord HTTP I/O is exercised live in production; unit tests stay offline.
 """
 from __future__ import annotations
 
+import pytest
+
 from discord_openclaw_bridge.post_miner_seeds_report import (
+    AGENT_DISPLAY_NAME,
+    AGENT_ID,
     DISCORD_THREAD_TITLE_LIMIT,
+    ReportConfigError,
     _format_thread_body,
     _format_thread_title,
+    _resolve_bot_token,
 )
 
 
@@ -148,6 +154,49 @@ def test_body_all_skipped_cooldown_path() -> None:
     body = _format_thread_body(payload)
     assert "⏸️ All seeds skipped (cooldown active)" in body
     assert body.count("⏸️ `") == 2  # both per-seed lines
+
+
+def test_body_includes_agent_identity_footer() -> None:
+    """Channel reader must see who is reporting — even on healthy runs."""
+    body = _format_thread_body(_HEALTHY)
+    assert AGENT_DISPLAY_NAME in body
+    assert AGENT_ID in body
+    assert AGENT_DISPLAY_NAME == "집현전-경비원"
+    assert AGENT_ID == "jiphyeonjeon-guard"
+
+
+def test_resolve_bot_token_prefers_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """집현전-경비원 token must win when both are set so the channel author
+    is the dedicated guard identity, not the bridge bot."""
+    monkeypatch.setenv("DISCORD_GUARD_BOT_TOKEN", "guard-secret-123")
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "bridge-secret-456")
+
+    token, source = _resolve_bot_token()
+
+    assert token == "guard-secret-123"
+    assert source == "guard"
+
+
+def test_resolve_bot_token_falls_back_to_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """During the rollout window the bridge token keeps the report alive,
+    but the source label must reflect the fallback for log inspection."""
+    monkeypatch.delenv("DISCORD_GUARD_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "bridge-secret-456")
+
+    token, source = _resolve_bot_token()
+
+    assert token == "bridge-secret-456"
+    assert source == "bridge-fallback"
+
+
+def test_resolve_bot_token_raises_when_neither_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DISCORD_GUARD_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+
+    with pytest.raises(ReportConfigError):
+        _resolve_bot_token()
 
 
 def test_body_truncated_when_too_long() -> None:
