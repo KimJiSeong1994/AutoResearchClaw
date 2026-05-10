@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import httpx
+from .openclaw_gateway import OpenClawGatewayClient, OpenClawGatewayPolicy
+
+
+_SYSTEM_PROMPT = (
+    "You are OpenClaw operating inside an allowlisted Discord channel. "
+    "Answer concisely, avoid exposing secrets, and ask for clarification only when necessary."
+)
 
 
 @dataclass(frozen=True)
@@ -12,34 +18,27 @@ class OpenClawClient:
     model: str
     timeout_sec: float
 
+    def _policy(self, *, timeout_sec: float | None = None) -> OpenClawGatewayPolicy:
+        return OpenClawGatewayPolicy.from_values(
+            base_url=self.base_url,
+            token=self.token,
+            primary_model=self.model,
+            timeout_sec=self.timeout_sec if timeout_sec is None else timeout_sec,
+            user_agent="discord-openclaw-bridge/0.1",
+        )
+
     async def chat(self, prompt: str) -> str:
-        body = {
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are OpenClaw operating inside an allowlisted Discord channel. "
-                        "Answer concisely, avoid exposing secrets, and ask for clarification only when necessary."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-        }
-        headers = {"Authorization": f"Bearer {self.token}"}
-        async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
-            response = await client.post(f"{self.base_url}/chat/completions", json=body, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("OpenClaw returned an unexpected chat/completions shape") from exc
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        async with OpenClawGatewayClient(self._policy()) as gateway:
+            try:
+                content = await gateway.chat_completion(self.model, messages)
+            except (KeyError, IndexError, TypeError) as exc:
+                raise RuntimeError("OpenClaw returned an unexpected chat/completions shape") from exc
         return str(content).strip() or "(empty response)"
 
     async def health(self) -> str:
-        headers = {"Authorization": f"Bearer {self.token}"}
-        async with httpx.AsyncClient(timeout=min(self.timeout_sec, 20)) as client:
-            response = await client.get(f"{self.base_url}/models", headers=headers)
-            response.raise_for_status()
-        return "ok"
+        async with OpenClawGatewayClient(self._policy(timeout_sec=min(self.timeout_sec, 20))) as gateway:
+            return await gateway.models_health()

@@ -1351,16 +1351,14 @@ def test_quality_gate_counts_agent_duplicate_indices_as_repeated() -> None:
 
 
 def test_agent_duplicate_indices_uses_openclaw_json(monkeypatch) -> None:
-    import httpx
-
     previous = _quality_card(1, url="https://arxiv.org/abs/2605.03546")
     current = dict(previous)
     current["url"] = "https://research.google/blog/amie-doctor-evaluation"
     requests: list[dict[str, object]] = []
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            pass
+    class FakeGatewayClient:
+        def __init__(self, policy):
+            self.policy = policy
 
         async def __aenter__(self):
             return self
@@ -1368,15 +1366,18 @@ def test_agent_duplicate_indices_uses_openclaw_json(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, *, json=None, headers=None):
-            requests.append({"url": url, "json": json, "headers": headers})
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": '{"duplicates":[{"current_index":0,"reason":"same_story"}]}'}}]},
-                request=httpx.Request("POST", url),
-            )
+        async def chat_completion(self, model, messages, *, temperature=0, max_tokens=None, response_format_json=False):
+            requests.append({
+                "url": self.policy.chat_url,
+                "headers": self.policy.headers,
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            })
+            return '{"duplicates":[{"current_index":0,"reason":"same_story"}]}'
 
-    monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(post_card_news, "OpenClawGatewayClient", FakeGatewayClient)
     monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "test-token")
     monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1")
 
@@ -1387,6 +1388,9 @@ def test_agent_duplicate_indices_uses_openclaw_json(monkeypatch) -> None:
     assert requests
     assert requests[0]["url"] == "http://127.0.0.1:18789/v1/chat/completions"
     assert requests[0]["headers"]["Authorization"] == "Bearer test-token"
+    assert requests[0]["model"] == "openclaw/clawbridge"
+    assert requests[0]["temperature"] == 0
+    assert requests[0]["max_tokens"] == 400
 
 
 def test_rank_agent_contexts_prefers_similar_story_over_recent_noise() -> None:

@@ -16,6 +16,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from .openclaw_gateway import (
+    OpenClawGatewayClient,
+    OpenClawGatewayPolicy,
+    is_loopback_base_url,
+)
 from .post_newsletter import (
     DISCORD_SUPPRESS_EMBEDS_FLAG,
     NewsletterPostConfigError,
@@ -1077,7 +1082,7 @@ async def _agent_duplicate_indices(
     if not token:
         return set()
     base_url = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1").strip().rstrip("/")
-    if not (base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:")):
+    if not is_loopback_base_url(base_url):
         return set()
     model = os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip() or "openclaw/clawbridge"
     current = [
@@ -1101,28 +1106,27 @@ async def _agent_duplicate_indices(
         "current_cards": current,
         "previous_cards": previous,
     }
-    body = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a conservative duplicate-publication reviewer. "
-                    "Mark duplicate only for the same article, same paper, same product announcement, "
-                    "or the same concrete story under another URL. Do not mark broad thematic overlap."
-                ),
-            },
-            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-        ],
-        "temperature": 0,
-        "max_tokens": 400,
-    }
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a conservative duplicate-publication reviewer. "
+                "Mark duplicate only for the same article, same paper, same product announcement, "
+                "or the same concrete story under another URL. Do not mark broad thematic overlap."
+            ),
+        },
+        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+    ]
+    policy = OpenClawGatewayPolicy.from_values(
+        base_url=base_url,
+        token=token,
+        primary_model=model,
+        timeout_sec=config.agent_dedupe_timeout_sec,
+        user_agent="discord-openclaw-bridge/0.1-card-news-dedupe",
+    )
     try:
-        async with httpx.AsyncClient(timeout=config.agent_dedupe_timeout_sec) as client:
-            response = await client.post(f"{base_url}/chat/completions", json=body, headers=headers)
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+        async with OpenClawGatewayClient(policy) as gateway:
+            content = await gateway.chat_completion(model, messages, temperature=0, max_tokens=400)
     except Exception:
         return set()
     data = _extract_json_object(str(content))
