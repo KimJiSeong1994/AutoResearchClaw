@@ -155,6 +155,66 @@ def test_record_message_links_expands_the_batch_index(monkeypatch, tmp_path: Pat
     assert len(_read_jsonl(intake_path)) == 2
 
 
+def test_expand_collection_links_keeps_d_prefix_nature_slug(monkeypatch) -> None:
+    """d-prefix news/editorial slugs (e.g. d41586-...) must be kept."""
+    monkeypatch.setattr(
+        miner_module,
+        "_fetch_public_html",
+        lambda _url: """
+        <a href="/articles/d41586-024-00123-4">News piece</a>
+        <a href="/articles/s41586-024-12345-6">Research paper</a>
+        """,
+    )
+    links = expand_collection_links("https://www.nature.com/nature/articles?type=article")
+    assert "https://www.nature.com/articles/d41586-024-00123-4" in links
+    assert "https://www.nature.com/articles/s41586-024-12345-6" in links
+
+
+def test_expand_collection_links_rejects_arbitrary_nature_slug(monkeypatch) -> None:
+    """Arbitrary slugs like 'the-best-paper' must not pass the narrow regex."""
+    monkeypatch.setattr(
+        miner_module,
+        "_fetch_public_html",
+        lambda _url: """
+        <a href="/articles/the-best-paper">Blog post</a>
+        <a href="/articles/some-random-article-title">Another blog</a>
+        <a href="/articles/s41586-024-12345-6">Real paper</a>
+        """,
+    )
+    links = expand_collection_links("https://www.nature.com/nature/articles?type=article")
+    # Only the structured DOI slug passes
+    assert links == ["https://www.nature.com/articles/s41586-024-12345-6"]
+
+
+def test_record_message_links_expands_nature_article_index(monkeypatch, tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+    monkeypatch.setattr(
+        miner_module,
+        "_fetch_public_html",
+        lambda _url: """
+        <a href="/articles/s41586-026-00123-4">Nature paper</a>
+        <a href="/nature/articles?type=article&page=2">Next page</a>
+        <a href="/articles/s41586-026-00123-4">duplicate</a>
+        <a href="/news/example">News</a>
+        <a href="https://www.nature.com/articles/s41586-026-00567-8">Second paper</a>
+        """,
+    )
+
+    results = record_message_links(
+        message_text="검토 부탁 https://www.nature.com/nature/articles?type=article",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert [result.url for result in results] == [
+        "https://www.nature.com/articles/s41586-026-00123-4",
+        "https://www.nature.com/articles/s41586-026-00567-8",
+    ]
+    assert [result.status for result in results] == ["accepted", "accepted"]
+    assert len(_read_jsonl(intake_path)) == 2
+
+
 def test_record_requested_links_expands_collection_url(monkeypatch, tmp_path: Path) -> None:
     intake_path = tmp_path / "links.jsonl"
     review_path = tmp_path / "queue.jsonl"
@@ -234,3 +294,72 @@ def test_record_miner_link_accepts_privacy_security_evaluation_reports(tmp_path:
 
     assert result.accepted
     assert len(_read_jsonl(intake_path)) == 1
+
+
+def test_record_miner_link_with_summary_keyword(tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    result = record_miner_link(
+        url="https://arxiv.org/abs/2401.00001",
+        title="Test Paper Title",
+        summary="Abstract text extracted from article body.",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert result.accepted
+    row = _read_jsonl(intake_path)[0]
+    assert row["summary"] == "Abstract text extracted from article body."
+
+
+def test_record_miner_link_with_published_at_keyword(tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    result = record_miner_link(
+        url="https://arxiv.org/abs/2401.00002",
+        title="Another Paper",
+        published_at="2024-01-15",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert result.accepted
+    row = _read_jsonl(intake_path)[0]
+    assert row["published_at"] == "2024-01-15"
+
+
+def test_record_miner_link_summary_overrides_note(tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    result = record_miner_link(
+        url="https://arxiv.org/abs/2401.00003",
+        title="Override Paper",
+        note="Manual note from Discord user",
+        summary="Fetched abstract overrides manual note",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert result.accepted
+    row = _read_jsonl(intake_path)[0]
+    assert row["summary"] == "Fetched abstract overrides manual note"
+
+
+def test_record_miner_link_falls_back_to_note(tmp_path: Path) -> None:
+    intake_path = tmp_path / "links.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    result = record_miner_link(
+        url="https://arxiv.org/abs/2401.00004",
+        title="Fallback Paper",
+        note="Fallback note when no summary provided",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert result.accepted
+    row = _read_jsonl(intake_path)[0]
+    assert row["summary"] == "Fallback note when no summary provided"

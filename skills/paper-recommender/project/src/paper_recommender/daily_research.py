@@ -38,6 +38,7 @@ from paper_recommender.jiphyeonjeon_auth import LoginTokenProvider, TokenProvide
 from paper_recommender.llm import OpenClawLLM
 from paper_recommender.sources import CandidateItem, SourceAdapter, fetch_all_sources
 from paper_recommender.sources._util import normalize_title_for_dedup
+from paper_recommender.sources.canonical import to_canonical_key
 from paper_recommender.sources.arxiv import ArxivAdapter
 from paper_recommender.sources.hackernews import HackerNewsAdapter
 from paper_recommender.sources.huggingface_papers import HuggingFacePapersAdapter
@@ -448,10 +449,16 @@ def _build_adapters(
 def _merge_and_dedupe(
     source_results: dict[str, list[CandidateItem]],
 ) -> list[CandidateItem]:
-    """Round-robin merge across sources with academic + non-academic dedup."""
+    """Round-robin merge across sources with canonical-key dedup.
 
-    seen_ids: set[str] = set()
-    seen_titles: set[str] = set()
+    Uses :func:`~paper_recommender.sources.canonical.to_canonical_key` for a
+    single deterministic key per item, covering arxiv IDs, DOIs (including
+    those derived from nature.com URLs), openreview forum IDs, and normalized
+    titles as a final fallback. Items with an empty key (blank title, no
+    structured id) are never deduplicated against each other.
+    """
+
+    seen: set[str] = set()
     out: list[CandidateItem] = []
 
     iters = {name: iter(items) for name, items in source_results.items()}
@@ -463,23 +470,11 @@ def _merge_and_dedupe(
             except StopIteration:
                 exhausted.append(name)
                 continue
-
-            if item.arxiv_id:
-                token = f"arxiv:{item.arxiv_id.lower()}"
-                if token in seen_ids:
-                    continue
-                seen_ids.add(token)
-            elif item.doi:
-                token = f"doi:{item.doi.lower()}"
-                if token in seen_ids:
-                    continue
-                seen_ids.add(token)
-            else:
-                t = normalize_title_for_dedup(item.title)
-                if t and t in seen_titles:
-                    continue
-                if t:
-                    seen_titles.add(t)
+            key = to_canonical_key(item)
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
             out.append(item)
         for name in exhausted:
             iters.pop(name, None)
@@ -527,6 +522,7 @@ def _serialize_item(it: CandidateItem) -> dict[str, Any]:
         "arxiv_id": it.arxiv_id,
         "doi": it.doi,
         "score": it.score,
+        "canonical_key": to_canonical_key(it),
     }
 
 

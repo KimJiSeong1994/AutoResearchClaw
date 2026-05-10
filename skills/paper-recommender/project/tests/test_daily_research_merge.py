@@ -118,6 +118,85 @@ def test_empty_title_is_kept_only_once() -> None:
     a = CandidateItem(source="hackernews", title="")
     b = CandidateItem(source="hackernews", title="")
     out = _merge_and_dedupe({"hackernews": [a, b]})
-    # Both items have normalize_title_for_dedup("") == "" → not added to seen_titles
+    # Both items have normalize_title_for_dedup("") == "" -> not added to seen_titles
     # so they both pass through. (Empty-title gating is the adapter's job.)
     assert len(out) == 2
+
+
+# ---------------------------------------------------------------------------
+# New cases per design §7.5 -- canonical_key cross-source dedup
+# ---------------------------------------------------------------------------
+
+
+def _nature(title: str, url: str) -> CandidateItem:
+    return CandidateItem(source="miner", title=title, url=url)
+
+
+def _jiph(title: str, arxiv_id: str | None = None) -> CandidateItem:
+    return CandidateItem(source="jiphyeonjeon", title=title, arxiv_id=arxiv_id)
+
+
+def test_same_arxiv_id_three_sources_collapses_to_one() -> None:
+    """Same arxiv_id from arxiv + hf_papers + jiphyeonjeon -> exactly 1 item."""
+    out = _merge_and_dedupe({
+        "arxiv": [_arxiv("Paper Z", "2401.99999")],
+        "huggingface_papers": [_hf("Paper Z (HF)", "2401.99999")],
+        "jiphyeonjeon": [_jiph("Paper Z (Jiph)", "2401.99999")],
+    })
+    assert len(out) == 1
+    # First source (round-robin order: arxiv) wins
+    assert out[0].source == "arxiv"
+
+
+def test_nature_url_deduped_with_arxiv_id_same_paper() -> None:
+    """arxiv item (arxiv_id) + nature item (URL -> doi key) are DIFFERENT keys.
+
+    A nature article URL maps to doi:10.1038/... while an arxiv item maps to
+    arxiv:.... These are different canonical keys, so both survive. This test
+    confirms they are NOT wrongly collapsed.
+    (Cross-matching arxiv <-> doi is the adapter's responsibility, out of scope.)
+    """
+    arxiv_item = _arxiv("Attention Is All You Need", "1706.03762")
+    nature_item = _nature(
+        "Attention Is All You Need (Nature)",
+        "https://www.nature.com/articles/s41586-024-12345-6",
+    )
+    out = _merge_and_dedupe({
+        "arxiv": [arxiv_item],
+        "miner": [nature_item],
+    })
+    assert len(out) == 2
+
+
+def test_two_nature_urls_same_slug_deduplicate() -> None:
+    """Two items pointing to the same nature URL collapse via derived doi key."""
+    url = "https://www.nature.com/articles/s41586-024-12345-6"
+    a = _nature("Paper (source A)", url)
+    b = _nature("Paper (source B)", url)
+    out = _merge_and_dedupe({"miner": [a], "huggingface_papers": [b]})
+    assert len(out) == 1
+
+
+def test_openreview_and_arxiv_are_different_keys() -> None:
+    """An openreview forum URL and an arxiv item produce different keys -> both kept.
+
+    canonicalization is 'same key = same paper'; openreview <-> arxiv mapping
+    is out-of-scope for this layer.
+    """
+    or_item = CandidateItem(
+        source="manual",
+        title="Flash Attention",
+        url="https://openreview.net/forum?id=FlashAttn99",
+    )
+    ax_item = _arxiv("Flash Attention", "2205.14135")
+    out = _merge_and_dedupe({"manual": [or_item], "arxiv": [ax_item]})
+    assert len(out) == 2
+
+
+def test_title_normalization_fallback_regression() -> None:
+    """Title-only dedup still works correctly after canonical_key rewrite."""
+    # Cosmetically different titles that normalize to the same string
+    a = CandidateItem(source="hackernews", title="Show HN: My Tool")
+    b = CandidateItem(source="rss", title="show hn: my tool")
+    out = _merge_and_dedupe({"hackernews": [a], "rss": [b]})
+    assert len(out) == 1

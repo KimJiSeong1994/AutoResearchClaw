@@ -84,6 +84,7 @@ _ACADEMIC_TECH_HOST_HINTS = (
     "neurips.cc",
     "openai.com",
     "openreview.net",
+    "nature.com",
     "paperswithcode.com",
     "proceedings.mlr.press",
     "pytorch.org",
@@ -284,6 +285,17 @@ def _is_the_batch_collection(url: str) -> bool:
     return host == "deeplearning.ai" and parsed.path.rstrip("/") == "/the-batch"
 
 
+def _is_nature_articles_collection(url: str) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    return (
+        host == "nature.com"
+        and parsed.path.rstrip("/") == "/nature/articles"
+        and query.get("type") == "article"
+    )
+
+
 def expand_collection_links(url: str) -> list[str]:
     """Expand supported public index pages into bounded post/paper links."""
 
@@ -296,7 +308,11 @@ def expand_collection_links(url: str) -> list[str]:
     if _is_the_batch_collection(safe_url):
         safe_url = urlunsplit(("https", "www.deeplearning.ai", "/the-batch", "", ""))
 
-    if not (_is_alphaxiv_collection(safe_url) or _is_the_batch_collection(safe_url)):
+    if not (
+        _is_alphaxiv_collection(safe_url)
+        or _is_the_batch_collection(safe_url)
+        or _is_nature_articles_collection(safe_url)
+    ):
         return []
 
     try:
@@ -315,6 +331,8 @@ def expand_collection_links(url: str) -> list[str]:
             keep = host == "alphaxiv.org" and path.startswith("/abs/") and len(path.split("/")) >= 3
         elif _is_the_batch_collection(safe_url):
             keep = host == "deeplearning.ai" and re.fullmatch(r"/the-batch/issue-\d+", path) is not None
+        elif _is_nature_articles_collection(safe_url):
+            keep = host == "nature.com" and re.fullmatch(r"/articles/[a-z]\d{4,5}-\d{3}-\d{4,5}-[\w-]+", path) is not None
         if not keep:
             continue
         canonical = urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
@@ -362,6 +380,8 @@ def record_miner_link(
     url: str,
     title: str | None = None,
     note: str | None = None,
+    summary: str | None = None,
+    published_at: str | None = None,
     intake_path: Path,
     review_queue_path: Path,
     discord: DiscordLinkMetadata | None = None,
@@ -389,6 +409,8 @@ def record_miner_link(
         url=safe_url,
         title=safe_title,
         note=note,
+        summary=summary,
+        published_at=published_at,
         discord=discord or DiscordLinkMetadata(),
         created_at=created_at,
     )
@@ -529,12 +551,15 @@ def _build_record(
     url: str,
     title: str,
     note: str | None,
+    summary: str | None = None,
+    published_at: str | None = None,
     discord: DiscordLinkMetadata,
     created_at: datetime | None,
 ) -> dict[str, Any]:
     now = created_at or datetime.now(timezone.utc)
     run_at = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    summary = clean_text(note, limit=700)
+    summary_text = clean_text(summary, limit=700) if summary is not None else clean_text(note, limit=700)
+    published = clean_text(published_at, limit=40) or run_at[:10]
     return {
         "intake_id": intake_id,
         "agent": AGENT_ID,
@@ -544,8 +569,8 @@ def _build_record(
         "intake_source": "discord",
         "title": title,
         "url": url,
-        "summary": summary,
-        "published_at": run_at[:10],
+        "summary": summary_text,
+        "published_at": published,
         "created_at": run_at,
         "tags": ["discord-link", AGENT_ID, PENDING_STATUS],
         "archive_targets": list(ARCHIVE_TARGETS),
