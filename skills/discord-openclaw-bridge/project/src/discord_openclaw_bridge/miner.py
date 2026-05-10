@@ -251,20 +251,34 @@ def extract_urls(text: object) -> list[str]:
 
 
 class _SafeRedirectHandler(HTTPRedirectHandler):
-    """Re-validate every 3xx Location through sanitize_url before following.
+    """Reject every 3xx Location whose host is non-public before following.
 
     Defends against SSRF where a public-looking seed/article URL responds with
     a redirect to a private host (e.g. AWS instance metadata at 169.254.169.254
     or RFC1918 ranges). The default HTTPRedirectHandler only checks scheme; it
-    has no host-allowlist. We rebuild the redirect Request through sanitize_url
-    which runs the same _public_host check used at intake time.
+    has no host-allowlist.
+
+    NOTE: an earlier version of this guard rebuilt the redirect target through
+    sanitize_url, but that helper also strips tracking query parameters and
+    forces lowercasing. Some upstreams (notably Nature's collection pages) add
+    a session-style query param on every redirect — sanitize_url removed it,
+    the upstream re-issued the same redirect on the next hop, and urllib aborted
+    with "redirect would lead to an infinite loop". Now we validate the host
+    only and pass the original Location through untouched.
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        safe = sanitize_url(newurl)
-        if not safe:
-            raise HTTPError(req.full_url, code, "redirect blocked: unsafe target", headers, fp)
-        return super().redirect_request(req, fp, code, msg, headers, safe)
+        try:
+            parsed = urlsplit(newurl)
+        except ValueError:
+            raise HTTPError(req.full_url, code, "redirect blocked: malformed target", headers, fp)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise HTTPError(req.full_url, code, "redirect blocked: non-http(s) scheme", headers, fp)
+        if parsed.username or parsed.password:
+            raise HTTPError(req.full_url, code, "redirect blocked: userinfo in URL", headers, fp)
+        if not _public_host(parsed.hostname):
+            raise HTTPError(req.full_url, code, "redirect blocked: non-public host", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _safe_url_open(url: str, *, timeout: float, user_agent: str):

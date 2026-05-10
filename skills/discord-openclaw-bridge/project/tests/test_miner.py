@@ -434,3 +434,41 @@ def test_safe_redirect_handler_allows_public_https_target() -> None:
 
     assert redirected is not None
     assert redirected.full_url.startswith("https://www.nature.com/")
+
+
+def test_safe_redirect_handler_preserves_query_params() -> None:
+    """Redirects that add session/tracking query params must pass through verbatim.
+
+    Regression for the Nature 302 loop: an earlier guard re-sanitized the
+    target which stripped tracking params, so the upstream kept re-issuing
+    the same redirect and urllib aborted with 'infinite redirect loop'. The
+    fix: validate host only, leave the URL alone.
+    """
+    handler = miner_module._SafeRedirectHandler()
+    args = _stub_redirect_args(
+        "https://www.nature.com/nature/articles?type=article",
+        "https://www.nature.com/nature/articles?type=article&t=session-token-123",
+    )
+
+    redirected = handler.redirect_request(*args)
+
+    assert redirected is not None
+    assert "t=session-token-123" in redirected.full_url
+
+
+def test_safe_redirect_handler_blocks_userinfo_target() -> None:
+    """Defense in depth: a Location with embedded userinfo must be rejected."""
+    from urllib.error import HTTPError
+
+    handler = miner_module._SafeRedirectHandler()
+    args = _stub_redirect_args(
+        "https://www.nature.com/articles/s41586-024-00001-0",
+        "https://attacker:secret@www.nature.com/articles/...",
+    )
+
+    try:
+        handler.redirect_request(*args)
+    except HTTPError as exc:
+        assert exc.code == 302
+    else:
+        raise AssertionError("expected redirect with userinfo to raise HTTPError")
