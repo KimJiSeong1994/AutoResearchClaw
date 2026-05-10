@@ -1,0 +1,291 @@
+version: 1
+kind: runtime-jobs
+metadata:
+  name: autoresearchclaw-runtime-jobs
+  source_scope:
+    - README.md
+    - skills/*/SKILL.md
+    - skills/*/README.md
+  phase: 1-control-plane-manifest
+
+defaults:
+  runtime_host: openclaw-ec2
+  workspace: ~/.openclaw/workspace
+  gateway_base_url: http://127.0.0.1:18789/v1
+  timezone: Asia/Seoul
+
+jobs:
+  - id: prompt-governance-validate
+    name: Prompt governance validation
+    type: local-check
+    owner_agent: workspace-operator
+    command_refs:
+      - python3 scripts/check-prompt-governance.py
+      - python3 -m unittest tests/test_prompt_governance.py
+    triggers:
+      - before workspace deploy
+      - manual
+    outputs:
+      - validated prompt registry and governance contract
+    safety:
+      side_effects: local read-only validation
+      secrets: none
+
+  - id: openclaw-workspace-deploy
+    name: Deploy OpenClaw workspace control files
+    type: operator-command
+    owner_agent: workspace-operator
+    command_refs:
+      - bash scripts/deploy-openclaw-workspace.sh
+    triggers:
+      - manual
+    depends_on:
+      - prompt-governance-validate
+    target:
+      host: openclaw-ec2
+      path: ~/.openclaw/workspace
+    outputs:
+      - workspace control files
+      - prompt registry
+    safety:
+      side_effects: remote workspace file sync
+      secrets: do not print gateway tokens
+
+  - id: openclaw-ops-readiness-check
+    name: Check remote OpenClaw ops readiness
+    type: health-check
+    owner_agent: openclaw-ec2-ops
+    command_refs:
+      - bash scripts/check-openclaw-ops.sh
+      - skills/openclaw-ec2-ops/gateway-status.sh
+      - skills/openclaw-ec2-ops/gateway-health.sh
+      - skills/openclaw-ec2-ops/service-status.sh
+      - skills/openclaw-ec2-ops/recent-log.sh
+      - skills/openclaw-ec2-ops/workspace-summary.sh
+    triggers:
+      - manual
+      - after deploy
+    checks:
+      - gateway service state
+      - loopback listener
+      - /v1/models probe
+      - Discord bridge service
+      - ResearchClaw install surface
+      - paper-recommender status
+      - recent warning/error log signal
+    safety:
+      side_effects: read-only remote inspection
+      secrets: never print gateway token values
+
+  - id: openclaw-dashboard-tunnel
+    name: Open dashboard over SSH tunnel
+    type: operator-command
+    owner_agent: openclaw-ec2-ops
+    command_refs:
+      - bash scripts/openclaw-dashboard-tunnel.sh
+    triggers:
+      - manual
+    target:
+      local_url: http://127.0.0.1:18789
+    safety:
+      side_effects: local SSH tunnel process
+      secrets: none
+
+  - id: researchclaw-validate
+    name: Validate AutoResearchClaw on OpenClaw gateway
+    type: remote-check
+    owner_agent: researchclaw
+    command_refs:
+      - skills/researchclaw/validate.sh
+      - skills/researchclaw/doctor.sh
+    triggers:
+      - before first topic run after config changes
+      - manual
+    target:
+      repo: ~/.openclaw/workspace/projects/AutoResearchClaw
+      config: ~/.openclaw/workspace/projects/AutoResearchClaw/config.yaml
+    safety:
+      side_effects: validation only
+      secrets: read OPENCLAW_GATEWAY_TOKEN from ~/.openclaw_gateway_token
+
+  - id: researchclaw-topic-run
+    name: Run AutoResearchClaw topic research and sync results
+    type: operator-command
+    owner_agent: researchclaw
+    command_refs:
+      - bash scripts/run-researchclaw-topic.sh "<topic>"
+      - bash scripts/sync-researchclaw-results.sh
+      - skills/researchclaw/run-topic.sh "<topic>"
+    triggers:
+      - manual explicit topic request
+    depends_on:
+      - researchclaw-validate
+    outputs:
+      - local Obsidian AutoResearchClaw result tree
+    safety:
+      side_effects: remote research execution and local result sync
+      secrets: keep gateway token on loopback path only
+
+  - id: paper-recommender-daily
+    name: Daily paper recommendation pipeline
+    type: cron
+    owner_agent: paper-recommender
+    command_refs:
+      - bash skills/paper-recommender/install-cron.sh
+      - skills/paper-recommender/run-once.sh
+      - skills/paper-recommender/sync-results.sh
+    schedule:
+      cron_utc: "0 23 * * *"
+      local_time: "08:00 Asia/Seoul"
+    target:
+      project_dir: ~/.openclaw/workspace/projects/paper-recommender
+      entrypoint: .venv/bin/paper-recommender
+      config: ~/.openclaw/workspace/projects/paper-recommender/config.yaml
+    outputs:
+      - artifacts/YYYY-MM-DD/recommendations.md
+      - artifacts/YYYY-MM-DD/raw.json
+      - state/ab_log.jsonl
+    safety:
+      side_effects: remote recommendation run and optional local Obsidian sync
+      secrets: JIPHYEONJEON_TOKEN in remote .env; gateway token read at runtime
+
+  - id: newsletter-ingest-local-daily
+    name: Local newsletter export ingest into wiki archive
+    type: local-scheduled-boundary
+    owner_agent: paper-recommender
+    command_refs:
+      - skills/paper-recommender/run-daily-research-and-sync.sh
+      - skills/paper-recommender/run-newsletter-ingest.sh
+      - python3 skills/paper-recommender/newsletter_ingest.py
+      - python3 skills/paper-recommender/gmail_newsletter_fetch.py --auth --publish
+    schedule:
+      local_time: "07:00 Asia/Seoul when locally installed"
+    inputs:
+      - ~/Desktop/paper-wiki/newsletter-exports/*.mbox
+      - ~/Desktop/paper-wiki/newsletter-exports/*.jsonl
+      - optional Gmail API readonly token outside git
+    outputs:
+      - raw/newsletters/YYYY-MM-DD/items.json
+      - pages/newsletter-ingest-YYYY-MM-DD.md
+    safety:
+      side_effects: local wiki archive writes
+      secrets: OAuth token remains outside git; full email bodies omitted from wiki outputs
+
+  - id: apps-script-newsletter-relay
+    name: Google Apps Script newsletter archive relay
+    type: external-relay
+    owner_agent: newsletter-archive-relay
+    command_refs:
+      - integrations/google-apps-script/newsletter_archive_to_discord.gs
+      - python3 skills/paper-recommender/apps_script_relay_ingest.py
+    triggers:
+      - Apps Script scheduled run
+      - EC2 relay pull
+    inputs:
+      - Gmail messages via Apps Script
+      - RELAY_READ_TOKEN
+    outputs:
+      - sanitized newsletter archive payload for downstream posting
+    safety:
+      side_effects: Gmail read and relay pull
+      secrets: Google Script Properties and relay token are not committed
+
+  - id: discord-openclaw-bridge-service
+    name: Discord OpenClaw bridge service
+    type: systemd-user-service
+    owner_agent: discord-openclaw-bridge
+    command_refs:
+      - bash scripts/deploy-discord-openclaw-bridge.sh
+      - skills/discord-openclaw-bridge/project/scripts/install.sh
+      - systemctl --user start discord-openclaw-bridge.service
+      - skills/discord-openclaw-bridge/project/scripts/status.sh
+    target:
+      project_dir: ~/.openclaw/workspace/skills/discord-openclaw-bridge/project
+      service: discord-openclaw-bridge.service
+      guild_id: "1500743272551813142"
+      channel_id: "1500743273361440823"
+    interfaces:
+      - /openclaw
+      - /openclaw_status
+      - /jiphyeonjeon_briefing
+    safety:
+      side_effects: Discord slash-command responses
+      secrets: DISCORD_BOT_TOKEN in project .env only
+
+  - id: discord-jiphyeonjeon-miner-service
+    name: Jiphyeonjeon Miner intake bot service
+    type: systemd-user-service
+    owner_agent: jiphyeonjeon-miner
+    command_refs:
+      - skills/discord-openclaw-bridge/project/scripts/invite-miner-url.sh
+      - skills/discord-openclaw-bridge/project/scripts/install-miner.sh
+      - systemctl --user start discord-jiphyeonjeon-miner.service
+    target:
+      service: discord-jiphyeonjeon-miner.service
+      channel_env: DISCORD_MINER_CHANNEL_ID
+    outputs:
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.openclaw/workspace/manual_links/approved-manual-links.jsonl
+    safety:
+      side_effects: Discord link intake and append-only review records
+      secrets: persisted metadata limited to Discord IDs and sanitized URLs
+
+  - id: jiphyeonjeon-miner-review
+    name: Jiphyeonjeon Miner approval review
+    type: operator-command
+    owner_agent: jiphyeonjeon-claw
+    command_refs:
+      - uv run discord-jiphyeonjeon-miner-review list
+      - uv run discord-jiphyeonjeon-miner-review show <intake_id>
+      - uv run discord-jiphyeonjeon-miner-review approve <intake_id> --reason "<reason>"
+      - uv run discord-jiphyeonjeon-miner-review reject <intake_id> --reason "<reason>"
+      - uv run discord-jiphyeonjeon-miner-review hold <intake_id> --reason "<reason>"
+      - uv run discord-jiphyeonjeon-miner-review export
+    triggers:
+      - manual review of pending intake
+    safety:
+      side_effects: append-only review decision and approved export
+      secrets: pending queues are never newsletter inputs
+
+  - id: discord-card-news-publish
+    name: Discord card-news publisher
+    type: cron-and-manual
+    owner_agent: card-news-publisher
+    command_refs:
+      - bash skills/discord-openclaw-bridge/install-card-news-cron.sh
+      - skills/discord-openclaw-bridge/project/scripts/post-card-news.sh
+      - skills/discord-openclaw-bridge/project/scripts/post-newsletter-briefing.sh
+      - skills/discord-openclaw-bridge/project/scripts/post-briefing.sh
+    schedule:
+      cron_utc: "0 23 * * *"
+      local_time: "08:00 Asia/Seoul"
+      delay: waits briefly for fresh newsletter archive
+    inputs:
+      - raw/newsletters/YYYY-MM-DD/items.json
+      - DISCORD_BRIEFING_SOURCE
+      - DISCORD_NEWSLETTER_BRIEFING_SOURCE
+    outputs:
+      - Discord card-news thread or channel post
+      - card-news-publication-audit.jsonl
+    safety:
+      side_effects: public Discord posting and optional previous-post purge
+      secrets: audit records must contain sanitized public metadata only
+
+  - id: discord-miner-seeds-expand
+    name: Expand configured Miner seed sources
+    type: cron-and-manual
+    owner_agent: jiphyeonjeon-miner
+    command_refs:
+      - bash skills/discord-openclaw-bridge/install-miner-seeds-cron.sh
+      - uv run discord-openclaw-miner-seeds
+      - uv run discord-openclaw-post-miner-seeds-report
+    triggers:
+      - installed cron
+      - manual seed expansion
+    outputs:
+      - Miner intake records for eligible seed links
+      - Miner seed status/report records
+    safety:
+      side_effects: collection-only intake; no approval decisions
+      secrets: source URLs and public metadata only

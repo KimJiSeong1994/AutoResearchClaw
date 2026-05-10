@@ -10,6 +10,7 @@ SSH_CMD="ssh -i ${KEY_FILE}"
 cd "$ROOT_DIR"
 
 python3 scripts/check-prompt-governance.py
+python3 scripts/check-runtime-manifests.py
 
 ${SSH_CMD} "$REMOTE_HOST" "mkdir -p $REMOTE_WORKSPACE/skills"
 

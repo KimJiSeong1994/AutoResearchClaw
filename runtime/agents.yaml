@@ -1,0 +1,197 @@
+version: 1
+kind: runtime-agents
+metadata:
+  name: autoresearchclaw-runtime-agents
+  source_scope:
+    - README.md
+    - workspace/PROMPT_REGISTRY.json
+    - skills/*/SKILL.md
+    - skills/*/README.md
+  phase: 1-control-plane-manifest
+
+defaults:
+  runtime_host: openclaw-ec2
+  workspace: ~/.openclaw/workspace
+  gateway_base_url: http://127.0.0.1:18789/v1
+  model_target: openclaw/clawbridge
+
+agents:
+  - id: workspace-operator
+    name: OpenClaw workspace operator
+    kind: control-plane
+    source_refs:
+      - README.md
+      - workspace/AGENTS.md
+      - workspace/PROMPT_GOVERNANCE.md
+      - workspace/PROMPT_REGISTRY.json
+    owns_jobs:
+      - prompt-governance-validate
+      - openclaw-workspace-deploy
+    responsibilities:
+      - maintain deployed workspace control files
+      - validate prompt governance before deploy
+      - keep prompt registry status fields stable
+    boundaries:
+      - do not print secret token values
+      - keep workspace deploy separate from skill-specific deploys
+
+  - id: openclaw-ec2-ops
+    name: OpenClaw EC2 operations agent
+    kind: ops-skill
+    source_refs:
+      - skills/openclaw-ec2-ops/SKILL.md
+      - README.md#check-remote-ops-readiness
+    owns_jobs:
+      - openclaw-ops-readiness-check
+      - openclaw-dashboard-tunnel
+    responsibilities:
+      - inspect gateway service status
+      - verify loopback listener and /v1/models health
+      - report recent warning/error log signal
+      - perform controlled gateway restart only when explicitly requested
+    boundaries:
+      - keep gateway on loopback unless explicitly changed
+      - do not delete sessions, auth files, or agent state without approval
+
+  - id: researchclaw
+    name: ResearchClaw via OpenClaw
+    kind: project-agent
+    source_refs:
+      - skills/researchclaw/SKILL.md
+      - README.md#run-autoresearchclaw-and-sync-results-into-obsidian
+    owns_jobs:
+      - researchclaw-validate
+      - researchclaw-topic-run
+    runtime:
+      repo: ~/.openclaw/workspace/projects/AutoResearchClaw
+      config: ~/.openclaw/workspace/projects/AutoResearchClaw/config.yaml
+      gateway_endpoint: http://127.0.0.1:18789/v1
+    responsibilities:
+      - validate AutoResearchClaw integration
+      - run explicit topic research requests
+      - sync generated results into the local Obsidian target
+    boundaries:
+      - do not start full research unless a user clearly asks for execution
+      - use loopback OpenClaw gateway only
+
+  - id: paper-recommender
+    name: Daily paper recommender
+    kind: project-agent
+    source_refs:
+      - skills/paper-recommender/SKILL.md
+      - skills/paper-recommender/README.md
+    owns_jobs:
+      - paper-recommender-daily
+      - newsletter-ingest-local-daily
+    runtime:
+      project_dir: ~/.openclaw/workspace/projects/paper-recommender
+      config: ~/.openclaw/workspace/projects/paper-recommender/config.yaml
+      entrypoint: .venv/bin/paper-recommender
+      gateway_endpoint: http://127.0.0.1:18789/v1
+    responsibilities:
+      - derive profile from Jiphyeonjeon bookmarks
+      - evolve per-user SOUL.md state
+      - collect candidate papers and rerank through OpenClaw
+      - write recommendation artifacts and A/B logs
+      - publish sanitized newsletter exports into the wiki archive
+    boundaries:
+      - JIPHYEONJEON_TOKEN stays in remote .env
+      - Gmail/OAuth credentials stay outside git
+      - sync to Obsidian is separate from the remote daily cron
+
+  - id: newsletter-archive-relay
+    name: Google Apps Script newsletter archive relay
+    kind: external-adapter
+    source_refs:
+      - integrations/google-apps-script/README.md
+      - integrations/google-apps-script/newsletter_archive_to_discord.gs
+    owns_jobs:
+      - apps-script-newsletter-relay
+    responsibilities:
+      - read Gmail through Apps Script with configured properties
+      - expose relay-pull payloads for EC2 ingestion
+      - avoid direct Discord delivery when relay_pull is enabled
+    boundaries:
+      - do not commit Script Properties, OAuth tokens, relay tokens, or webhook URLs
+      - prefer relay_pull to avoid Apps Script to Discord network failures
+
+  - id: discord-openclaw-bridge
+    name: Discord OpenClaw bridge
+    kind: service-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/SKILL.md
+      - skills/discord-openclaw-bridge/README.md
+    owns_jobs:
+      - discord-openclaw-bridge-service
+    runtime:
+      project_dir: ~/.openclaw/workspace/skills/discord-openclaw-bridge/project
+      service: discord-openclaw-bridge.service
+      guild_id: "1500743272551813142"
+      channel_id: "1500743273361440823"
+      gateway_endpoint: http://127.0.0.1:18789/v1
+    responsibilities:
+      - provide /openclaw and /openclaw_status in the allowlisted channel
+      - post configured Jiphyeonjeon briefings
+      - keep OpenClaw gateway calls on loopback
+    boundaries:
+      - main bridge does not collect Miner links
+      - DISCORD_BOT_TOKEN stays in project .env
+
+  - id: jiphyeonjeon-miner
+    name: 집현전-광부 link intake agent
+    kind: service-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/README.md#집현전-광부-link-intake-path
+      - workspace/PROMPT_REGISTRY.json
+    owns_jobs:
+      - discord-jiphyeonjeon-miner-service
+      - discord-miner-seeds-expand
+    runtime:
+      service: discord-jiphyeonjeon-miner.service
+      channel_env: DISCORD_MINER_CHANNEL_ID
+      intake_path: JIPHYEONJEON_MINER_INTAKE_PATH
+      review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
+    responsibilities:
+      - collect and sanitize HTTP(S) links from Discord intake requests
+      - append pending records for review
+      - expand configured seed sources as collection-only intake
+    boundaries:
+      - does not approve newsletter inclusion
+      - persists only sanitized URLs and Discord metadata IDs
+      - pending queue files are never newsletter inputs
+
+  - id: jiphyeonjeon-claw
+    name: 집현전-클로 content review owner
+    kind: review-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/README.md#집현전-광부-link-intake-path
+      - workspace/PROMPT_REGISTRY.json
+    owns_jobs:
+      - jiphyeonjeon-miner-review
+    responsibilities:
+      - review Miner pending links
+      - append approve/reject/hold decisions
+      - export approved-only manual links for compatibility
+    boundaries:
+      - review decisions are append-only audit events
+      - approval export is not injected into newsletter raw archive or card-news source
+
+  - id: card-news-publisher
+    name: Discord card-news publisher
+    kind: publisher-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/README.md#card-news-publishing-path
+    owns_jobs:
+      - discord-card-news-publish
+    runtime:
+      source_default: latest NEWSLETTER_WIKI_ROOT/raw/newsletters/*/items.json
+      channel_default: "1501211608104566854"
+      max_cards_default: 8
+    responsibilities:
+      - render newsletter archive items into compact Discord card-news messages
+      - enforce publication quality gate and novelty checks
+      - write sanitized audit decisions
+    boundaries:
+      - do not read or post raw Gmail bodies or secret configuration values
+      - skip before Discord side effects when quality gate fails
+      - purge behavior must be reviewed before production posting

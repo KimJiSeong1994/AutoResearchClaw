@@ -49,15 +49,18 @@ bash scripts/deploy-openclaw-workspace.sh
 The deploy script validates prompt governance first, then maps the workspace
 control files and prompt registry into the remote OpenClaw workspace root.
 
-## Validate prompt governance
+## Validate governance and runtime manifests
 
 ```bash
 python3 scripts/check-prompt-governance.py
+python3 scripts/check-runtime-manifests.py
 python3 -m unittest tests/test_prompt_governance.py
+python3 -m unittest tests/test_runtime_manifests.py
 ```
 
-The validator enforces the Jiphyeonjeon-Claw prompt inventory, lifecycle,
-reporting status schema, source-file references, and secret-value guardrails.
+The validators enforce the Jiphyeonjeon-Claw prompt inventory, lifecycle,
+reporting status schema, runtime job/agent manifest cross-references,
+source-file references, and secret-value guardrails.
 
 ## Deploy Discord OpenClaw bridge
 
