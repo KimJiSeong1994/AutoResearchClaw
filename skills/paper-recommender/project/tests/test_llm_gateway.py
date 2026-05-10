@@ -75,3 +75,37 @@ def test_openclaw_llm_keeps_client_seam_and_payload_shape() -> None:
             },
         )
     ]
+
+
+def test_openclaw_llm_falls_back_when_primary_fails() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.models: list[str] = []
+
+        async def post(self, url, json):
+            model = json["model"]
+            self.models.append(model)
+            request = httpx.Request("POST", url)
+            if model == "primary":
+                response = httpx.Response(503, request=request, text="primary unavailable")
+                raise httpx.HTTPStatusError("bad", request=request, response=response)
+            return httpx.Response(
+                200,
+                request=request,
+                json={"choices": [{"message": {"content": "fallback ok"}}]},
+            )
+
+        async def aclose(self):
+            pass
+
+    async def run() -> tuple[str, list[str]]:
+        llm = OpenClawLLM(_openclaw_settings())
+        fake = FakeClient()
+        llm._client = fake  # type: ignore[attr-defined]
+        content = await llm.chat([{"role": "user", "content": "hi"}])
+        return content, fake.models
+
+    content, models = asyncio.run(run())
+
+    assert content == "fallback ok"
+    assert models == ["primary", "fallback"]
