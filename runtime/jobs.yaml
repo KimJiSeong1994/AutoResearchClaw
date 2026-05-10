@@ -289,3 +289,33 @@ jobs:
     safety:
       side_effects: collection-only intake; no approval decisions
       secrets: source URLs and public metadata only
+
+  - id: jiphyeonjeon-guard-ops-digest
+    name: Jiphyeonjeon Guard operations issue digest
+    type: health-check
+    owner_agent: jiphyeonjeon-guard
+    command_refs:
+      - uv run discord-openclaw-guard-ops-digest
+      - uv run discord-openclaw-guard-ops-digest --write-issue-queue
+      - uv run discord-openclaw-post-miner-seeds-report
+      - bash skills/discord-openclaw-bridge/project/scripts/status.sh
+    triggers:
+      - after miner seed expansion
+      - manual operations review
+      - remote ops readiness check
+    inputs:
+      - ~/.openclaw/workspace/state/miner-seeds-last-status.json
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+    outputs:
+      - Guard operations issue digest JSON
+      - optional append-only Guard operations issue queue
+      - operations reporting forum thread for miner-seeds run summaries
+    checks:
+      - miner-seeds status freshness
+      - seed errors and zero-accepted anomalies
+      - review queue pending count and oldest pending age
+      - guard token and operations channel configuration presence
+    safety:
+      side_effects: read-only digest, optional append-only Guard issue queue write, and optional Discord report posting
+      secrets: never print Discord bot token values

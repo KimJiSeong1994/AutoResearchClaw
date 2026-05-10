@@ -39,6 +39,7 @@ REQUIRED_JOB_IDS = {
     "discord-openclaw-bridge-service",
     "discord-jiphyeonjeon-miner-service",
     "jiphyeonjeon-miner-review",
+    "jiphyeonjeon-guard-ops-digest",
     "discord-card-news-publish",
 }
 
@@ -49,6 +50,7 @@ REQUIRED_AGENT_IDS = {
     "paper-recommender",
     "discord-openclaw-bridge",
     "jiphyeonjeon-miner",
+    "jiphyeonjeon-guard",
     "jiphyeonjeon-claw",
     "card-news-publisher",
 }

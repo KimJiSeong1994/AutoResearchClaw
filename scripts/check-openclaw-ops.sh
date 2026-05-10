@@ -90,6 +90,40 @@ else
   mark_warn "discord-openclaw-bridge.service is not installed"
 fi
 
+section "jiphyeonjeon guard"
+guard_project="$workspace/skills/discord-openclaw-bridge/project"
+guard_status="$workspace/state/miner-seeds-last-status.json"
+guard_queue="$workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl"
+guard_decisions="$workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl"
+guard_log="$workspace/logs/miner-seeds.log"
+if [ -d "$guard_project" ]; then
+  echo "$guard_project"
+  if [ -x "$guard_project/.venv/bin/discord-openclaw-guard-ops-digest" ]; then
+    "$guard_project/.venv/bin/discord-openclaw-guard-ops-digest" \
+      --status-path "$guard_status" \
+      --review-queue-path "$guard_queue" \
+      --decisions-path "$guard_decisions" \
+      --env-path "$guard_project/.env" \
+      --fail-on-error \
+      || mark_warn "jiphyeonjeon guard ops digest failed"
+  else
+    mark_warn "guard ops digest CLI missing under discord bridge .venv"
+  fi
+  if [ -f "$guard_project/.env" ]; then
+    grep -q '^DISCORD_GUARD_BOT_TOKEN=.' "$guard_project/.env" \
+      && echo "DISCORD_GUARD_BOT_TOKEN: set" \
+      || mark_warn "DISCORD_GUARD_BOT_TOKEN missing; reports may use bridge fallback identity"
+    grep -q '^DISCORD_OPS_REPORT_CHANNEL_ID=.' "$guard_project/.env" \
+      && echo "DISCORD_OPS_REPORT_CHANNEL_ID: set" \
+      || echo "DISCORD_OPS_REPORT_CHANNEL_ID: default"
+  else
+    mark_warn "discord bridge .env missing; guard config cannot be checked"
+  fi
+  [ -f "$guard_log" ] && tail -n 20 "$guard_log" | grep -E 'WARN|ERROR|failed|exit=[1-9]' || true
+else
+  mark_warn "discord bridge project missing; guard digest skipped"
+fi
+
 section "researchclaw project"
 research_project="$workspace/projects/AutoResearchClaw"
 if [ -d "$research_project" ]; then

@@ -14,13 +14,15 @@ if [ -z "$CLIENT_ID" ]; then
   echo "or set DISCORD_GUARD_CLIENT_ID in project/.env" >&2
   exit 2
 fi
-# Permissions for forum posting only:
+# Permissions for forum posting only — the guard agent never reads channel
+# history, only POSTs new threads. Read Message History (65536) intentionally
+# omitted (Discord requires GET /channels/{id} for forum-type detection but
+# that endpoint does not need read-history).
 #   View Channel (1024)
 #   Send Messages (2048)
 #   Send Messages in Threads (274877906944)
 #   Create Public Threads (34359738368)
-#   Read Message History (65536)
-# Sum: 274877906944 + 34359738368 + 1024 + 2048 + 65536 = 309238716920
-PERMISSIONS=309238716920
+# Sum: 274877906944 + 34359738368 + 1024 + 2048 = 309238651392
+PERMISSIONS=309238651392
 SCOPES='bot'
 printf 'https://discord.com/oauth2/authorize?client_id=%s&scope=%s&permissions=%s\n' "$CLIENT_ID" "$SCOPES" "$PERMISSIONS"

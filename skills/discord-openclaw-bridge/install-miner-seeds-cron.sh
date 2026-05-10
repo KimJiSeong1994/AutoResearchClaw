@@ -7,6 +7,10 @@
 # Usage:
 #   bash skills/discord-openclaw-bridge/install-miner-seeds-cron.sh
 #   MINER_SEEDS_CRON_SCHEDULE="0 21 * * *" bash skills/discord-openclaw-bridge/install-miner-seeds-cron.sh
+#
+# Requires bash 3.2+ (macOS default). The validation uses a portable case
+# pattern instead of [[ =~ ]] regex so the script can run from a developer
+# laptop and from CI without depending on homebrew bash.
 set -euo pipefail
 
 KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
@@ -17,15 +21,36 @@ REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.openclaw/workspace}"
 MINER_SEEDS_CRON_SCHEDULE="${MINER_SEEDS_CRON_SCHEDULE:-0 21 * * *}"
 
 # Defense-in-depth: validate user-provided values before they enter the SSH
-# heredoc. Cron schedule must be standard 5-field syntax; workspace must be a
-# tilde- or absolute-rooted POSIX path. Reject single quotes / shell metacharacters
-# so a hostile env var cannot break out of the inline `...='$VAR'...` quoting.
-if ! [[ "$MINER_SEEDS_CRON_SCHEDULE" =~ ^[0-9*/,-]+([[:space:]]+[0-9*/,-]+){4}$ ]]; then
-  echo "ERROR: MINER_SEEDS_CRON_SCHEDULE must be a 5-field cron expression" >&2
-  exit 2
-fi
-if [[ "$REMOTE_WORKSPACE" =~ [\'\"\$\\\;\&\|\<\>] ]]; then
-  echo "ERROR: REMOTE_WORKSPACE contains unsafe characters" >&2
+# heredoc. The blocklist uses a case pattern (bash 3.2+ portable) and
+# explicitly covers both the legacy single-quote-escape vectors AND the
+# command-substitution / process-substitution / newline vectors that the
+# 2nd-pass review caught (backtick, parens, newline).
+case "$REMOTE_WORKSPACE" in
+  *[\'\"\$\\\;\&\|\<\>\`\(\)]*)
+    echo "ERROR: REMOTE_WORKSPACE contains unsafe shell characters" >&2
+    exit 2
+    ;;
+  *$'\n'*)
+    echo "ERROR: REMOTE_WORKSPACE contains a newline" >&2
+    exit 2
+    ;;
+esac
+
+# Cron schedule: 5 fields of [0-9*/,-]+ separated by whitespace.
+case "$MINER_SEEDS_CRON_SCHEDULE" in
+  '' )
+    echo "ERROR: MINER_SEEDS_CRON_SCHEDULE is empty" >&2
+    exit 2
+    ;;
+  *[\'\"\$\\\;\&\|\<\>\`\(\)]*)
+    echo "ERROR: MINER_SEEDS_CRON_SCHEDULE contains unsafe characters" >&2
+    exit 2
+    ;;
+esac
+# Verify shape: 5 whitespace-separated fields.
+read -r _f1 _f2 _f3 _f4 _f5 _rest <<< "$MINER_SEEDS_CRON_SCHEDULE"
+if [ -z "${_f5:-}" ] || [ -n "${_rest:-}" ]; then
+  echo "ERROR: MINER_SEEDS_CRON_SCHEDULE must be 5 cron fields" >&2
   exit 2
 fi
 
@@ -34,6 +59,16 @@ fi
 _RW_QUOTED=$(printf '%q' "$REMOTE_WORKSPACE")
 _SCHED_QUOTED=$(printf '%q' "$MINER_SEEDS_CRON_SCHEDULE")
 
+# rsync the committed runner script so EC2 always uses the same logic as the
+# repo (no inline heredoc copy to drift from project/scripts/run-miner-seeds.sh).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_RUNNER="$SCRIPT_DIR/project/scripts/run-miner-seeds.sh"
+if [ ! -f "$LOCAL_RUNNER" ]; then
+  echo "ERROR: cannot find committed runner at $LOCAL_RUNNER" >&2
+  exit 2
+fi
+rsync -az -e "ssh -i $KEY_FILE" "$LOCAL_RUNNER" "$REMOTE_HOST:.openclaw/workspace/scripts/miner-seeds.sh"
+
 ssh -i "$KEY_FILE" "$REMOTE_HOST" \
   "REMOTE_WORKSPACE=$_RW_QUOTED MINER_SEEDS_CRON_SCHEDULE=$_SCHED_QUOTED bash -s" <<'REMOTE'
 set -euo pipefail
@@ -41,53 +76,10 @@ WORKSPACE="${REMOTE_WORKSPACE/#\~/$HOME}"
 SCRIPT_DIR="$WORKSPACE/scripts"
 RUNNER="$SCRIPT_DIR/miner-seeds.sh"
 mkdir -p "$SCRIPT_DIR" "$WORKSPACE/logs"
-
-cat > "$RUNNER" <<EOF_RUNNER
-#!/usr/bin/env bash
-set -euo pipefail
-export PATH="\$HOME/.local/bin:\$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"
-export TZ=Asia/Seoul
-WORKSPACE="$WORKSPACE"
-PROJECT="\$WORKSPACE/skills/discord-openclaw-bridge/project"
-LOG_DIR="\$WORKSPACE/logs"
-LOG_FILE="\$LOG_DIR/miner-seeds.log"
-mkdir -p "\$LOG_DIR"
-
-# Rotate logs older than 14 days
-find "\$LOG_DIR" -name "miner-seeds*.log" -mtime +14 -delete 2>/dev/null || true
-
-exec >>"\$LOG_FILE" 2>&1
-
-printf "\\n[%s] miner-seeds start\\n" "\$(date -Is)"
-
-cd "\$PROJECT"
-
-if [ "\${MINER_SEEDS_DRY_RUN:-0}" = "1" ]; then
-  echo "dry-run: would run .venv/bin/discord-openclaw-miner-seeds"
-  .venv/bin/discord-openclaw-miner-seeds --dry-run
-  printf "[%s] miner-seeds dry-run complete\\n" "\$(date -Is)"
-  exit 0
-fi
-
-CLI_EXIT=0
-.venv/bin/discord-openclaw-miner-seeds || CLI_EXIT=\$?
-printf "[%s] miner-seeds done (exit=%s)\\n" "\$(date -Is)" "\${CLI_EXIT}"
-
-# Post the run summary to the 운영리포팅 forum. Discord posting failures must
-# never fail the cron — collection is the source of truth, the report is for
-# observability only.
-if [ "\${MINER_SEEDS_SKIP_DISCORD_REPORT:-0}" != "1" ]; then
-  .venv/bin/discord-openclaw-post-miner-seeds-report || \
-    printf "[%s] WARN miner-seeds discord report failed (continuing)\\n" "\$(date -Is)"
-fi
-
-exit "\${CLI_EXIT}"
-EOF_RUNNER
 chmod +x "$RUNNER"
 
 # Replace any existing JIPHYEONJEON MINER SEEDS block. The marker pair handles
-# idempotency by itself; we no longer grep for "miner-seeds.sh" because that
-# substring may legitimately appear in unrelated cron entries.
+# idempotency by itself.
 TMP="$(mktemp)"
 crontab -l 2>/dev/null | awk '
   /# BEGIN JIPHYEONJEON MINER SEEDS/ {skip=1; next}

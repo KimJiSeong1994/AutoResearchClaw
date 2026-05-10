@@ -2,13 +2,27 @@
 # Run the miner seed expansion pipeline and rotate logs older than 14 days.
 #
 # Called by the JIPHYEONJEON MINER SEEDS cron job (installed via
-# install-miner-seeds-cron.sh).  Can also be invoked manually:
+# install-miner-seeds-cron.sh; the install script rsyncs THIS file to the
+# EC2 host so the cron runtime and the repo stay in sync — there is no
+# inline-heredoc copy to drift). Can also be invoked manually:
 #
 #   bash skills/discord-openclaw-bridge/project/scripts/run-miner-seeds.sh
 #   MINER_SEEDS_DRY_RUN=1 bash skills/discord-openclaw-bridge/project/scripts/run-miner-seeds.sh
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# cron runs with a minimal PATH, so explicitly include the user's local bins.
+# TZ keeps timestamps in the log/report consistent with KST operator habits.
+export PATH="${HOME}/.local/bin:${HOME}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+export TZ="${TZ:-Asia/Seoul}"
+
+# Resolve project dir from the script location when invoked locally; on EC2
+# the script lives at $WORKSPACE/scripts/ so we fall back to a sibling search.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -d "$SCRIPT_DIR/../.venv" ]; then
+  PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+  PROJECT_DIR="${HOME}/.openclaw/workspace/skills/discord-openclaw-bridge/project"
+fi
 WORKSPACE="${HOME}/.openclaw/workspace"
 LOG_DIR="${WORKSPACE}/logs"
 LOG_FILE="${LOG_DIR}/miner-seeds.log"
