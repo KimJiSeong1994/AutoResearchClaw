@@ -225,6 +225,10 @@ class CardNewsQualityGateConfig:
     min_new_cards: int = 3
     max_previous_overlap_ratio: float = 0.5
     min_evidence_cards: int = 2
+    content_similarity_threshold: float = 0.72
+    agent_dedupe_enabled: bool = False
+    agent_dedupe_max_previous: int = 5
+    agent_dedupe_timeout_sec: float = 45.0
 
 
 def _clean(value: object, *, limit: int | None = None) -> str:
@@ -749,6 +753,10 @@ def _card_news_quality_gate_config_from_env() -> CardNewsQualityGateConfig:
         min_new_cards=_env_int("DISCORD_CARD_NEWS_MIN_NEW_CARDS", 3),
         max_previous_overlap_ratio=_env_float("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", 0.5),
         min_evidence_cards=_env_int("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", 2),
+        content_similarity_threshold=_env_float("DISCORD_CARD_NEWS_CONTENT_SIMILARITY_THRESHOLD", 0.72),
+        agent_dedupe_enabled=_env_flag("DISCORD_CARD_NEWS_AGENT_DEDUPE", "0"),
+        agent_dedupe_max_previous=_env_int("DISCORD_CARD_NEWS_AGENT_DEDUPE_MAX_PREVIOUS", 5),
+        agent_dedupe_timeout_sec=_env_float("DISCORD_CARD_NEWS_AGENT_DEDUPE_TIMEOUT_SEC", 45.0),
     )
 
 
@@ -775,15 +783,169 @@ def _card_content_fingerprint(item: dict[str, Any]) -> str:
     return _hash_text("\n".join(parts).lower())
 
 
-def _load_recent_published_identities(audit_path: Path, *, history_days: int, now: datetime | None = None) -> set[str]:
+_CONTENT_SIGNATURE_STOP_WORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "your",
+    "you",
+    "are",
+    "was",
+    "were",
+    "have",
+    "has",
+    "how",
+    "why",
+    "what",
+    "newsletter",
+    "weekly",
+    "paper",
+    "article",
+    "github",
+    "zoom",
+    "luma",
+    "공개",
+    "요약",
+    "기준",
+    "원문",
+    "확인",
+    "필요",
+    "카드",
+    "뉴스",
+}
+
+
+def _card_similarity_text(item: dict[str, Any]) -> str:
+    summary_lines = item.get("summary_lines")
+    summary = " ".join(str(line) for line in summary_lines if line) if isinstance(summary_lines, list) else ""
+    parts = [
+        _raw_title(item),
+        _title(item),
+        _clean(item.get("primary_topic_display") or GENERIC_TOPIC),
+        _story_key(item),
+        _clean(item.get("hook") or item.get("why_now"), limit=360),
+        _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
+        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
+        _clean(item.get("why_matters") or item.get("evidence"), limit=360),
+        summary,
+        _evidence_snippet(item, limit=360),
+        _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _content_signature_tokens(item: dict[str, Any]) -> set[str]:
+    text = _card_similarity_text(item).lower()
+    words = [
+        word
+        for word in re.findall(r"[0-9a-z가-힣]+", text)
+        if len(word) > 1 and word not in _CONTENT_SIGNATURE_STOP_WORDS
+    ]
+    tokens: set[str] = set()
+    for word in words:
+        tokens.add(word)
+        # Long Korean/English compounds often arrive as one whitespace token.
+        # Add bounded character shingles so near-identical titles/excerpts match
+        # even when punctuation or a short prefix differs.
+        if len(word) >= 6:
+            width = 4 if re.search(r"[가-힣]", word) else 5
+            tokens.update(word[index : index + width] for index in range(0, max(0, len(word) - width + 1)))
+    return tokens
+
+
+def _content_signature_hashes(item: dict[str, Any]) -> list[str]:
+    return sorted(_hash_text(token) for token in _content_signature_tokens(item))
+
+
+def _context_signature_hashes(context: dict[str, str]) -> set[str]:
+    text = " ".join(str(value) for value in context.values() if value)
+    return set(_content_signature_hashes({"article_title": text, "public_excerpt": text}))
+
+
+def _agent_context(item: dict[str, Any]) -> dict[str, str]:
+    summary_lines = item.get("summary_lines")
+    summary = " ".join(str(line) for line in summary_lines if line) if isinstance(summary_lines, list) else ""
+    return {
+        "title": _title(item),
+        "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=80),
+        "story_key": _clean(_story_key(item), limit=220),
+        "claim": _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
+        "mechanism": _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
+        "evidence": _clean(item.get("why_matters") or item.get("evidence"), limit=360),
+        "summary": _clean(summary, limit=360),
+        "excerpt": _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
+    }
+
+
+def _is_useful_agent_context(context: dict[str, str]) -> bool:
+    return len(_context_signature_hashes(context)) >= 5
+
+
+def _rank_agent_contexts_for_cards(
+    cards: list[dict[str, Any]],
+    previous_contexts: list[dict[str, str]],
+    *,
+    limit: int,
+) -> list[dict[str, str]]:
+    if not cards or not previous_contexts:
+        return []
+    current_signatures = [_context_signature_hashes(_agent_context(card)) for card in cards]
+    ranked: list[tuple[float, int, dict[str, str]]] = []
+    for index, context in enumerate(previous_contexts):
+        previous_signature = _context_signature_hashes(context)
+        score = max(
+            (_content_signature_similarity(current, previous_signature) for current in current_signatures),
+            default=0.0,
+        )
+        ranked.append((score, index, context))
+    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    selected = [context for score, _index, context in ranked if score > 0][: max(1, limit)]
+    if selected:
+        return selected
+    return previous_contexts[-max(1, limit) :]
+
+
+def _content_signature_similarity(current: set[str], previous: set[str]) -> float:
+    if len(current) < 5 or len(previous) < 5:
+        return 0.0
+    intersection = len(current & previous)
+    if intersection < 4:
+        return 0.0
+    return intersection / len(current | previous)
+
+
+def _is_content_similar_to_previous(
+    item: dict[str, Any],
+    previous_signatures: list[set[str]],
+    *,
+    threshold: float,
+) -> bool:
+    current = set(_content_signature_hashes(item))
+    if len(current) < 5:
+        return False
+    return any(_content_signature_similarity(current, previous) >= threshold for previous in previous_signatures)
+
+
+def _load_recent_published_card_history(
+    audit_path: Path,
+    *,
+    history_days: int,
+    now: datetime | None = None,
+) -> tuple[set[str], list[set[str]]]:
     if not audit_path.exists():
-        return set()
+        return set(), []
     cutoff = (now or datetime.now(UTC)) - timedelta(days=max(0, history_days))
     identities: set[str] = set()
+    signatures: list[set[str]] = []
     try:
         lines = audit_path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return set()
+        return set(), []
     for line in lines:
         if not line.strip():
             continue
@@ -806,7 +968,64 @@ def _load_recent_published_identities(audit_path: Path, *, history_days: int, no
                 identity = _clean(card.get("identity_fingerprint"))
                 if identity:
                     identities.add(identity)
+                signature = card.get("content_signature")
+                if isinstance(signature, list):
+                    tokens = {_clean(token) for token in signature if _clean(token)}
+                    if tokens:
+                        signatures.append(tokens)
+    return identities, signatures
+
+
+def _load_recent_published_identities(audit_path: Path, *, history_days: int, now: datetime | None = None) -> set[str]:
+    identities, _signatures = _load_recent_published_card_history(
+        audit_path,
+        history_days=history_days,
+        now=now,
+    )
     return identities
+
+
+def _load_recent_published_agent_contexts(
+    audit_path: Path,
+    *,
+    history_days: int,
+    now: datetime | None = None,
+) -> list[dict[str, str]]:
+    if not audit_path.exists():
+        return []
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=max(0, history_days))
+    contexts: list[dict[str, str]] = []
+    try:
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("decision") != "publish":
+            continue
+        timestamp = _clean(record.get("timestamp"))
+        if timestamp:
+            try:
+                seen_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                seen_at = None
+            if seen_at and seen_at < cutoff:
+                continue
+        for card in record.get("cards") or []:
+            if not isinstance(card, dict):
+                continue
+            context = card.get("agent_context")
+            if not isinstance(context, dict):
+                continue
+            cleaned = {str(key): _clean(value, limit=420) for key, value in context.items() if _clean(value)}
+            if cleaned and _is_useful_agent_context(cleaned):
+                contexts.append(cleaned)
+    return contexts
 
 
 def _quality_thresholds(config: CardNewsQualityGateConfig) -> dict[str, int | float]:
@@ -816,20 +1035,146 @@ def _quality_thresholds(config: CardNewsQualityGateConfig) -> dict[str, int | fl
         "min_new_cards": config.min_new_cards,
         "max_previous_overlap_ratio": config.max_previous_overlap_ratio,
         "min_evidence_cards": config.min_evidence_cards,
+        "content_similarity_threshold": config.content_similarity_threshold,
+        "agent_dedupe_enabled": int(config.agent_dedupe_enabled),
+        "agent_dedupe_max_previous": config.agent_dedupe_max_previous,
     }
+
+
+def _openclaw_gateway_token_from_env() -> str:
+    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    token_file = os.environ.get("OPENCLAW_GATEWAY_TOKEN_FILE", "").strip()
+    if not token and token_file:
+        path = Path(token_file).expanduser()
+        if path.exists():
+            token = path.read_text(encoding="utf-8").strip()
+    return token
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            data = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _agent_duplicate_indices(
+    cards: list[dict[str, Any]],
+    previous_contexts: list[dict[str, str]],
+    config: CardNewsQualityGateConfig,
+) -> set[int]:
+    if not config.agent_dedupe_enabled or not cards or not previous_contexts:
+        return set()
+    token = _openclaw_gateway_token_from_env()
+    if not token:
+        return set()
+    base_url = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1").strip().rstrip("/")
+    if not (base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:")):
+        return set()
+    model = os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip() or "openclaw/clawbridge"
+    current = [
+        {"index": index, **_agent_context(card)}
+        for index, card in enumerate(cards)
+        if _is_useful_agent_context(_agent_context(card))
+    ]
+    previous = _rank_agent_contexts_for_cards(
+        cards,
+        previous_contexts,
+        limit=config.agent_dedupe_max_previous,
+    )
+    if not current or not previous:
+        return set()
+    prompt = {
+        "task": (
+            "Decide whether each current card is the same article or same concrete story as any previous card. "
+            "Judge by substantive context, not URL. Related topic alone is not duplicate. "
+            "Return strict JSON only: {\"duplicates\":[{\"current_index\":0,\"reason\":\"same_article|same_story\"}]}."
+        ),
+        "current_cards": current,
+        "previous_cards": previous,
+    }
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a conservative duplicate-publication reviewer. "
+                    "Mark duplicate only for the same article, same paper, same product announcement, "
+                    "or the same concrete story under another URL. Do not mark broad thematic overlap."
+                ),
+            },
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ],
+        "temperature": 0,
+        "max_tokens": 400,
+    }
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=config.agent_dedupe_timeout_sec) as client:
+            response = await client.post(f"{base_url}/chat/completions", json=body, headers=headers)
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+    except Exception:
+        return set()
+    data = _extract_json_object(str(content))
+    duplicates = data.get("duplicates")
+    indices: set[int] = set()
+    if isinstance(duplicates, list):
+        for item in duplicates:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("current_index"))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(cards):
+                indices.add(index)
+    return indices
 
 
 def _evaluate_card_news_quality(
     cards: list[dict[str, Any]],
     previous_identities: set[str],
     config: CardNewsQualityGateConfig,
+    previous_content_signatures: list[set[str]] | None = None,
+    agent_repeated_indices: set[int] | None = None,
 ) -> dict[str, Any]:
+    previous_content_signatures = previous_content_signatures or []
+    agent_repeated_indices = agent_repeated_indices or set()
     identities = [_card_identity_fingerprint(item) for item in cards]
     selected_count = len(cards)
     publishable_count = sum(1 for item in cards if _publishable_card(item))
     evidence_count = sum(1 for item in cards if _has_card_evidence(item))
-    repeated_count = sum(1 for identity in identities if identity and identity in previous_identities)
-    new_count = sum(1 for identity in identities if identity and identity not in previous_identities)
+    identity_repeated_count = 0
+    content_repeated_count = 0
+    agent_repeated_count = 0
+    repeated_count = 0
+    for index, (item, identity) in enumerate(zip(cards, identities, strict=False)):
+        repeated_by_identity = bool(identity and identity in previous_identities)
+        repeated_by_content = _is_content_similar_to_previous(
+            item,
+            previous_content_signatures,
+            threshold=config.content_similarity_threshold,
+        )
+        repeated_by_agent = index in agent_repeated_indices
+        if repeated_by_identity:
+            identity_repeated_count += 1
+        if repeated_by_content:
+            content_repeated_count += 1
+        if repeated_by_agent:
+            agent_repeated_count += 1
+        if repeated_by_identity or repeated_by_content or repeated_by_agent:
+            repeated_count += 1
+    new_count = selected_count - repeated_count
     overlap_ratio = (repeated_count / selected_count) if selected_count else 0.0
     reason_codes: list[str] = []
     if publishable_count < config.min_publishable_cards:
@@ -852,6 +1197,9 @@ def _evaluate_card_news_quality(
             "evidence": evidence_count,
             "new": new_count,
             "repeated": repeated_count,
+            "identity_repeated": identity_repeated_count,
+            "content_repeated": content_repeated_count,
+            "agent_repeated": agent_repeated_count,
             "overlap_ratio": round(overlap_ratio, 4),
         },
     }
@@ -873,6 +1221,8 @@ def _audit_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
             "identity_fingerprint": _card_identity_fingerprint(item),
             "content_fingerprint": _card_content_fingerprint(item),
+            "content_signature": _content_signature_hashes(item),
+            "agent_context": _agent_context(item),
             "evidence_kind": _richness(item, raw_title=_raw_title(item)),
             "has_evidence": _has_card_evidence(item),
         }
@@ -1922,11 +2272,22 @@ async def run() -> None:
         cards = _select_cards(items, max_cards=max_cards)
         audit_path = quality_gate.audit_path or _default_card_news_audit_path()
         if quality_gate.enabled:
-            previous_identities = _load_recent_published_identities(
+            previous_identities, previous_content_signatures = _load_recent_published_card_history(
                 audit_path,
                 history_days=quality_gate.history_days,
             )
-            evaluation = _evaluate_card_news_quality(cards, previous_identities, quality_gate)
+            previous_agent_contexts = _load_recent_published_agent_contexts(
+                audit_path,
+                history_days=quality_gate.history_days,
+            )
+            agent_repeated_indices = await _agent_duplicate_indices(cards, previous_agent_contexts, quality_gate)
+            evaluation = _evaluate_card_news_quality(
+                cards,
+                previous_identities,
+                quality_gate,
+                previous_content_signatures,
+                agent_repeated_indices,
+            )
             if evaluation["decision"] == "skip":
                 record = _build_card_news_audit_record(
                     decision="skip",

@@ -23,9 +23,15 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _card_content_fingerprint,
     _card_identity_fingerprint,
     _card_news_quality_gate_config_from_env,
+    _agent_context,
+    _agent_duplicate_indices,
+    _content_signature_hashes,
     _create_forum_card_news_thread,
     _evaluate_card_news_quality,
     _is_card_news_bot_message,
+    _load_recent_published_card_history,
+    _load_recent_published_agent_contexts,
+    _rank_agent_contexts_for_cards,
     _load_recent_published_identities,
     _purge_previous_card_news_messages,
     _purge_previous_card_news_threads,
@@ -1024,6 +1030,10 @@ def test_quality_gate_config_defaults_and_env_overrides(monkeypatch, tmp_path) -
         "DISCORD_CARD_NEWS_MIN_NEW_CARDS",
         "DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO",
         "DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS",
+        "DISCORD_CARD_NEWS_CONTENT_SIMILARITY_THRESHOLD",
+        "DISCORD_CARD_NEWS_AGENT_DEDUPE",
+        "DISCORD_CARD_NEWS_AGENT_DEDUPE_MAX_PREVIOUS",
+        "DISCORD_CARD_NEWS_AGENT_DEDUPE_TIMEOUT_SEC",
         "NEWSLETTER_WIKI_ROOT",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -1036,6 +1046,10 @@ def test_quality_gate_config_defaults_and_env_overrides(monkeypatch, tmp_path) -
     assert default_config.min_new_cards == 3
     assert default_config.max_previous_overlap_ratio == 0.5
     assert default_config.min_evidence_cards == 2
+    assert default_config.content_similarity_threshold == 0.72
+    assert default_config.agent_dedupe_enabled is False
+    assert default_config.agent_dedupe_max_previous == 5
+    assert default_config.agent_dedupe_timeout_sec == 45.0
 
     audit_path = tmp_path / "audit.jsonl"
     monkeypatch.setenv("DISCORD_CARD_NEWS_QUALITY_GATE", "0")
@@ -1045,6 +1059,10 @@ def test_quality_gate_config_defaults_and_env_overrides(monkeypatch, tmp_path) -
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "2")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_PREVIOUS_OVERLAP_RATIO", "0.25")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "3")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CONTENT_SIMILARITY_THRESHOLD", "0.8")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AGENT_DEDUPE", "1")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AGENT_DEDUPE_MAX_PREVIOUS", "5")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_AGENT_DEDUPE_TIMEOUT_SEC", "9.5")
 
     override_config = _card_news_quality_gate_config_from_env()
 
@@ -1055,6 +1073,10 @@ def test_quality_gate_config_defaults_and_env_overrides(monkeypatch, tmp_path) -
     assert override_config.min_new_cards == 2
     assert override_config.max_previous_overlap_ratio == 0.25
     assert override_config.min_evidence_cards == 3
+    assert override_config.content_similarity_threshold == 0.8
+    assert override_config.agent_dedupe_enabled is True
+    assert override_config.agent_dedupe_max_previous == 5
+    assert override_config.agent_dedupe_timeout_sec == 9.5
 
 
 def test_identity_fingerprint_uses_sanitized_url_but_content_tracks_evidence() -> None:
@@ -1229,6 +1251,163 @@ def test_quality_fingerprints_separate_identity_from_content() -> None:
     assert _card_content_fingerprint(base) != _card_content_fingerprint(changed)
 
 
+def test_quality_content_signature_detects_same_story_across_different_urls() -> None:
+    previous = _quality_card(1, url="https://arxiv.org/abs/2605.03546")
+    previous.update(
+        {
+            "article_title": '📑Google: "AI 의사가 진짜 의사를 2.5배 이겼다고?"',
+            "claim": "AI 의사 평가에서 대화형 진단 모델이 임상 의사와 비교되었습니다.",
+            "mechanism": "동일한 증상 문진과 진단 추론 과정을 공개 초록 기준으로 비교합니다.",
+            "evidence": "공개 벤치마크에서 정확도와 상담 품질 지표가 함께 보고되었습니다.",
+            "summary_lines": [
+                "AI 의사 성능 비교를 다룹니다.",
+                "진단 대화와 평가 지표를 검토합니다.",
+                "임상 적용 전 검증 한계를 확인해야 합니다.",
+            ],
+            "public_excerpt": "AI 의사 모델과 실제 의사의 진단 대화 성능을 공개 평가로 비교한 연구입니다.",
+        }
+    )
+    current = dict(previous)
+    current["url"] = "https://research.google/blog/amie-doctor-evaluation"
+    current["article_title"] = 'Google: "AI 의사가 진짜 의사를 2.5배 이겼다고?"'
+
+    config = CardNewsQualityGateConfig(
+        audit_path=Path("unused"),
+        min_publishable_cards=1,
+        min_new_cards=1,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=1,
+    )
+    evaluation = _evaluate_card_news_quality(
+        [current],
+        {_card_identity_fingerprint(previous)},
+        config,
+        [set(_content_signature_hashes(previous))],
+    )
+
+    assert _card_identity_fingerprint(current) != _card_identity_fingerprint(previous)
+    assert evaluation["decision"] == "skip"
+    assert evaluation["counts"]["identity_repeated"] == 0
+    assert evaluation["counts"]["content_repeated"] == 1
+    assert evaluation["counts"]["new"] == 0
+    assert "min_new_cards" in evaluation["reason_codes"]
+    assert "max_previous_overlap_ratio" in evaluation["reason_codes"]
+
+
+def test_quality_content_similarity_does_not_block_distinct_story_with_new_url() -> None:
+    previous = _quality_card(1, url="https://example.com/old")
+    current = _quality_card(2, url="https://example.com/new", topic="검색/RAG/지식그래프")
+    current.update(
+        {
+            "article_title": "Graph retrieval benchmark exposes cache latency trade-offs",
+            "claim": "그래프 검색 벤치마크는 캐시 지연시간과 검색 정확도의 상충관계를 분리해 측정합니다.",
+            "mechanism": "쿼리 플래너가 이웃 노드 확장 폭과 캐시 미스율을 함께 조정합니다.",
+            "evidence": "공개 로그 분석에서 지연시간과 정확도 변화가 서로 다른 축으로 보고되었습니다.",
+            "summary_lines": [
+                "그래프 검색 평가는 캐시 정책을 따로 비교합니다.",
+                "정확도와 지연시간의 상충관계를 계량합니다.",
+                "운영 환경에서 캐시 정책을 재검토해야 합니다.",
+            ],
+        }
+    )
+    config = CardNewsQualityGateConfig(
+        audit_path=Path("unused"),
+        min_publishable_cards=1,
+        min_new_cards=1,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=1,
+    )
+
+    evaluation = _evaluate_card_news_quality(
+        [current],
+        {_card_identity_fingerprint(previous)},
+        config,
+        [set(_content_signature_hashes(previous))],
+    )
+
+    assert evaluation["decision"] == "publish"
+    assert evaluation["counts"]["content_repeated"] == 0
+    assert evaluation["counts"]["new"] == 1
+
+
+def test_quality_gate_counts_agent_duplicate_indices_as_repeated() -> None:
+    current = _quality_card(1, url="https://mirror.example.com/new-url")
+    config = CardNewsQualityGateConfig(
+        audit_path=Path("unused"),
+        min_publishable_cards=1,
+        min_new_cards=1,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=1,
+        agent_dedupe_enabled=True,
+    )
+
+    evaluation = _evaluate_card_news_quality([current], set(), config, [], {0})
+
+    assert evaluation["decision"] == "skip"
+    assert evaluation["counts"]["identity_repeated"] == 0
+    assert evaluation["counts"]["content_repeated"] == 0
+    assert evaluation["counts"]["agent_repeated"] == 1
+    assert evaluation["counts"]["new"] == 0
+
+
+def test_agent_duplicate_indices_uses_openclaw_json(monkeypatch) -> None:
+    import httpx
+
+    previous = _quality_card(1, url="https://arxiv.org/abs/2605.03546")
+    current = dict(previous)
+    current["url"] = "https://research.google/blog/amie-doctor-evaluation"
+    requests: list[dict[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json=None, headers=None):
+            requests.append({"url": url, "json": json, "headers": headers})
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"duplicates":[{"current_index":0,"reason":"same_story"}]}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "test-token")
+    monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1")
+
+    config = CardNewsQualityGateConfig(agent_dedupe_enabled=True, agent_dedupe_max_previous=3)
+    result = asyncio.run(_agent_duplicate_indices([current], [_agent_context(previous)], config))
+
+    assert result == {0}
+    assert requests
+    assert requests[0]["url"] == "http://127.0.0.1:18789/v1/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer test-token"
+
+
+def test_rank_agent_contexts_prefers_similar_story_over_recent_noise() -> None:
+    current = _quality_card(1, url="https://mirror.example.com/agent-memory")
+    similar = _agent_context(_quality_card(1, url="https://example.com/original-agent-memory"))
+    noise = [
+        _agent_context(
+            {
+                **_quality_card(idx, url=f"https://example.com/noise/{idx}", topic="검색/RAG/지식그래프"),
+                "article_title": f"Graph cache latency benchmark {idx}",
+                "claim": "그래프 캐시 지연시간과 검색 정확도 상충관계를 측정합니다.",
+            }
+        )
+        for idx in range(2, 7)
+    ]
+
+    selected = _rank_agent_contexts_for_cards([current], [*noise, similar], limit=1)
+
+    assert selected == [similar]
+
+
 def test_quality_history_overlap_skips_and_new_cards_pass() -> None:
     cards = [_quality_card(idx) for idx in range(7)]
     config = CardNewsQualityGateConfig(
@@ -1296,6 +1475,9 @@ def test_quality_audit_jsonl_is_sanitized(tmp_path: Path) -> None:
     assert stored["source_ref"] == "2026-05-09"
     assert stored["cards"][0]["url"] == "https://example.com/post?id=7"
     assert stored["cards"][0]["identity_fingerprint"].startswith("url:")
+    assert stored["cards"][0]["content_signature"]
+    assert stored["cards"][0]["agent_context"]["title"] == str(secret_card["article_title"])
+    assert all("Agent" not in token and "메모리" not in token for token in stored["cards"][0]["content_signature"])
     assert _load_recent_published_identities(audit_path, history_days=14) == set()
 
 
@@ -1331,6 +1513,129 @@ def test_quality_history_loader_uses_recent_publish_identities_only(tmp_path: Pa
     identities = _load_recent_published_identities(audit_path, history_days=14, now=now)
 
     assert identities == {recent_identity}
+
+
+def test_quality_history_loader_reads_recent_content_signatures(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    recent_card = _quality_card(1)
+    old_card = _quality_card(2)
+    recent_signature = _content_signature_hashes(recent_card)
+    old_signature = _content_signature_hashes(old_card)
+    audit_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "decision": "publish",
+                        "timestamp": (now - timedelta(days=1)).isoformat(),
+                        "cards": [
+                            {
+                                "identity_fingerprint": _card_identity_fingerprint(recent_card),
+                                "content_signature": recent_signature,
+                            }
+                        ],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "decision": "publish",
+                        "timestamp": (now - timedelta(days=30)).isoformat(),
+                        "cards": [
+                            {
+                                "identity_fingerprint": _card_identity_fingerprint(old_card),
+                                "content_signature": old_signature,
+                            }
+                        ],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    identities, signatures = _load_recent_published_card_history(audit_path, history_days=14, now=now)
+
+    assert identities == {_card_identity_fingerprint(recent_card)}
+    assert signatures == [set(recent_signature)]
+
+
+def test_quality_history_loader_accepts_legacy_identity_only_records(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    legacy_card = _quality_card(1)
+    signed_card = _quality_card(2)
+    signed_signature = _content_signature_hashes(signed_card)
+    audit_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "decision": "publish",
+                        "timestamp": (now - timedelta(days=1)).isoformat(),
+                        "cards": [{"identity_fingerprint": _card_identity_fingerprint(legacy_card)}],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "decision": "publish",
+                        "timestamp": now.isoformat(),
+                        "cards": [
+                            {
+                                "identity_fingerprint": _card_identity_fingerprint(signed_card),
+                                "content_signature": signed_signature,
+                            }
+                        ],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    identities, signatures = _load_recent_published_card_history(audit_path, history_days=14, now=now)
+
+    assert identities == {
+        _card_identity_fingerprint(legacy_card),
+        _card_identity_fingerprint(signed_card),
+    }
+    assert signatures == [set(signed_signature)]
+
+
+def test_quality_history_loader_reads_agent_contexts(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    now = datetime(2026, 5, 9, tzinfo=UTC)
+    recent_card = _quality_card(1)
+    old_card = _quality_card(2)
+    audit_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "decision": "publish",
+                        "timestamp": (now - timedelta(days=1)).isoformat(),
+                        "cards": [{"agent_context": _agent_context(recent_card)}],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "decision": "publish",
+                        "timestamp": (now - timedelta(days=30)).isoformat(),
+                        "cards": [{"agent_context": _agent_context(old_card)}],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    contexts = _load_recent_published_agent_contexts(audit_path, history_days=14, now=now)
+
+    assert len(contexts) == 1
+    assert contexts[0]["title"] == str(recent_card["article_title"])
 
 
 def test_render_uses_same_selected_cards_that_gate_evaluates() -> None:
