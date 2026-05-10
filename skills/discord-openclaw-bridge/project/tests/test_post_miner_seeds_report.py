@@ -25,6 +25,7 @@ _HEALTHY = {
     "seeds_processed": 1,
     "seeds_skipped_cooldown": 0,
     "seeds_with_errors": 0,
+    "seeds_with_warnings": 0,
     "total_expanded": 10,
     "total_accepted": 10,
     "total_duplicate": 0,
@@ -59,6 +60,26 @@ def test_title_with_errors_uses_alert_emoji() -> None:
     title = _format_thread_title(payload)
     assert title.startswith("🚨")
     assert "errors=1" in title
+
+
+def test_title_distinguishes_transient_warning_from_real_error() -> None:
+    """An empty_expansion warning must use ⚠️, not 🚨, to avoid alert fatigue.
+
+    Regression for review fix H2: Nature selector drift / rate-limit responses
+    surface as `seeds_with_warnings`. Without this branch every retry-able
+    transient looked like a real outage, desensitising operators to genuine
+    🚨 cases.
+    """
+    payload = {
+        **_HEALTHY,
+        "seeds_with_errors": 0,
+        "seeds_with_warnings": 1,
+        "total_accepted": 0,
+    }
+    title = _format_thread_title(payload)
+    assert title.startswith("⚠️")
+    assert "🚨" not in title
+    assert "warnings=1" in title
 
 
 def test_title_zero_accepted_no_errors_uses_warning_emoji() -> None:
@@ -99,10 +120,36 @@ def test_body_healthy_includes_summary_and_paths() -> None:
     assert "review queue:" in body
 
 
-def test_body_error_path_surfaces_error() -> None:
+def test_body_error_path_surfaces_real_error() -> None:
+    """Non-transient errors (e.g. parser_crashed) must surface as ❌ outages."""
     payload = {
         **_HEALTHY,
         "seeds_with_errors": 1,
+        "seeds_with_warnings": 0,
+        "total_accepted": 0,
+        "summaries": [
+            {
+                "seed_url": "https://www.nature.com/nature/articles?type=article",
+                "expanded_count": 0,
+                "accepted": 0,
+                "duplicate": 0,
+                "rejected": 0,
+                "skipped_cooldown": False,
+                "error": "parser_crashed",
+            }
+        ],
+    }
+    body = _format_thread_body(payload)
+    assert "❌ Some seeds failed" in body
+    assert "error: `parser_crashed`" in body
+
+
+def test_body_transient_warning_path_uses_calmer_verdict() -> None:
+    """empty_expansion gets a transient verdict and per-seed ⚠️ marker."""
+    payload = {
+        **_HEALTHY,
+        "seeds_with_errors": 0,
+        "seeds_with_warnings": 1,
         "total_accepted": 0,
         "summaries": [
             {
@@ -117,8 +164,10 @@ def test_body_error_path_surfaces_error() -> None:
         ],
     }
     body = _format_thread_body(payload)
-    assert "❌ Some seeds failed" in body
-    assert "error: `empty_expansion`" in body
+    assert "❌" not in body
+    assert "Transient warning" in body
+    assert "Cooldown was NOT advanced" in body
+    assert "⚠️ `https://www.nature.com/nature/articles?type=article` — transient: `empty_expansion`" in body
 
 
 def test_body_all_skipped_cooldown_path() -> None:

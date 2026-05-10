@@ -282,7 +282,12 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
 
 
 def _safe_url_open(url: str, *, timeout: float, user_agent: str):
-    """Open *url* with redirect targets re-validated against sanitize_url."""
+    """Open *url* with redirect targets host-validated by ``_SafeRedirectHandler``.
+
+    Only the host is checked (sanitize_url is intentionally NOT used on
+    redirect — see commit 42c51c0); query parameters pass through verbatim
+    so upstreams that round-trip a session token via 302 do not loop.
+    """
     request = Request(url, headers={"User-Agent": user_agent, "Accept": "text/html"})
     opener = build_opener(_SafeRedirectHandler())
     return opener.open(request, timeout=timeout)

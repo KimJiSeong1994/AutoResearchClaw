@@ -83,7 +83,7 @@ def _fetch_html_default(
     user_agent: str,
     max_bytes: int,
 ) -> str:
-    """Fetch up to *max_bytes* of HTML, blocking SSRF via redirect re-validation."""
+    """Fetch up to *max_bytes* of HTML, blocking SSRF via redirect host-allowlist."""
     with _safe_url_open(url, timeout=timeout_sec, user_agent=user_agent) as response:
         content_type = response.headers.get("Content-Type", "")
         if content_type and "html" not in content_type.lower():

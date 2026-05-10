@@ -81,11 +81,17 @@ def _kst_today_label(run_at_iso: str) -> str:
 def _format_thread_title(payload: dict) -> str:
     date_label = _kst_today_label(payload.get("run_at", ""))
     errors = int(payload.get("seeds_with_errors", 0))
+    warnings = int(payload.get("seeds_with_warnings", 0))
     accepted = int(payload.get("total_accepted", 0))
     seeds_total = int(payload.get("seeds_total", 0))
     seeds_skipped = int(payload.get("seeds_skipped_cooldown", 0))
     if errors:
         prefix = "🚨"
+    elif warnings:
+        # Transient self-healing case (selector drift / rate-limit / empty
+        # expansion). Surfaced for operator awareness but distinct from real
+        # outages so alert fatigue doesn't blunt the 🚨 signal.
+        prefix = "⚠️"
     elif seeds_total > 0 and seeds_skipped == seeds_total:
         # Healthy cooldown — every seed is within its 24h window. Avoid the ⚠️
         # alert emoji here so operators don't suffer alert fatigue on the most
@@ -95,8 +101,14 @@ def _format_thread_title(payload: dict) -> str:
         prefix = "⚠️"
     else:
         prefix = "🪨"
-    title = f"{prefix} Miner Seeds {date_label} — accepted={accepted} errors={errors}"
+    title = (
+        f"{prefix} Miner Seeds {date_label} — "
+        f"accepted={accepted} errors={errors} warnings={warnings}"
+    )
     return title[:DISCORD_THREAD_TITLE_LIMIT]
+
+
+_TRANSIENT_ERROR_TAGS = {"empty_expansion"}
 
 
 def _format_thread_body(payload: dict) -> str:
@@ -106,6 +118,7 @@ def _format_thread_body(payload: dict) -> str:
     seeds_processed = payload.get("seeds_processed", 0)
     seeds_skipped = payload.get("seeds_skipped_cooldown", 0)
     seeds_with_errors = payload.get("seeds_with_errors", 0)
+    seeds_with_warnings = payload.get("seeds_with_warnings", 0)
     expanded = payload.get("total_expanded", 0)
     accepted = payload.get("total_accepted", 0)
     duplicate = payload.get("total_duplicate", 0)
@@ -113,6 +126,12 @@ def _format_thread_body(payload: dict) -> str:
 
     if seeds_with_errors:
         verdict = "❌ Some seeds failed — see details below."
+    elif seeds_with_warnings:
+        verdict = (
+            "⚠️ Transient warning(s): seed(s) returned no usable links "
+            "(selector drift / rate-limit / empty expansion). Cooldown was "
+            "NOT advanced — next cron firing will retry."
+        )
     elif accepted == 0 and seeds_skipped == seeds_total:
         verdict = "⏸️ All seeds skipped (cooldown active). No new records this run."
     elif accepted == 0:
@@ -124,7 +143,7 @@ def _format_thread_body(payload: dict) -> str:
         "**Run summary**",
         f"- run_at (UTC): `{run_at}`",
         f"- duration: `{duration}s`",
-        f"- seeds: total=`{seeds_total}` processed=`{seeds_processed}` skipped_cooldown=`{seeds_skipped}` with_errors=`{seeds_with_errors}`",
+        f"- seeds: total=`{seeds_total}` processed=`{seeds_processed}` skipped_cooldown=`{seeds_skipped}` with_errors=`{seeds_with_errors}` with_warnings=`{seeds_with_warnings}`",
         f"- records: expanded=`{expanded}` accepted=`{accepted}` duplicate=`{duplicate}` rejected=`{rejected}`",
         "",
         verdict,
@@ -134,8 +153,11 @@ def _format_thread_body(payload: dict) -> str:
 
     for s in payload.get("summaries", []) or []:
         url = s.get("seed_url", "?")
-        if s.get("error"):
-            lines.append(f"- ❌ `{url}` — error: `{s.get('error')}`")
+        err = s.get("error")
+        if err and err not in _TRANSIENT_ERROR_TAGS:
+            lines.append(f"- ❌ `{url}` — error: `{err}`")
+        elif err:
+            lines.append(f"- ⚠️ `{url}` — transient: `{err}` (will retry next firing)")
         elif s.get("skipped_cooldown"):
             lines.append(f"- ⏸️ `{url}` — cooldown skip")
         else:

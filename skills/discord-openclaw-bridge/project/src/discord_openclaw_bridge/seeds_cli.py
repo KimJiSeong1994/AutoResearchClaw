@@ -4,6 +4,10 @@ Usage:
     discord-openclaw-miner-seeds           # runs and persists last_seen
     discord-openclaw-miner-seeds --once    # runs once, persists last_seen
     discord-openclaw-miner-seeds --dry-run # validates seeds.json, no network/write
+
+The CLI loads ``project/.env`` (cwd-relative) before resolving default paths so
+``JIPHYEONJEON_MINER_INTAKE_PATH`` / ``JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH``
+set there flow through to ``--intake-path`` / ``--review-queue-path`` defaults.
 """
 from __future__ import annotations
 
@@ -33,28 +37,59 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_WORKSPACE = Path.home() / ".openclaw" / "workspace"
-# Match the production paths used by miner_bot / review_cli (see config.py
-# `_miner_intake_path` / `_miner_review_queue_path`). Env vars take precedence
-# so cron runs and the slash-command miner converge on the same JSONLs.
-_DEFAULT_INTAKE_PATH = Path(
-    os.environ.get(
-        "JIPHYEONJEON_MINER_INTAKE_PATH",
-        str(_WORKSPACE / "intake" / "jiphyeonjeon-miner" / "links.jsonl"),
-    )
-).expanduser()
-_DEFAULT_REVIEW_QUEUE_PATH = Path(
-    os.environ.get(
-        "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
-        str(_WORKSPACE / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"),
-    )
-).expanduser()
-_DEFAULT_STATUS_PATH = Path(
-    os.environ.get(
-        "MINER_SEEDS_STATUS_PATH",
-        str(_WORKSPACE / "state" / "miner-seeds-last-status.json"),
-    )
-).expanduser()
+# Errors that the operator should treat as transient / self-healing rather than
+# as a service outage. They surface in the Discord report under a ⚠️ prefix
+# instead of 🚨, so a daily Nature selector drift does not desensitise the
+# operator to genuine network or parser failures.
+TRANSIENT_ERROR_TAGS: frozenset[str] = frozenset({"empty_expansion"})
+
+
+def _load_dotenv(path: Path) -> None:
+    """Best-effort dotenv loader (existing env wins via ``setdefault``).
+
+    Mirrors the parser used by ``config.py`` and ``post_miner_seeds_report``;
+    inlined to keep ``seeds_cli`` importable without a config dependency.
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def _resolve_default_paths() -> dict[str, Path]:
+    """Compute production-aligned default paths from env vars at call time.
+
+    Called *after* ``_load_dotenv`` so values from ``project/.env`` win over
+    the workspace-rooted fallbacks. Keeping this as a function (rather than
+    module-level constants) lets the CLI re-resolve when the env changes
+    between import and ``main()`` — important for cron runs where the
+    runner ``cd``s into the project before invoking the console script.
+    """
+    workspace = Path.home() / ".openclaw" / "workspace"
+    return {
+        "intake": Path(
+            os.environ.get(
+                "JIPHYEONJEON_MINER_INTAKE_PATH",
+                str(workspace / "intake" / "jiphyeonjeon-miner" / "links.jsonl"),
+            )
+        ).expanduser(),
+        "review_queue": Path(
+            os.environ.get(
+                "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
+                str(workspace / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"),
+            )
+        ).expanduser(),
+        "status": Path(
+            os.environ.get(
+                "MINER_SEEDS_STATUS_PATH",
+                str(workspace / "state" / "miner-seeds-last-status.json"),
+            )
+        ).expanduser(),
+    }
 
 
 def _write_last_status(
@@ -66,15 +101,28 @@ def _write_last_status(
     intake_path: Path,
     review_queue_path: Path,
 ) -> None:
-    """Atomically write the last-run status JSON for downstream reporters."""
+    """Atomically write the last-run status JSON for downstream reporters.
 
+    ``seeds_with_errors`` counts only non-transient failures so a daily
+    selector drift no longer raises 🚨 in the Discord report. Transient
+    cases (currently just ``empty_expansion``) move to ``seeds_with_warnings``
+    so the reporter can pick a calmer ⚠️ prefix.
+    """
+
+    real_errors = sum(
+        1 for s in summaries if s.error and s.error not in TRANSIENT_ERROR_TAGS
+    )
+    transient_warnings = sum(
+        1 for s in summaries if s.error in TRANSIENT_ERROR_TAGS
+    )
     payload = {
         "run_at": run_at,
         "duration_sec": round(duration_sec, 2),
         "seeds_total": len(summaries),
         "seeds_processed": sum(1 for s in summaries if not s.skipped_cooldown and not s.error),
         "seeds_skipped_cooldown": sum(1 for s in summaries if s.skipped_cooldown),
-        "seeds_with_errors": sum(1 for s in summaries if s.error),
+        "seeds_with_errors": real_errors,
+        "seeds_with_warnings": transient_warnings,
         "total_expanded": sum(s.expanded_count for s in summaries),
         "total_accepted": sum(s.accepted for s in summaries),
         "total_duplicate": sum(s.duplicate for s in summaries),
@@ -100,7 +148,7 @@ def _write_last_status(
     os.replace(tmp, path)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(defaults: dict[str, Path]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="discord-openclaw-miner-seeds",
         description="Expand registered seed URLs into miner intake records.",
@@ -134,20 +182,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--intake-path",
         type=Path,
-        default=_DEFAULT_INTAKE_PATH,
-        help=f"Path to intake JSONL (default: {_DEFAULT_INTAKE_PATH})",
+        default=defaults["intake"],
+        help=f"Path to intake JSONL (default: {defaults['intake']})",
     )
     parser.add_argument(
         "--review-queue-path",
         type=Path,
-        default=_DEFAULT_REVIEW_QUEUE_PATH,
-        help=f"Path to review queue JSONL (default: {_DEFAULT_REVIEW_QUEUE_PATH})",
+        default=defaults["review_queue"],
+        help=f"Path to review queue JSONL (default: {defaults['review_queue']})",
     )
     parser.add_argument(
         "--status-path",
         type=Path,
-        default=_DEFAULT_STATUS_PATH,
-        help=f"Path to last-status JSON (default: {_DEFAULT_STATUS_PATH})",
+        default=defaults["status"],
+        help=f"Path to last-status JSON (default: {defaults['status']})",
     )
     return parser
 
@@ -159,8 +207,10 @@ def _fetch_meta_wrapper(url: str):
 
 def _log_summaries(summaries: list[SeedRunSummary]) -> None:
     for s in summaries:
-        if s.error:
+        if s.error and s.error not in TRANSIENT_ERROR_TAGS:
             logger.error("seed %s ERROR: %s", s.seed_url, s.error)
+        elif s.error:
+            logger.warning("seed %s WARN: %s", s.seed_url, s.error)
         elif s.skipped_cooldown:
             logger.info("seed %s SKIPPED (cooldown)", s.seed_url)
         else:
@@ -175,7 +225,9 @@ def _log_summaries(summaries: list[SeedRunSummary]) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = _build_parser()
+    _load_dotenv(Path.cwd() / ".env")
+    defaults = _resolve_default_paths()
+    parser = _build_parser(defaults)
     args = parser.parse_args(argv)
 
     seeds = load_seeds(args.seeds_path)
@@ -219,17 +271,24 @@ def main(argv: list[str] | None = None) -> None:
         review_queue_path=args.review_queue_path,
     )
 
-    errors = sum(1 for s in summaries if s.error)
+    real_errors = sum(
+        1 for s in summaries if s.error and s.error not in TRANSIENT_ERROR_TAGS
+    )
+    transient_warnings = sum(
+        1 for s in summaries if s.error in TRANSIENT_ERROR_TAGS
+    )
     total_accepted = sum(s.accepted for s in summaries)
     logger.info(
-        "Run complete: %d seed(s), %d accepted, %d error(s) in %.1fs (status=%s)",
+        "Run complete: %d seed(s), %d accepted, %d error(s), %d warning(s) in %.1fs (status=%s)",
         len(summaries),
         total_accepted,
-        errors,
+        real_errors,
+        transient_warnings,
         duration_sec,
         args.status_path,
     )
-    if errors:
+    # Transient warnings should not break the cron — the next firing retries.
+    if real_errors:
         sys.exit(1)
 
 
