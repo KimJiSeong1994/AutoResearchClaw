@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
-REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_PROJECT="${REMOTE_PROJECT:-~/.openclaw/workspace/projects/paper-recommender}"
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,9 +10,10 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JIPHY_TOKEN="${JIPHYEONJEON_TOKEN:-}"
 if [ -z "$JIPHY_TOKEN" ]; then
   JIPHY_TOKEN="$(python3 -c "
-import json, sys
+import json, os, sys
 try:
-    d = json.load(open('/Users/jiseong/.claude/.claude.json'))
+    config_path = os.environ.get('CLAUDE_CONFIG_PATH', os.path.expanduser('~/.claude/.claude.json'))
+    d = json.load(open(config_path))
     m = d.get('mcpServers', {}).get('jiphyeonjeon', {})
     tok = m.get('env', {}).get('JIPHYEONJEON_TOKEN', '')
     sys.stdout.write(tok)

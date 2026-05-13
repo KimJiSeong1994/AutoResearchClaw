@@ -791,7 +791,7 @@ def test_card_news_thread_purge_archives_when_delete_is_forbidden() -> None:
                         {
                             "id": "1501834279691489420",
                             "name": "2026-05-07 기술 브리핑 카드뉴스",
-                            "parent_id": "1501211608104566854",
+                            "parent_id": "111111111111111111",
                         }
                     ]
                 },
@@ -1197,7 +1197,7 @@ def test_run_skips_before_discord_calls_when_quality_gate_fails(monkeypatch, tmp
     )
     _append_card_news_audit(audit_path, previous_record)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "111111111111111111")
     monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_MAX_CARDS", "7")
@@ -1675,7 +1675,7 @@ def test_run_skips_before_discord_calls_and_writes_audit(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "111111111111111111")
     monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
@@ -1712,7 +1712,7 @@ def test_run_quality_gate_disable_bypasses_skip_and_audit(tmp_path: Path, monkey
             requests.append(f"GET {url}")
             return post_card_news.httpx.Response(
                 200,
-                json={"id": "1501211608104566854", "type": 0},
+                json={"id": "111111111111111111", "type": 0},
                 request=post_card_news.httpx.Request("GET", url),
             )
 
@@ -1722,7 +1722,7 @@ def test_run_quality_gate_disable_bypasses_skip_and_audit(tmp_path: Path, monkey
 
     monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "111111111111111111")
     monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
@@ -1736,9 +1736,9 @@ def test_run_quality_gate_disable_bypasses_skip_and_audit(tmp_path: Path, monkey
 
     out = capsys.readouterr().out
     assert "skipped card news quality_gate" not in out
-    assert "posted card news to channel=1501211608104566854" in out
-    assert any(request.startswith("GET https://discord.com/api/v10/channels/1501211608104566854") for request in requests)
-    assert any(request.startswith("POST https://discord.com/api/v10/channels/1501211608104566854/messages") for request in requests)
+    assert "posted card news to channel=111111111111111111" in out
+    assert any(request.startswith("GET https://discord.com/api/v10/channels/111111111111111111") for request in requests)
+    assert any(request.startswith("POST https://discord.com/api/v10/channels/111111111111111111/messages") for request in requests)
     assert not audit_path.exists()
 
 
@@ -1767,7 +1767,7 @@ def test_run_writes_publish_and_failure_audits(tmp_path: Path, monkeypatch) -> N
                 return post_card_news.httpx.Response(200, json=[], request=post_card_news.httpx.Request("GET", url))
             return post_card_news.httpx.Response(
                 200,
-                json={"id": "1501211608104566854", "type": 0},
+                json={"id": "111111111111111111", "type": 0},
                 request=post_card_news.httpx.Request("GET", url),
             )
 
@@ -1777,7 +1777,7 @@ def test_run_writes_publish_and_failure_audits(tmp_path: Path, monkeypatch) -> N
 
     monkeypatch.setattr(post_card_news.httpx, "AsyncClient", FakeClient)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "1501211608104566854")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_CHANNEL_ID", "111111111111111111")
     monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
@@ -1785,8 +1785,8 @@ def test_run_writes_publish_and_failure_audits(tmp_path: Path, monkeypatch) -> N
 
     asyncio.run(run())
 
-    assert any(request.startswith("GET https://discord.com/api/v10/channels/1501211608104566854") for request in requests)
-    assert any(request.startswith("POST https://discord.com/api/v10/channels/1501211608104566854/messages") for request in requests)
+    assert any(request.startswith("GET https://discord.com/api/v10/channels/111111111111111111") for request in requests)
+    assert any(request.startswith("POST https://discord.com/api/v10/channels/111111111111111111/messages") for request in requests)
     records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
     assert records[-1]["decision"] == "publish"
     assert records[-1]["publish"]["message_count"] == 4

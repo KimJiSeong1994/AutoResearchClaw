@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE_HOST="ubuntu@52.79.96.56"
-KEY_FILE="/Users/jiseong/git/PaperReviewAgent/jiseong.pem"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 REMOTE_WORKSPACE='~/.openclaw/workspace'
 SSH_CMD="ssh -i ${KEY_FILE}"
 

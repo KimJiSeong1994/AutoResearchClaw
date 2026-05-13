@@ -13,8 +13,8 @@
 # laptop and from CI without depending on homebrew bash.
 set -euo pipefail
 
-KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
-REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.openclaw/workspace}"
 
 # 21:00 UTC = 06:00 Asia/Seoul (KST)

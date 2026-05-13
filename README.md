@@ -28,7 +28,7 @@ Local, version-controlled workspace for the OpenClaw agent running on the EC2 ga
 
 ## Target runtime
 
-- EC2 host: `52.79.96.56`
+- EC2 host: `<EC2_PUBLIC_IP>`
 - SSH user: `ubuntu`
 - Remote OpenClaw workspace: `~/.openclaw/workspace`
 - Gateway bind: `127.0.0.1:18789`
@@ -68,7 +68,7 @@ source-file references, and secret-value guardrails.
 bash scripts/deploy-discord-openclaw-bridge.sh
 ```
 
-On EC2, set `DISCORD_BOT_TOKEN` in `~/.openclaw/workspace/skills/discord-openclaw-bridge/project/.env`, run `bash project/scripts/install.sh`, then start `discord-openclaw-bridge.service`. The bridge is allowlisted to Discord guild `1500743272551813142` and channel `1500743273361440823` by default.
+On EC2, set `DISCORD_BOT_TOKEN` in `~/.openclaw/workspace/skills/discord-openclaw-bridge/project/.env`, run `bash project/scripts/install.sh`, then start `discord-openclaw-bridge.service`. The bridge is allowlisted to Discord guild `<DISCORD_GUILD_ID>` and channel `<DISCORD_ALLOWED_CHANNEL_ID>` by default.
 
 ## Check remote ops readiness
 
@@ -99,5 +99,5 @@ bash scripts/run-researchclaw-topic.sh "Your research topic"
 Synced local output root:
 
 ```text
-/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw
+<LOCAL_AUTORESEARCHCLAW_SYNC_DIR>
 ```

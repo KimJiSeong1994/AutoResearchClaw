@@ -56,14 +56,14 @@ The deep-design review demanded measurable evidence that a richer profile actual
 Quick trend command:
 
 ```bash
-ssh ubuntu@52.79.96.56 'jq -c "{date: .run_at, jaccard, soul_b: .soul_bytes, k: (.variants.keywords|length), s: (.variants.soul|length)}" \
+ssh ubuntu@<EC2_PUBLIC_IP> 'jq -c "{date: .run_at, jaccard, soul_b: .soul_bytes, k: (.variants.keywords|length), s: (.variants.soul|length)}" \
   ~/.openclaw/workspace/projects/paper-recommender/state/ab_log.jsonl'
 ```
 
 ## First-time setup
 
 ```bash
-cd /Users/jiseong/git/AutoResearchClaw
+cd <LOCAL_AUTORESEARCHCLAW_REPO>
 
 bash skills/paper-recommender/bootstrap-remote.sh   # deploy + venv + .env (JWT via stdin only)
 bash skills/paper-recommender/doctor.sh             # smoke-test 집현전 + OpenClaw
@@ -91,7 +91,7 @@ then publish extracted research/post links into the LLM Wiki:
 ```bash
 python3 skills/paper-recommender/newsletter_ingest.py \
   --source ~/Downloads/google-newsletters.mbox \
-  --wiki-root "/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki" \
+  --wiki-root "<LOCAL_PAPERWIKI_ROOT>" \
   --sender-allowlist "newsletter,research,arxiv,substack,medium,openai,deepmind,google research,anthropic,semanticscholar,paperswithcode,hugging face,huggingface,nvidia,the gradient,interconnects,ahead of ai,alpha signal,import ai,the batch,latent space"
 ```
 
@@ -176,11 +176,11 @@ existing token when no local `.mbox`/`.jsonl` export is present.
 
 Daily recommendations sync to:
 
-`/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw/recommendations/YYYY-MM-DD/`
+`<LOCAL_AUTORESEARCHCLAW_SYNC_DIR>/recommendations/YYYY-MM-DD/`
 
 Weekly trend reports sync cumulatively to:
 
-`/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/PaperReview/`
+`<LOCAL_PAPER_REVIEW_DIR>/`
 
 Each daily directory contains the daily note + `souls/{user_id}.md` snapshot + raw artifacts. Tags `paper-recommender` / `daily` are set in frontmatter for indexing or dataview queries.
 

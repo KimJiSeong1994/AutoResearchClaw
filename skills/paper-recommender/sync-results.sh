@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
-REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_ARTIFACTS="${REMOTE_ARTIFACTS:-~/.openclaw/workspace/projects/paper-recommender/artifacts/}"
 REMOTE_WEEKLY_ARTIFACTS="${REMOTE_WEEKLY_ARTIFACTS:-${REMOTE_ARTIFACTS%/}/weekly/}"
 REMOTE_FEEDBACK_INBOX="${REMOTE_FEEDBACK_INBOX:-~/.openclaw/workspace/projects/paper-recommender/state/feedback_inbox/}"
@@ -15,13 +15,13 @@ REMOTE_FEEDBACK_INBOX="${REMOTE_FEEDBACK_INBOX:-~/.openclaw/workspace/projects/p
 #   {WIKI_ROOT}/pages/autoresearch-{date}.md           ← daily entry
 #   {WIKI_ROOT}/pages/autoresearch-{date}-papers.md    ← paper cards
 #   {WIKI_ROOT}/pages/autoresearch-topic-{slug}.md     ← topic, append-mode
-WIKI_ROOT="${WIKI_ROOT:-/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki}"
+WIKI_ROOT="${WIKI_ROOT:?Set WIKI_ROOT to the local PaperWiki root}"
 # autoresearch raw lives under its own raw subdir (papers/ and reviews/ are
 # managed by the bookmark pipeline and shouldn't intermix with the date-folder
 # autoresearch outputs).
 LOCAL_ROOT="${LOCAL_ROOT:-${WIKI_ROOT}/raw/autoresearch}"
 # Weekly reports continue to land in the legacy PaperReview vault for now.
-LOCAL_WEEKLY_ROOT="${LOCAL_WEEKLY_ROOT:-/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/PaperReview}"
+LOCAL_WEEKLY_ROOT="${LOCAL_WEEKLY_ROOT:?Set LOCAL_WEEKLY_ROOT to the local weekly output directory}"
 FEEDBACK_LOOKBACK_DAYS="${FEEDBACK_LOOKBACK_DAYS:-7}"
 FEEDBACK_MAX_BYTES="${FEEDBACK_MAX_BYTES:-524288}"
 

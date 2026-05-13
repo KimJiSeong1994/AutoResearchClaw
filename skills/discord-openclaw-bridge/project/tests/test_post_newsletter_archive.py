@@ -176,7 +176,7 @@ def test_forum_archive_thread_creation_suppresses_embeds_and_mentions() -> None:
     thread_id = asyncio.run(
         _create_forum_archive_thread(
             client,  # type: ignore[arg-type]
-            "https://discord.com/api/v10/channels/1501211608104566854",
+            "https://discord.com/api/v10/channels/111111111111111111",
             headers={"Authorization": "Bot token"},
             name="2026-05-05 뉴스레타 아카이브",
             content="archive",
@@ -219,7 +219,7 @@ def test_archive_thread_purge_targets_same_parent_and_same_date_name_only() -> N
                         {
                             "id": "wrong-parent-same-date",
                             "name": "2026-05-05 뉴스레타 아카이브",
-                            "parent_id": "1501211608104566854",
+                            "parent_id": "111111111111111111",
                         },
                         {
                             "id": "same-parent-other-date",
@@ -241,7 +241,7 @@ def test_archive_thread_purge_targets_same_parent_and_same_date_name_only() -> N
     purged = asyncio.run(
         _purge_previous_archive_threads(
             client,  # type: ignore[arg-type]
-            "https://discord.com/api/v10/guilds/1500743272551813142/threads/active",
+            "https://discord.com/api/v10/guilds/222222222222222222/threads/active",
             headers={"Authorization": "Bot token"},
             parent_channel_id=1501073491921993758,
             thread_name="2026-05-05 뉴스레타 아카이브",

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KEY_FILE="/Users/jiseong/git/PaperReviewAgent/jiseong.pem"
-REMOTE_HOST="ubuntu@52.79.96.56"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_ARTIFACTS="~/.openclaw/workspace/projects/AutoResearchClaw/artifacts/"
-LOCAL_ROOT="/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw"
+LOCAL_ROOT="${LOCAL_ROOT:?Set LOCAL_ROOT to the local artifact sync directory}"
 
 mkdir -p "$LOCAL_ROOT"
 ssh -i "$KEY_FILE" "$REMOTE_HOST" "mkdir -p ~/.openclaw/workspace/projects/AutoResearchClaw/artifacts"

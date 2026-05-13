@@ -13,7 +13,7 @@ Use this skill when the user asks to install, inspect, verify, invite, or operat
 - Service: `discord-openclaw-bridge.service` under the `ubuntu` systemd user
 - Discord access: bot token from project `.env`
 - OpenClaw access: loopback `http://127.0.0.1:18789/v1` plus token file `~/.openclaw_gateway_token`
-- Default allowlist: guild `1500743272551813142`, channel `1500743273361440823`
+- Default allowlist: guild `<DISCORD_GUILD_ID>`, channel `<DISCORD_ALLOWED_CHANNEL_ID>`
 - Briefing source: `DISCORD_BRIEFING_SOURCE`, defaulting to `~/.openclaw/workspace/reports/daily-trends-latest.md`
 - Card-news source: `DISCORD_CARD_NEWS_SOURCE`, defaulting to the latest `NEWSLETTER_WIKI_ROOT/raw/newsletters/*/items.json`
 

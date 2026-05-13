@@ -6,8 +6,8 @@
 # Exit code 0 = healthy, 1 = warnings present.
 set -euo pipefail
 
-KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
-REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_STATUS="${REMOTE_STATUS:-~/.openclaw/workspace/projects/paper-recommender/state/last_run_status.json}"
 
 # Pull the status file content via SSH; survives if jq is missing locally.

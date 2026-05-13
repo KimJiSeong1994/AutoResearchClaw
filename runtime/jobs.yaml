@@ -202,8 +202,8 @@ jobs:
     target:
       project_dir: ~/.openclaw/workspace/skills/discord-openclaw-bridge/project
       service: discord-openclaw-bridge.service
-      guild_id: "1500743272551813142"
-      channel_id: "1500743273361440823"
+      guild_id: "<DISCORD_GUILD_ID>"
+      channel_id: "<DISCORD_ALLOWED_CHANNEL_ID>"
     interfaces:
       - /openclaw
       - /openclaw_status

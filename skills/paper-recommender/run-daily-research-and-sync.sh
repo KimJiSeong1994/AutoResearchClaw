@@ -8,12 +8,12 @@ set -euo pipefail
 # ~/Desktop/paper-wiki so the scheduled run leaves an inspectable daily trace
 # instead of disappearing into cron logs.
 
-KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
-REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_PROJECT="${REMOTE_PROJECT:-~/.openclaw/workspace/projects/paper-recommender}"
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${LOG_DIR:-/Users/jiseong/git/AutoResearchClaw/.omx/logs/paper-recommender}"
-PRIMARY_WIKI_ROOT="${WIKI_ROOT:-/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki}"
+LOG_DIR="${LOG_DIR:-$SKILL_DIR/../../.omx/logs/paper-recommender}"
+PRIMARY_WIKI_ROOT="${WIKI_ROOT:?Set WIKI_ROOT to the local PaperWiki root}"
 FALLBACK_WIKI_ROOT="${FALLBACK_WIKI_ROOT:-$HOME/Desktop/paper-wiki}"
 RUN_DATE="${RUN_DATE:-$(date +%Y-%m-%d)}"
 mkdir -p "$LOG_DIR"

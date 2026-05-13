@@ -6,7 +6,7 @@ set -euo pipefail
 # Takeout .mbox or sanitized .jsonl export into NEWSLETTER_SOURCE_DIR.
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WIKI_ROOT="${WIKI_ROOT:-/Users/jiseong/Library/Mobile Documents/com~apple~CloudDocs/PaperWiki/PaperWiki}"
+WIKI_ROOT="${WIKI_ROOT:?Set WIKI_ROOT to the local PaperWiki root}"
 FALLBACK_WIKI_ROOT="${FALLBACK_WIKI_ROOT:-$HOME/Desktop/paper-wiki}"
 NEWSLETTER_SOURCE_DIR="${NEWSLETTER_SOURCE_DIR:-$HOME/Desktop/paper-wiki/newsletter-exports}"
 NEWSLETTER_SOURCE="${NEWSLETTER_SOURCE:-}"

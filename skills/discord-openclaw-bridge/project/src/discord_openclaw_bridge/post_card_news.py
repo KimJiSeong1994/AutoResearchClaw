@@ -30,7 +30,7 @@ from .post_newsletter import (
     _required_snowflake,
 )
 
-DEFAULT_CARD_NEWS_CHANNEL_ID = "1501211608104566854"
+DEFAULT_CARD_NEWS_CHANNEL_ID = ""
 CARD_NEWS_TITLE = "집현전-Claw 카드뉴스"
 FORUM_CHANNEL_TYPES = {15}
 CARD_NEWS_THREAD_NAME_MARKERS = (

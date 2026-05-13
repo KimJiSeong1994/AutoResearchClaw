@@ -126,8 +126,8 @@ agents:
     runtime:
       project_dir: ~/.openclaw/workspace/skills/discord-openclaw-bridge/project
       service: discord-openclaw-bridge.service
-      guild_id: "1500743272551813142"
-      channel_id: "1500743273361440823"
+      guild_id: "<DISCORD_GUILD_ID>"
+      channel_id: "<DISCORD_ALLOWED_CHANNEL_ID>"
       gateway_endpoint: http://127.0.0.1:18789/v1
     responsibilities:
       - provide /openclaw and /openclaw_status in the allowlisted channel
@@ -212,7 +212,7 @@ agents:
       - discord-card-news-publish
     runtime:
       source_default: latest NEWSLETTER_WIKI_ROOT/raw/newsletters/*/items.json
-      channel_default: "1501211608104566854"
+      channel_default: "<DISCORD_NEWSLETTER_CHANNEL_ID>"
       max_cards_default: 8
     responsibilities:
       - render newsletter archive items into compact Discord card-news messages

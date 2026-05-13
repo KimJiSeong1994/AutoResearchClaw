@@ -4,8 +4,8 @@ Minimal Discord bot bridge for operating OpenClaw from one Discord channel.
 
 Default target:
 
-- Guild/server: `1500743272551813142`
-- Channel: `1500743273361440823`
+- Guild/server: `<DISCORD_GUILD_ID>`
+- Channel: `<DISCORD_ALLOWED_CHANNEL_ID>`
 - OpenClaw gateway: `http://127.0.0.1:18789/v1`
 
 The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loopback only. It exposes:
@@ -151,7 +151,7 @@ posting, so the newsletter archive job can finish writing the fresh
 
 Operational controls:
 
-- `DISCORD_CARD_NEWS_CHANNEL_ID` defaults to the `ai-뉴스레타` forum/channel `1501211608104566854`.
+- `DISCORD_CARD_NEWS_CHANNEL_ID` defaults to the `ai-뉴스레타` forum/channel `<DISCORD_NEWSLETTER_CHANNEL_ID>`.
 - `DISCORD_CARD_NEWS_SOURCE` defaults to the latest `NEWSLETTER_WIKI_ROOT/raw/newsletters/*/items.json` archive, preferring today.
 - `DISCORD_CARD_NEWS_MAX_CARDS` defaults to `8` to keep the Discord thread compact.
 - `DISCORD_CARD_NEWS_HERO_IMAGE_PATH` optionally attaches a PNG hero image when posting to a Discord forum channel.

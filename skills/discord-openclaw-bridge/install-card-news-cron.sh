@@ -9,11 +9,11 @@
 #   bash skills/discord-openclaw-bridge/install-card-news-cron.sh
 #   CARD_NEWS_CRON_SCHEDULE="0 23 * * *" bash skills/discord-openclaw-bridge/install-card-news-cron.sh
 #   CARD_NEWS_DELAY_SECONDS=0 bash skills/discord-openclaw-bridge/install-card-news-cron.sh
-#   CARD_NEWS_CHANNEL_ID=1501211608104566854 bash skills/discord-openclaw-bridge/install-card-news-cron.sh
+#   CARD_NEWS_CHANNEL_ID=<DISCORD_NEWSLETTER_CHANNEL_ID> bash skills/discord-openclaw-bridge/install-card-news-cron.sh
 set -euo pipefail
 
-KEY_FILE="${KEY_FILE:-/Users/jiseong/git/PaperReviewAgent/jiseong.pem}"
-REMOTE_HOST="${REMOTE_HOST:-ubuntu@52.79.96.56}"
+KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.openclaw/workspace}"
 
 # Same schedule as the current AI newsletter archive publisher:
@@ -22,7 +22,7 @@ CARD_NEWS_CRON_SCHEDULE="${CARD_NEWS_CRON_SCHEDULE:-0 23 * * *}"
 CARD_NEWS_DELAY_SECONDS="${CARD_NEWS_DELAY_SECONDS:-900}"
 CARD_NEWS_MAX_CARDS="${CARD_NEWS_MAX_CARDS:-8}"
 CARD_NEWS_HERO_IMAGE_PATH="${CARD_NEWS_HERO_IMAGE_PATH:-assets/cardnews-hero-2026-05-05-ai.png}"
-CARD_NEWS_CHANNEL_ID="${CARD_NEWS_CHANNEL_ID:-1501211608104566854}"
+CARD_NEWS_CHANNEL_ID="${CARD_NEWS_CHANNEL_ID:?Set CARD_NEWS_CHANNEL_ID to the Discord card-news channel/forum ID}"
 
 ssh -i "$KEY_FILE" "$REMOTE_HOST" \
   "REMOTE_WORKSPACE='$REMOTE_WORKSPACE' \

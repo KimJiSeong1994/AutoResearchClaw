@@ -2,10 +2,10 @@
 
 ## Remote host
 
-- Public IP: `52.79.96.56`
-- Public DNS: `ec2-52-79-96-56.ap-northeast-2.compute.amazonaws.com`
+- Public IP: `<EC2_PUBLIC_IP>`
+- Public DNS: `<EC2_PUBLIC_DNS>`
 - SSH user: `ubuntu`
-- Key file on local machine: `/Users/jiseong/git/PaperReviewAgent/jiseong.pem`
+- Key file on local machine: `<PATH_TO_SSH_PRIVATE_KEY>`
 
 ## Remote OpenClaw
 
@@ -28,8 +28,8 @@
 
 - Bridge project: `~/.openclaw/workspace/skills/discord-openclaw-bridge/project`
 - Service: `discord-openclaw-bridge.service`
-- Default Discord guild: `1500743272551813142`
-- Default Discord channel: `1500743273361440823`
+- Default Discord guild: `<DISCORD_GUILD_ID>`
+- Default Discord channel: `<DISCORD_ALLOWED_CHANNEL_ID>`
 - Runtime calls OpenClaw through `http://127.0.0.1:18789/v1`; do not expose the gateway publicly for Discord.
 - Secret file: bridge project `.env` contains `DISCORD_BOT_TOKEN` and must not be version-controlled.
 
@@ -49,6 +49,6 @@
 - Gateway endpoint for ResearchClaw LLM calls: `http://127.0.0.1:18789/v1`
 - Gateway model target: `openclaw/clawbridge`
 - Env var for auth when running ResearchClaw: `OPENCLAW_GATEWAY_TOKEN`
-- Synced local output root: `/Users/jiseong/Library/Mobile Documents/iCloud~md~obsidian/Documents/Write Paper/AutoResearchClaw`
+- Synced local output root: `<LOCAL_OBSIDIAN_SYNC_DIR>`
 - Local sync helper: `bash scripts/sync-researchclaw-results.sh`
 - Local run+sync helper: `bash scripts/run-researchclaw-topic.sh "topic"`

@@ -54,3 +54,4 @@ config.yaml
 credentials.json
 token.json
 client_secret*.json
+.clasp.json
