@@ -81,6 +81,15 @@ class MinerBotConfig:
     traveler_source_queue_path: Path | None = None
 
 
+@dataclass(frozen=True)
+class TravelerBotConfig:
+    discord_bot_token: str
+    guild_id: int
+    traveler_channel_id: int
+    traveler_research_queue_path: Path
+    traveler_source_queue_path: Path
+
+
 def _miner_intake_path() -> Path:
     return Path(
         os.environ.get(
@@ -199,6 +208,26 @@ def load_miner_config() -> MinerBotConfig:
         miner_review_queue_path=_miner_review_queue_path(),
         miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
         traveler_channel_id=_traveler_channel_id(default=None),
+        traveler_research_queue_path=_traveler_research_queue_path(),
+        traveler_source_queue_path=_traveler_source_queue_path(),
+    )
+
+
+def load_traveler_config() -> TravelerBotConfig:
+    _load_dotenv(Path.cwd() / ".env")
+
+    discord_bot_token = os.environ.get("DISCORD_TRAVELER_BOT_TOKEN", "").strip()
+    if not discord_bot_token:
+        raise ConfigError("missing required env var: DISCORD_TRAVELER_BOT_TOKEN")
+
+    traveler_channel_id = _traveler_channel_id(default=None)
+    if traveler_channel_id is None:
+        raise ConfigError("missing required env var: DISCORD_TRAVELER_CHANNEL_ID")
+
+    return TravelerBotConfig(
+        discord_bot_token=discord_bot_token,
+        guild_id=_required_int("DISCORD_GUILD_ID"),
+        traveler_channel_id=traveler_channel_id,
         traveler_research_queue_path=_traveler_research_queue_path(),
         traveler_source_queue_path=_traveler_source_queue_path(),
     )

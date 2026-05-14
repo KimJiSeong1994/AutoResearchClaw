@@ -71,6 +71,7 @@ Operational controls:
 - `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires the Miner bot's Discord `MESSAGE_CONTENT` intent.
 - `JIPHYEONJEON_MINER_DECISIONS_PATH` and `JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH` control the review audit log and approved-only `manual_links` export path.
 - For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
+- For an individual Traveler bot, set `DISCORD_TRAVELER_BOT_TOKEN` and `DISCORD_TRAVELER_CLIENT_ID`, invite it with `project/scripts/invite-traveler-url.sh`, then install/start `discord-jiphyeonjeon-traveler.service`.
 - The main OpenClaw bot ignores normal messages in `DISCORD_MINER_CHANNEL_ID` and no longer registers the Miner intake command. If you also need to hide unrelated OpenClaw slash commands from the Miner channel UI, set that in Discord's integration command permissions; Discord rejects that endpoint for bot tokens.
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue. Newsletter archive/card-news jobs count approved Miner links for exclusion evidence but do not merge them into the public newsletter surfaces.
@@ -110,7 +111,8 @@ Traveler-to-Miner handoff contract:
 
 - Discord command: `/jiphyeonjeon_travel topic:<topic> scope:<optional>
   min_sources_to_review:<default 20> note:<optional>` records a deep-research
-  request. It does not directly add a source to Miner seeds.
+  request through the standalone Traveler bot. It does not directly add a
+  source to Miner seeds.
 - Research request queue path: `JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH`,
   defaulting operationally to
   `~/.openclaw/workspace/review/jiphyeonjeon-traveler/research-requests.jsonl`.
@@ -148,6 +150,17 @@ $EDITOR project/.env  # set DISCORD_MINER_BOT_TOKEN, DISCORD_MINER_CLIENT_ID, DI
 bash project/scripts/invite-miner-url.sh
 bash project/scripts/install-miner.sh
 systemctl --user start discord-jiphyeonjeon-miner.service
+bash project/scripts/status.sh
+```
+
+To run 집현전-여행자 as a separate Discord application/bot:
+
+```bash
+cd ~/.openclaw/workspace/skills/discord-openclaw-bridge
+$EDITOR project/.env  # set DISCORD_TRAVELER_BOT_TOKEN, DISCORD_TRAVELER_CLIENT_ID, DISCORD_TRAVELER_CHANNEL_ID
+bash project/scripts/invite-traveler-url.sh
+bash project/scripts/install-traveler.sh
+systemctl --user start discord-jiphyeonjeon-traveler.service
 bash project/scripts/status.sh
 ```
 
