@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -77,12 +78,18 @@ class JiphyeonjeonMinerBot(discord.Client):
         )
 
     def traveler_channel_allowed(self, interaction: discord.Interaction) -> bool:
+        channel = interaction.channel
+        channel_id = getattr(channel, "id", None)
+        parent_id = getattr(channel, "parent_id", None)
+        parent = getattr(channel, "parent", None)
+        if parent_id is None and parent is not None:
+            parent_id = getattr(parent, "id", None)
         return bool(
             self.config.traveler_channel_id is not None
             and interaction.guild is not None
             and interaction.guild.id == self.config.guild_id
-            and interaction.channel is not None
-            and interaction.channel.id == self.config.traveler_channel_id
+            and channel is not None
+            and (channel_id == self.config.traveler_channel_id or parent_id == self.config.traveler_channel_id)
         )
 
 
@@ -158,7 +165,46 @@ async def _travel_command(
         LOG.exception("traveler slash request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
         await interaction.response.send_message("집현전-여행자 리서치 요청 등록에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
         return
-    await interaction.response.send_message(render_research_request_ack(record), ephemeral=True)
+    ack = render_research_request_ack(record)
+    forum_thread = await _publish_traveler_forum_record(bot, record, ack)
+    suffix = f"\n포럼 게시글: {forum_thread.mention}" if forum_thread is not None else ""
+    await interaction.response.send_message(f"{ack}{suffix}", ephemeral=True)
+
+
+def _traveler_forum_thread_title(record: dict[str, Any]) -> str:
+    topic = str(record.get("topic") or "심층 출처 리서치 요청").strip()
+    title = f"🧭 {topic}"
+    return title[:90]
+
+
+async def _publish_traveler_forum_record(
+    bot: JiphyeonjeonMinerBot,
+    record: dict[str, Any],
+    ack: str,
+) -> discord.Thread | None:
+    channel_id = bot.config.traveler_channel_id
+    if channel_id is None:
+        return None
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except discord.DiscordException:
+            LOG.exception("failed to fetch traveler channel channel=%s", channel_id)
+            return None
+    if not isinstance(channel, discord.ForumChannel):
+        return None
+    try:
+        created = await channel.create_thread(
+            name=_traveler_forum_thread_title(record),
+            content=ack,
+            allowed_mentions=discord.AllowedMentions.none(),
+            reason="Jiphyeonjeon Traveler deep research request",
+        )
+    except discord.DiscordException:
+        LOG.exception("failed to create traveler forum post channel=%s request=%s", channel_id, record.get("request_id"))
+        return None
+    return created.thread
 
 
 def build_miner_bot(config: MinerBotConfig) -> JiphyeonjeonMinerBot:

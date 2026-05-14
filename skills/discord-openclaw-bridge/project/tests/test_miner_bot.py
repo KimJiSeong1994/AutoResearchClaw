@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from discord_openclaw_bridge.config import ConfigError, MinerBotConfig, load_miner_config
-from discord_openclaw_bridge.miner_bot import build_miner_bot
+from discord_openclaw_bridge.miner_bot import _traveler_forum_thread_title, build_miner_bot
 
 
 def test_standalone_miner_bot_registers_miner_and_traveler_commands(tmp_path: Path) -> None:
@@ -37,6 +38,32 @@ def test_standalone_miner_bot_enables_message_content_only_when_configured(tmp_p
     bot = build_miner_bot(config)
 
     assert bot.intents.message_content
+
+
+def test_traveler_channel_allows_forum_parent_thread(tmp_path: Path) -> None:
+    config = MinerBotConfig(
+        discord_bot_token="miner-token",
+        guild_id=1,
+        miner_channel_id=2,
+        traveler_channel_id=30,
+        miner_intake_path=tmp_path / "intake.jsonl",
+        miner_review_queue_path=tmp_path / "review.jsonl",
+        miner_enable_channel_collection=False,
+    )
+    bot = build_miner_bot(config)
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=1),
+        channel=SimpleNamespace(id=31, parent_id=30),
+    )
+
+    assert bot.traveler_channel_allowed(interaction) is True
+
+
+def test_traveler_forum_thread_title_is_bounded() -> None:
+    title = _traveler_forum_thread_title({"topic": "A" * 200})
+
+    assert title.startswith("🧭 ")
+    assert len(title) == 90
 
 
 def test_load_miner_config_requires_dedicated_bot_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
