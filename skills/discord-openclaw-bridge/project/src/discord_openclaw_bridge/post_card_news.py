@@ -2208,6 +2208,7 @@ async def _create_forum_card_news_thread(
     name: str,
     content: str,
     hero_image_path: Path | None = None,
+    max_retries: int = 4,
 ) -> str:
     payload: dict[str, Any] = {
         "name": _clean(name, limit=90),
@@ -2222,14 +2223,42 @@ async def _create_forum_card_news_thread(
         message_payload = payload["message"]
         if isinstance(message_payload, dict):
             message_payload["attachments"] = [{"id": 0, "filename": hero_image_path.name}]
-        response = await client.post(
-            f"{forum_url}/threads",
-            headers=headers,
-            data={"payload_json": json.dumps(payload, ensure_ascii=False)},
-            files={"files[0]": (hero_image_path.name, hero_image_path.read_bytes(), "image/png")},
-        )
-    else:
-        response = await client.post(f"{forum_url}/threads", headers=headers, json=payload)
+    thread_url = f"{forum_url}/threads"
+    for attempt in range(max_retries + 1):
+        try:
+            if hero_image_path and hero_image_path.exists():
+                response = await client.post(
+                    thread_url,
+                    headers=headers,
+                    data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                    files={"files[0]": (hero_image_path.name, hero_image_path.read_bytes(), "image/png")},
+                )
+            else:
+                response = await client.post(thread_url, headers=headers, json=payload)
+        except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
+            if attempt >= max_retries:
+                raise
+            await asyncio.sleep(min(2.0**attempt, 10.0))
+            continue
+        if response.status_code == 429:
+            retry_after = 1.0
+            try:
+                retry_after = float(response.json().get("retry_after") or retry_after)
+            except Exception:
+                header_value = response.headers.get("retry-after")
+                if header_value:
+                    try:
+                        retry_after = float(header_value)
+                    except ValueError:
+                        retry_after = 1.0
+            if attempt >= max_retries:
+                response.raise_for_status()
+            await asyncio.sleep(min(max(retry_after, 0.25), 10.0))
+            continue
+        if 500 <= response.status_code < 600 and attempt < max_retries:
+            await asyncio.sleep(min(2.0**attempt, 10.0))
+            continue
+        break
     response.raise_for_status()
     thread_id = str(response.json().get("id") or "")
     if not thread_id:

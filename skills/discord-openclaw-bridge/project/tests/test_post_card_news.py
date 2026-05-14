@@ -855,6 +855,36 @@ def test_forum_thread_creation_uses_thread_starter_with_suppressed_embeds() -> N
     ]
 
 
+def test_forum_thread_creation_retries_transient_read_errors() -> None:
+    import httpx
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadError("temporary EOF", request=request)
+        assert request.method == "POST"
+        assert request.url.path == "/api/v10/channels/1501073491921993758/threads"
+        return httpx.Response(201, json={"id": "1502000000000000001"}, request=request)
+
+    async def scenario() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await _create_forum_card_news_thread(
+                client,
+                "https://discord.com/api/v10/channels/1501073491921993758",
+                headers={"Authorization": "Bot test"},
+                name="2026-05-14 기술 브리핑 카드뉴스",
+                content=f"**{CARD_NEWS_TITLE}**\nheader",
+            )
+
+    thread_id = asyncio.run(scenario())
+
+    assert thread_id == "1502000000000000001"
+    assert attempts == 2
+
+
 def test_split_discord_content_keeps_chunks_under_limit() -> None:
     content = "intro\n\n" + ("A" * 1200) + "\n\n" + ("B" * 1200)
 
