@@ -169,6 +169,8 @@ agents:
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
     runtime:
+      channel_env: DISCORD_TRAVELER_CHANNEL_ID
+      research_queue_path: JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH
       discovery_queue_path: JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
       review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
       reviewer: jiphyeonjeon-claw

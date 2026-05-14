@@ -277,8 +277,10 @@ jobs:
     type: research-and-review
     owner_agent: jiphyeonjeon-traveler
     command_refs:
+      - /jiphyeonjeon_travel topic:<topic> min_sources_to_review:<count>
       - web research over public source/newsletter/article sites
-      - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH with candidate source records
+      - update JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH with deep-research requests
+      - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH with evidence-backed candidate source records
       - route accepted candidates to 집현전-광부 seed expansion or 집현전-클로 review
     triggers:
       - manual source discovery request
@@ -289,7 +291,8 @@ jobs:
       - existing Miner seed status and source yield summaries
       - 집현전-Claw technical relevance criteria
     outputs:
-      - source candidate queue with reliability, cadence, feasibility, and evidence fields
+      - deep-research request queue requiring many-source comparison
+      - source candidate queue with reliability, cadence, feasibility, rejected-source evidence, and next-action fields
       - recommended Miner seed additions for operator review
     safety:
       side_effects: source recommendations only; no automatic scraping, approval, or Discord posting

@@ -76,6 +76,9 @@ class MinerBotConfig:
     miner_intake_path: Path
     miner_review_queue_path: Path
     miner_enable_channel_collection: bool
+    traveler_channel_id: int | None = None
+    traveler_research_queue_path: Path | None = None
+    traveler_source_queue_path: Path | None = None
 
 
 def _miner_intake_path() -> Path:
@@ -108,6 +111,28 @@ def _miner_channel_id(default: int | None = None) -> int:
     if channel_id is None:
         raise ConfigError("missing required env var: DISCORD_MINER_CHANNEL_ID")
     return channel_id
+
+
+def _traveler_channel_id(default: int | None = None) -> int | None:
+    return _optional_int("DISCORD_TRAVELER_CHANNEL_ID", default)
+
+
+def _traveler_research_queue_path() -> Path:
+    return Path(
+        os.environ.get(
+            "JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH",
+            str(Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "research-requests.jsonl"),
+        )
+    ).expanduser()
+
+
+def _traveler_source_queue_path() -> Path:
+    return Path(
+        os.environ.get(
+            "JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH",
+            str(Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"),
+        )
+    ).expanduser()
 
 
 def load_config() -> BridgeConfig:
@@ -165,11 +190,15 @@ def load_miner_config() -> MinerBotConfig:
         raise ConfigError("missing required env var: DISCORD_MINER_BOT_TOKEN")
 
     default_channel_id = _optional_int("DISCORD_ALLOWED_CHANNEL_ID")
+    miner_channel_id = _miner_channel_id(default=default_channel_id)
     return MinerBotConfig(
         discord_bot_token=discord_bot_token,
         guild_id=_required_int("DISCORD_GUILD_ID"),
-        miner_channel_id=_miner_channel_id(default=default_channel_id),
+        miner_channel_id=miner_channel_id,
         miner_intake_path=_miner_intake_path(),
         miner_review_queue_path=_miner_review_queue_path(),
         miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
+        traveler_channel_id=_traveler_channel_id(default=None),
+        traveler_research_queue_path=_traveler_research_queue_path(),
+        traveler_source_queue_path=_traveler_source_queue_path(),
     )

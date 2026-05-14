@@ -84,9 +84,11 @@ engineering blogs, conference/working-paper feeds, dataset/release feeds, and
 curated technical indexes — that can become Miner seed candidates.
 
 Traveler does not collect individual Discord links, approve newsletter
-inclusion, or write to `approved-manual-links.jsonl`. It proposes source-level
-candidates for operator/집현전-클로 review, and only accepted candidates should be
-handed to 집현전-광부 seed expansion.
+inclusion, or write to `approved-manual-links.jsonl`. It must perform deep
+research over many possible sources before selecting candidates: a single URL
+suggestion is only a research lead, not an accepted source. It proposes
+source-level candidates for operator/집현전-클로 review, and only accepted
+candidates should be handed to 집현전-광부 seed expansion.
 
 Source reliability rubric:
 
@@ -106,8 +108,17 @@ Source reliability rubric:
 
 Traveler-to-Miner handoff contract:
 
+- Discord command: `/jiphyeonjeon_travel topic:<topic> scope:<optional>
+  min_sources_to_review:<default 20> note:<optional>` records a deep-research
+  request. It does not directly add a source to Miner seeds.
+- Research request queue path: `JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH`,
+  defaulting operationally to
+  `~/.openclaw/workspace/review/jiphyeonjeon-traveler/research-requests.jsonl`.
 - Candidate queue path: `JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH`, defaulting
   operationally to `~/.openclaw/workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl`.
+- Each research request enforces `minimum_sources_to_review` (clamped to at
+  least 10) and requires rejected-source evidence; no source can be fast-tracked
+  from a single URL.
 - Each candidate record should include source URL, source type, update cadence
   evidence, reliability rationale, topic fit, collection method hint
   (`rss`, `archive_page`, `newsletter_landing`, `manual_watch`, or `reject`),

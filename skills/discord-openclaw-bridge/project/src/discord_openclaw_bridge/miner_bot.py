@@ -9,6 +9,7 @@ from discord import app_commands
 
 from .config import ConfigError, MinerBotConfig, load_miner_config
 from .miner import DiscordLinkMetadata, record_message_links, record_requested_links, render_ack
+from .traveler import TravelerResearchRequest, record_research_request, render_research_request_ack
 
 LOG = logging.getLogger("discord_jiphyeonjeon_miner")
 
@@ -75,6 +76,15 @@ class JiphyeonjeonMinerBot(discord.Client):
             and interaction.channel.id == self.config.miner_channel_id
         )
 
+    def traveler_channel_allowed(self, interaction: discord.Interaction) -> bool:
+        return bool(
+            self.config.traveler_channel_id is not None
+            and interaction.guild is not None
+            and interaction.guild.id == self.config.guild_id
+            and interaction.channel is not None
+            and interaction.channel.id == self.config.traveler_channel_id
+        )
+
 
 async def _mine_command(
     interaction: discord.Interaction,
@@ -110,10 +120,54 @@ async def _mine_command(
     await interaction.response.send_message(render_ack(results), ephemeral=True)
 
 
+async def _travel_command(
+    interaction: discord.Interaction,
+    topic: str,
+    scope: str | None = None,
+    min_sources_to_review: int = 20,
+    note: str | None = None,
+) -> None:
+    bot = interaction.client
+    assert isinstance(bot, JiphyeonjeonMinerBot)
+    if not bot.traveler_channel_allowed(interaction):
+        await interaction.response.send_message("집현전-여행자 리서치 요청은 지정된 여행자 채널에서만 사용할 수 있습니다.", ephemeral=True)
+        return
+    if bot.config.traveler_research_queue_path is None or bot.config.traveler_source_queue_path is None:
+        await interaction.response.send_message("집현전-여행자 큐 경로가 설정되지 않았습니다.", ephemeral=True)
+        return
+    try:
+        record = record_research_request(
+            TravelerResearchRequest(
+                topic=topic,
+                scope=scope,
+                min_sources_to_review=min_sources_to_review,
+                requester_note=note,
+            ),
+            queue_path=bot.config.traveler_research_queue_path,
+            candidate_queue_path=bot.config.traveler_source_queue_path,
+            discord=DiscordLinkMetadata(
+                guild_id=interaction.guild_id,
+                channel_id=interaction.channel_id,
+                user_id=interaction.user.id if interaction.user else None,
+            ),
+        )
+    except ValueError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+    except Exception:
+        LOG.exception("traveler slash request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
+        await interaction.response.send_message("집현전-여행자 리서치 요청 등록에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
+        return
+    await interaction.response.send_message(render_research_request_ack(record), ephemeral=True)
+
+
 def build_miner_bot(config: MinerBotConfig) -> JiphyeonjeonMinerBot:
     bot = JiphyeonjeonMinerBot(config)
     bot.tree.command(name="jiphyeonjeon_mine", description="Collect a link for Jiphyeonjeon-Claw review")(
         _mine_command
+    )
+    bot.tree.command(name="jiphyeonjeon_travel", description="Request deep research for durable high-trust collection sources")(
+        _travel_command
     )
     return bot
 
