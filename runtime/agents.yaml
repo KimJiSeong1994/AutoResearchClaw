@@ -160,6 +160,30 @@ agents:
       - persists only sanitized URLs and Discord metadata IDs
       - pending queue files are never newsletter inputs
 
+  - id: jiphyeonjeon-traveler
+    name: 집현전-여행자 source discovery agent
+    kind: research-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/README.md#집현전-여행자-source-discovery-path
+      - workspace/PROMPT_REGISTRY.json
+    owns_jobs:
+      - jiphyeonjeon-traveler-source-discovery
+    runtime:
+      discovery_queue_path: JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
+      review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
+      reviewer: jiphyeonjeon-claw
+      downstream_collector: jiphyeonjeon-miner
+    responsibilities:
+      - discover credible, recurring source candidates through bounded web research
+      - score sources for reliability, technical relevance, update cadence, and collection feasibility
+      - propose source URLs and newsletter/article feeds for Miner seed expansion or Claw review
+      - record evidence-backed source recommendations without deciding newsletter inclusion
+    boundaries:
+      - does not scrape private, paywalled, login-only, or terms-hostile sources
+      - does not approve newsletter inclusion or mutate approved manual links
+      - stores source-level metadata and public evidence only, never raw private content
+      - hands collection candidates to 집현전-광부 and review decisions to 집현전-클로
+
   - id: jiphyeonjeon-guard
     name: 집현전-경비원 operations issue guard
     kind: ops-review-agent

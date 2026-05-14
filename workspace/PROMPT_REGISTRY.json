@@ -168,6 +168,50 @@
       "rollback": "Disable DISCORD_MINER_ENABLE_CHANNEL_COLLECTION, stop using approved-manual-links export, remove /jiphyeonjeon_mine registration, and preserve queue/decision JSONL files for audit."
     },
     {
+      "prompt_id": "jiphyeonjeon_traveler_source_discovery",
+      "owner": "Jiphyeonjeon-Claw",
+      "purpose": "Discover durable, high-trust public sources, newsletters, and article sites that 집현전-광부 can collect from and 집현전-클로 can review.",
+      "source": {
+        "path": "skills/discord-openclaw-bridge/README.md",
+        "anchors": [
+          "집현전-여행자 source-discovery path",
+          "source reliability rubric",
+          "traveler-to-miner handoff"
+        ]
+      },
+      "service_surface": "jiphyeonjeon_source_discovery",
+      "input_classes": [
+        "public_web_search_result",
+        "newsletter_or_feed_landing_page",
+        "source_yield_summary",
+        "operator_source_discovery_request"
+      ],
+      "forbidden_data": [
+        "login_only_content",
+        "paywalled_full_text",
+        "private_newsletter_body",
+        "oauth_token",
+        "discord_bot_token",
+        "automatic_newsletter_inclusion",
+        "terms_hostile_scraping"
+      ],
+      "output_contract": "Append-only source-candidate records with URL, source type, reliability rationale, update cadence evidence, collection feasibility, topic fit, known access constraints, and recommended next action for 집현전-광부 seed expansion or 집현전-클로 review.",
+      "validation": [
+        "scripts/check-runtime-manifests.py",
+        "scripts/check-prompt-governance.py",
+        "manual_source_reliability_review",
+        "no_private_content_storage_check"
+      ],
+      "metrics": [
+        "source_stats",
+        "candidate_count",
+        "evidence_coverage_pct",
+        "secret_scan_pass",
+        "health_status"
+      ],
+      "rollback": "Stop traveler source-discovery runs, preserve candidate queue for audit, and remove jiphyeonjeon-traveler ownership from runtime manifests if the workflow creates low-quality or non-compliant sources."
+    },
+    {
       "prompt_id": "discord_briefing_renderer",
       "owner": "Jiphyeonjeon-Claw",
       "purpose": "Render the latest Jiphyeonjeon-Claw briefing into concise Discord markdown.",

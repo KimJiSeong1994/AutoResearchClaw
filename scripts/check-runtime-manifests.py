@@ -40,6 +40,7 @@ REQUIRED_JOB_IDS = {
     "discord-jiphyeonjeon-miner-service",
     "jiphyeonjeon-miner-review",
     "jiphyeonjeon-guard-ops-digest",
+    "jiphyeonjeon-traveler-source-discovery",
     "discord-card-news-publish",
 }
 
@@ -51,6 +52,7 @@ REQUIRED_AGENT_IDS = {
     "discord-openclaw-bridge",
     "jiphyeonjeon-miner",
     "jiphyeonjeon-guard",
+    "jiphyeonjeon-traveler",
     "jiphyeonjeon-claw",
     "card-news-publisher",
 }

@@ -75,6 +75,49 @@ Operational controls:
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue. Newsletter archive/card-news jobs count approved Miner links for exclusion evidence but do not merge them into the public newsletter surfaces.
 
+## 집현전-여행자 source-discovery path
+
+집현전-여행자 is a research-only source discovery agent that works upstream of
+집현전-광부. Its role is to find credible, recurring, and collection-friendly
+public information sources — newsletters, article hubs, research lab blogs,
+engineering blogs, conference/working-paper feeds, dataset/release feeds, and
+curated technical indexes — that can become Miner seed candidates.
+
+Traveler does not collect individual Discord links, approve newsletter
+inclusion, or write to `approved-manual-links.jsonl`. It proposes source-level
+candidates for operator/집현전-클로 review, and only accepted candidates should be
+handed to 집현전-광부 seed expansion.
+
+Source reliability rubric:
+
+1. **Credibility:** primary organization, named author/editorial process,
+   visible provenance, or reputable technical/research venue.
+2. **Continuity:** recurring publication cadence or stable feed/archive page
+   that can be revisited without one-off scraping.
+3. **Technical fit:** academic search, AI/ML systems, retrieval/RAG,
+   agents, evaluation, multimodal, infrastructure, or other
+   Jiphyeonjeon-Claw technical-report topics.
+4. **Collection feasibility:** public HTTP(S), no login-only body, no private
+   mailbox dependence, no hostile terms, and low risk of leaking secret query
+   parameters.
+5. **Yield signal:** recent posts contain concrete papers, technical reports,
+   release notes, datasets, benchmarks, or engineering writeups rather than
+   generic career, market, or promotional material.
+
+Traveler-to-Miner handoff contract:
+
+- Candidate queue path: `JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH`, defaulting
+  operationally to `~/.openclaw/workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl`.
+- Each candidate record should include source URL, source type, update cadence
+  evidence, reliability rationale, topic fit, collection method hint
+  (`rss`, `archive_page`, `newsletter_landing`, `manual_watch`, or `reject`),
+  access constraints, and recommended next action.
+- Traveler records are source recommendations only. They are not newsletter
+  items and must not bypass 집현전-클로 review or 집현전-광부 URL sanitization.
+- Rejected source classes: jobs/career-only pages, social/admin notifications,
+  private or login-only newsletters, analytics dashboards, generic market
+  commentary, and sources dominated by non-technical content.
+
 ## Setup on EC2
 
 ```bash
