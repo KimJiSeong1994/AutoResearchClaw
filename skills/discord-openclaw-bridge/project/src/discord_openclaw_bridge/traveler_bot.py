@@ -10,7 +10,14 @@ from discord import app_commands
 
 from .config import ConfigError, TravelerBotConfig, load_traveler_config
 from .miner import DiscordLinkMetadata
-from .traveler import TravelerResearchRequest, record_research_request, render_research_request_ack
+from .openclaw import OpenClawClient
+from .traveler import (
+    TravelerResearchRequest,
+    record_research_request,
+    render_research_pending_notice,
+    render_research_prompt,
+    render_research_request_ack,
+)
 
 LOG = logging.getLogger("discord_jiphyeonjeon_traveler")
 
@@ -22,6 +29,12 @@ class JiphyeonjeonTravelerBot(discord.Client):
         super().__init__(intents=discord.Intents.default())
         self.config = config
         self.tree = app_commands.CommandTree(self)
+        self.openclaw = OpenClawClient(
+            base_url=config.openclaw_base_url,
+            token=config.openclaw_gateway_token,
+            model=config.openclaw_model,
+            timeout_sec=config.timeout_sec,
+        )
 
     async def setup_hook(self) -> None:
         guild = discord.Object(id=self.config.guild_id)
@@ -64,6 +77,7 @@ async def _travel_command(
     if not bot.channel_allowed(interaction):
         await interaction.response.send_message("집현전-여행자 리서치 요청은 지정된 여행자 포럼에서만 사용할 수 있습니다.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True, thinking=True)
     try:
         record = record_research_request(
             TravelerResearchRequest(
@@ -81,16 +95,58 @@ async def _travel_command(
             ),
         )
     except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
+        await interaction.followup.send(str(exc), ephemeral=True)
         return
     except Exception:
         LOG.exception("traveler slash request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
-        await interaction.response.send_message("집현전-여행자 리서치 요청 등록에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
+        await interaction.followup.send("집현전-여행자 리서치 요청 등록에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
         return
     ack = render_research_request_ack(record)
     forum_thread = await publish_traveler_forum_record(bot, record, ack)
+    if forum_thread is not None:
+        asyncio.create_task(publish_traveler_deep_research(bot, forum_thread, record))
     suffix = f"\n포럼 게시글: {forum_thread.mention}" if forum_thread is not None else ""
-    await interaction.response.send_message(f"{ack}{suffix}", ephemeral=True)
+    await interaction.followup.send(f"{ack}{suffix}\n심층 리서치 결과는 포럼 스레드에 이어서 게시됩니다.", ephemeral=True)
+
+
+def _trim_discord(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 20)].rstrip() + "\n…(truncated)"
+
+
+async def publish_traveler_deep_research(
+    bot: JiphyeonjeonTravelerBot,
+    thread: discord.Thread,
+    record: dict[str, Any],
+) -> None:
+    await thread.send(
+        _trim_discord(render_research_pending_notice(record), bot.config.max_response_chars),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    if not bot.config.openclaw_gateway_token:
+        await thread.send(
+            "OpenClaw gateway token is not configured, so only the research request was recorded.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return
+    try:
+        research = await bot.openclaw.chat(
+            render_research_prompt(record),
+            max_tokens=900,
+            timeout_sec=min(bot.config.timeout_sec, 45),
+        )
+    except Exception:
+        LOG.exception("traveler deep research generation failed request=%s", record.get("request_id"))
+        await thread.send(
+            "심층 리서치 생성에 실패했습니다. 운영 로그를 확인해 주세요.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return
+    await thread.send(
+        _trim_discord(research, bot.config.max_response_chars),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 def traveler_forum_thread_title(record: dict[str, Any]) -> str:

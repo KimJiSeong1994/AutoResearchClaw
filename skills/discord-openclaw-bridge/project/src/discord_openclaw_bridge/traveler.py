@@ -252,10 +252,59 @@ def record_research_request(
     append_jsonl(queue_path, record)
     return record
 
+def render_research_prompt(record: dict[str, Any]) -> str:
+    return (
+        "집현전-여행자 역할로 심층 출처 리서치를 수행해 주세요. "
+        "다수의 고신뢰 공개 출처를 비교하고, 탈락 기준까지 포함해 운영자가 바로 볼 수 있는 한국어 문서형 리포트를 작성하세요. "
+        "실시간 웹 접근이 불가능하면 추측으로 출처를 꾸미지 말고, 확인 가능한 범위와 추가 확인 필요 항목을 명시하세요. "
+        "Discord Markdown에서 읽기 좋도록 짧은 문단, 불릿, 표를 사용하고 1800자 이내로 압축하세요.\n\n"
+        f"요청 ID: {record['request_id']}\n"
+        f"주제: {record['topic']}\n"
+        f"범위: {record['scope']}\n"
+        f"최소 검토 출처 수: {record['min_sources_to_review']}\n"
+        f"후보 기록 경로: {record['candidate_queue_path']}\n"
+        f"요청 메모: {record.get('requester_note') or '(없음)'}\n\n"
+        "반드시 아래 문서 포맷을 그대로 사용하세요:\n"
+        "# 🧭 집현전-여행자 심층 리서치 리포트\n"
+        f"**요청 ID:** `{record['request_id']}`\n"
+        f"**주제:** {record['topic']}\n"
+        "**판정:** <광부 seed 후보화 가능 / 추가 확인 필요 / 보류 중 하나>\n\n"
+        "## 1. 3줄 요약\n"
+        "- ...\n- ...\n- ...\n\n"
+        "## 2. 추천 출처 후보\n"
+        "|출처|URL/검색 단서|신뢰 근거|갱신|수집|판정|\n"
+        "|---|---|---|---|---|---|\n"
+        "|...|...|...|...|...|...|\n\n"
+        "## 3. 보류/탈락 기준\n"
+        "- ...\n\n"
+        "## 4. 광부·클로 다음 액션\n"
+        "- [광부] ...\n- [클로] ...\n\n"
+        "## 5. 검증 한계\n"
+        "- ..."
+    )
+
+
+def render_research_pending_notice(record: dict[str, Any]) -> str:
+    return (
+        "# 🧭 집현전-여행자 리서치 접수 보고서\n"
+        f"**요청 ID:** `{record['request_id']}`\n"
+        "**상태:** `pending_deep_research`\n"
+        f"**주제:** {record['topic']}\n"
+        f"**범위:** {record['scope']}\n"
+        f"**최소 검토 출처:** {record['min_sources_to_review']}개\n"
+        f"**후보 기록 경로:** `{record['candidate_queue_path']}`\n\n"
+        "## 처리 방식\n"
+        "- 다수 출처를 비교한 뒤 신뢰 근거와 탈락 사유를 함께 남깁니다.\n"
+        "- 적합 후보만 집현전-광부 seed 또는 집현전-클로 리뷰로 넘깁니다.\n"
+        "- 심층 리서치 결과는 이 스레드에 문서형 리포트로 이어서 게시됩니다."
+    )
+
 
 def render_research_request_ack(record: dict[str, Any]) -> str:
     return (
-        f"🧭 집현전-여행자: 심층 출처 리서치 요청을 등록했습니다. `{record['request_id']}` "
-        f"주제: {record['topic']} / 최소 검토 출처: {record['min_sources_to_review']}개. "
-        "다수 출처를 비교·탈락 기록까지 남긴 뒤 적합 후보만 광부 seed/클로 리뷰로 넘깁니다."
+        "# 🧭 집현전-여행자 접수 완료\n"
+        f"**요청 ID:** `{record['request_id']}`\n"
+        f"**주제:** {record['topic']}\n"
+        f"**최소 검토 출처:** {record['min_sources_to_review']}개\n"
+        "**처리 원칙:** 다수 출처 비교 → 탈락 기록 → 적합 후보만 광부 seed/클로 리뷰로 전달"
     )

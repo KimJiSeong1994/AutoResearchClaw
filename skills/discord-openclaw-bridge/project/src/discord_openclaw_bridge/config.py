@@ -88,6 +88,11 @@ class TravelerBotConfig:
     traveler_channel_id: int
     traveler_research_queue_path: Path
     traveler_source_queue_path: Path
+    openclaw_base_url: str = "http://127.0.0.1:18789/v1"
+    openclaw_gateway_token: str = ""
+    openclaw_model: str = "openclaw/clawbridge"
+    timeout_sec: float = 120.0
+    max_response_chars: int = 1800
 
 
 def _miner_intake_path() -> Path:
@@ -144,6 +149,23 @@ def _traveler_source_queue_path() -> Path:
     ).expanduser()
 
 
+def _openclaw_gateway_token() -> str:
+    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    token_file = os.environ.get("OPENCLAW_GATEWAY_TOKEN_FILE", "").strip()
+    if not token and token_file:
+        path = Path(token_file).expanduser()
+        if path.exists():
+            token = path.read_text().strip()
+    return token
+
+
+def _openclaw_base_url() -> str:
+    base_url = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1").strip().rstrip("/")
+    if not (base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:")):
+        raise ConfigError("OPENCLAW_BASE_URL must remain loopback for this bridge")
+    return base_url
+
+
 def load_config() -> BridgeConfig:
     _load_dotenv(Path.cwd() / ".env")
 
@@ -151,18 +173,11 @@ def load_config() -> BridgeConfig:
     if not discord_bot_token:
         raise ConfigError("missing required env var: DISCORD_BOT_TOKEN")
 
-    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
-    token_file = os.environ.get("OPENCLAW_GATEWAY_TOKEN_FILE", "").strip()
-    if not token and token_file:
-        path = Path(token_file).expanduser()
-        if path.exists():
-            token = path.read_text().strip()
+    token = _openclaw_gateway_token()
     if not token:
         raise ConfigError("missing OPENCLAW_GATEWAY_TOKEN or readable OPENCLAW_GATEWAY_TOKEN_FILE")
 
-    base_url = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1").strip().rstrip("/")
-    if not (base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:")):
-        raise ConfigError("OPENCLAW_BASE_URL must remain loopback for this bridge")
+    base_url = _openclaw_base_url()
 
     allowed_channel_id = _required_int("DISCORD_ALLOWED_CHANNEL_ID")
     miner_channel_id = _miner_channel_id(default=allowed_channel_id)
@@ -230,4 +245,9 @@ def load_traveler_config() -> TravelerBotConfig:
         traveler_channel_id=traveler_channel_id,
         traveler_research_queue_path=_traveler_research_queue_path(),
         traveler_source_queue_path=_traveler_source_queue_path(),
+        openclaw_base_url=_openclaw_base_url(),
+        openclaw_gateway_token=_openclaw_gateway_token(),
+        openclaw_model=os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip(),
+        timeout_sec=float(os.environ.get("OPENCLAW_TIMEOUT_SEC", "120")),
+        max_response_chars=int(os.environ.get("DISCORD_MAX_RESPONSE_CHARS", "1800")),
     )

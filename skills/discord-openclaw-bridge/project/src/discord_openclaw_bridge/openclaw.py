@@ -27,14 +27,20 @@ class OpenClawClient:
             user_agent="discord-openclaw-bridge/0.1",
         )
 
-    async def chat(self, prompt: str) -> str:
+    async def chat(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int | None = None,
+        timeout_sec: float | None = None,
+    ) -> str:
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        async with OpenClawGatewayClient(self._policy()) as gateway:
+        async with OpenClawGatewayClient(self._policy(timeout_sec=timeout_sec)) as gateway:
             try:
-                content = await gateway.chat_completion(self.model, messages)
+                content = await gateway.chat_completion(self.model, messages, max_tokens=max_tokens)
             except (KeyError, IndexError, TypeError) as exc:
                 raise RuntimeError("OpenClaw returned an unexpected chat/completions shape") from exc
         return str(content).strip() or "(empty response)"
