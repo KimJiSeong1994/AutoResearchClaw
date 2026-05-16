@@ -8,6 +8,11 @@ dependencies = [
   "httpx>=0.27,<1",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<10",
+]
+
 [project.scripts]
 discord-openclaw-bridge = "discord_openclaw_bridge.bot:main"
 discord-jiphyeonjeon-miner = "discord_openclaw_bridge.miner_bot:main"
@@ -20,6 +25,7 @@ discord-openclaw-post-newsletter-archive = "discord_openclaw_bridge.post_newslet
 discord-openclaw-miner-seeds = "discord_openclaw_bridge.seeds_cli:main"
 discord-openclaw-post-miner-seeds-report = "discord_openclaw_bridge.post_miner_seeds_report:main"
 discord-openclaw-post-traveler-collection-report = "discord_openclaw_bridge.post_traveler_collection_report:main"
+discord-openclaw-traveler-discover-sources = "discord_openclaw_bridge.traveler_source_discovery:main"
 discord-openclaw-guard-ops-digest = "discord_openclaw_bridge.guard_ops:main"
 
 [build-system]

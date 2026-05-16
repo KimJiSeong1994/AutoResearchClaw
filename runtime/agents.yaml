@@ -168,6 +168,7 @@ agents:
       - workspace/PROMPT_REGISTRY.json
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
+      - jiphyeonjeon-traveler-daily-collection-report
     runtime:
       service: discord-jiphyeonjeon-traveler.service
       token_env: DISCORD_TRAVELER_BOT_TOKEN

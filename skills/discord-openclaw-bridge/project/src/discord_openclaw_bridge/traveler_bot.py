@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from .config import ConfigError, TravelerBotConfig, load_traveler_config
-from .miner import DiscordLinkMetadata
+from .miner import DiscordLinkMetadata, extract_urls
 from .openclaw import OpenClawClient
 from .traveler import (
     TravelerResearchRequest,
@@ -115,6 +115,21 @@ def _trim_discord(text: str, limit: int) -> str:
     return text[: max(0, limit - 20)].rstrip() + "\n…(truncated)"
 
 
+def _research_verification_notice(research: str) -> str:
+    public_urls = extract_urls(research)
+    if public_urls:
+        sample = ", ".join(public_urls[:5])
+        return (
+            "⚠️ **URL 검증 안내:** 아래 OpenClaw 리서치 문서의 URL은 공개 URL 형식만 1차 정규화했습니다. "
+            "광부 seed/클로 후보 큐 반영은 매일 실행되는 Traveler discovery CLI가 공개 메타데이터 provider로 재검증한 뒤에만 수행합니다. "
+            f"정규화된 URL 샘플: {sample}"
+        )
+    return (
+        "⚠️ **URL 검증 안내:** 아래 OpenClaw 리서치 문서에서 공개 URL을 확인하지 못했습니다. "
+        "광부 seed/클로 후보 큐에는 별도 Traveler discovery CLI 검증 결과만 반영됩니다."
+    )
+
+
 async def publish_traveler_deep_research(
     bot: JiphyeonjeonTravelerBot,
     thread: discord.Thread,
@@ -143,6 +158,10 @@ async def publish_traveler_deep_research(
             allowed_mentions=discord.AllowedMentions.none(),
         )
         return
+    await thread.send(
+        _trim_discord(_research_verification_notice(research), bot.config.max_response_chars),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
     await thread.send(
         _trim_discord(research, bot.config.max_response_chars),
         allowed_mentions=discord.AllowedMentions.none(),

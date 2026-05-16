@@ -26,6 +26,9 @@ from paper_recommender.sources._util import (
 
 log = logging.getLogger(__name__)
 
+PENDING_REVIEW_STATUSES = {"pending_claw_review", "pending_source_review", "pending"}
+REVIEW_GATED_SOURCES = {"discord_miner", "discord_traveler"}
+
 
 @dataclass(frozen=True)
 class ManualLinkSettings:
@@ -165,9 +168,9 @@ def _approved_miner_row(raw: dict) -> bool:
     source = clean_text(raw.get("source")).lower()
     status = clean_text(raw.get("status")).lower()
     review = raw.get("review")
-    if status == "pending_claw_review":
+    if status in PENDING_REVIEW_STATUSES:
         return False
-    if source != "discord_miner":
+    if source not in REVIEW_GATED_SOURCES and not source.startswith("jiphyeonjeon"):
         return True
     if not isinstance(review, dict):
         return False

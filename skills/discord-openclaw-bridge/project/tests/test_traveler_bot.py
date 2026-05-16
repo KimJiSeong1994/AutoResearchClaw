@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from discord_openclaw_bridge.config import ConfigError, TravelerBotConfig, load_traveler_config
-from discord_openclaw_bridge.traveler_bot import build_traveler_bot, traveler_forum_thread_title
+from discord_openclaw_bridge.traveler_bot import (
+    _research_verification_notice,
+    build_traveler_bot,
+    traveler_forum_thread_title,
+)
 
 
 def test_standalone_traveler_bot_registers_only_traveler_command(tmp_path: Path) -> None:
@@ -75,3 +79,12 @@ def test_load_traveler_config_uses_dedicated_token_and_paths(monkeypatch: pytest
     assert config.traveler_channel_id == 30
     assert config.traveler_research_queue_path == research_path
     assert config.traveler_source_queue_path == source_path
+
+
+
+def test_research_verification_notice_labels_openclaw_urls_unverified() -> None:
+    notice = _research_verification_notice("See https://example.com/a?utm_source=x for details")
+
+    assert "URL 검증 안내" in notice
+    assert "discovery CLI" in notice
+    assert "https://example.com/a" in notice

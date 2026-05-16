@@ -112,3 +112,30 @@ def test_manual_links_adapter_rejects_private_and_credentialed_urls(tmp_path: Pa
     items = asyncio.run(adapter.fetch(["agentic ai"], SourceLimits(max_per_source=10)))
 
     assert [it.title for it in items] == ["Public"]
+
+
+def test_manual_links_rejects_pending_traveler_source_candidate(tmp_path: Path) -> None:
+    path = tmp_path / "traveler-pending.jsonl"
+    rows = [
+        {
+            "title": "Pending Traveler Source",
+            "url": "https://example.com/source",
+            "source": "discord_traveler",
+            "status": "pending_source_review",
+            "review": {"required": True, "decision": "pending", "miner_seed_expansion": "blocked_until_reviewed"},
+            "tags": ["source-discovery", "jiphyeonjeon-traveler", "pending_source_review"],
+        },
+        {
+            "title": "Approved Traveler Source",
+            "url": "https://example.com/approved",
+            "source": "discord_traveler",
+            "review": {"decision": "approved", "source_decision": "approve"},
+            "tags": ["manual-link", "approved-by-jiphyeonjeon-claw"],
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    adapter = ManualLinksAdapter(ManualLinkSettings(paths=[str(path)]))
+
+    items = asyncio.run(adapter.fetch([], SourceLimits(max_per_source=10)))
+
+    assert [item.title for item in items] == ["Approved Traveler Source"]

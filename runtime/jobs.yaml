@@ -278,7 +278,9 @@ jobs:
     owner_agent: jiphyeonjeon-traveler
     command_refs:
       - /jiphyeonjeon_travel topic:<topic> min_sources_to_review:<count>
-      - web research over public source/newsletter/article sites
+      - uv run discord-openclaw-traveler-discover-sources
+      - uv run discord-openclaw-traveler-discover-sources --dry-run
+      - web research over public metadata/source/newsletter/article endpoints
       - update JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH with deep-research requests
       - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH with evidence-backed candidate source records
       - route accepted candidates to 집현전-광부 seed expansion or 집현전-클로 review
@@ -297,6 +299,32 @@ jobs:
     safety:
       side_effects: source recommendations only; no automatic scraping, approval, or Discord posting
       secrets: public source metadata only; do not store private newsletters, login content, or tokens
+
+  - id: jiphyeonjeon-traveler-daily-collection-report
+    name: Daily Traveler additional-collection report
+    type: cron
+    owner_agent: jiphyeonjeon-traveler
+    command_refs:
+      - bash skills/discord-openclaw-bridge/install-traveler-collection-report-cron.sh
+      - bash skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh
+      - uv run discord-openclaw-traveler-discover-sources
+      - uv run discord-openclaw-post-traveler-collection-report
+    schedule:
+      cron_utc: "0 13 * * *"
+      local_time: "22:00 Asia/Seoul"
+    depends_on:
+      - jiphyeonjeon-traveler-source-discovery
+    inputs:
+      - JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH
+      - JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
+      - current Miner seed/intake/review/approved surfaces
+    outputs:
+      - Discord Traveler forum collection-gap report
+      - traveler-source-discovery-last-status.json
+      - traveler-collection-report-last-status.json
+    safety:
+      side_effects: public Discord report posting; candidate discovery writes pending review records only
+      secrets: Discord bot token remains in remote .env only; report/status must not contain tokens
 
   - id: discord-miner-seeds-expand
     name: Expand configured Miner seed sources
