@@ -136,8 +136,24 @@ def _safe_candidate_queue_path(raw_path: object, *, default_candidate_queue: Pat
     return default_path
 
 
+def _is_test_research_request(row: dict[str, Any]) -> bool:
+    topic = clean_text(row.get("topic"), limit=300).lower()
+    note = clean_text(row.get("requester_note"), limit=300).lower()
+    return (
+        topic.startswith("live test")
+        or "safe to ignore" in note
+        or "formatting live test" in note
+        or "live content test" in note
+        or "연결 검증" in topic
+        or "표시 검증" in topic
+    )
+
+
 def _request_from_row(row: dict[str, Any], *, default_candidate_queue: Path) -> ResearchRequest | None:
     if row.get("status") != REQUEST_STATUS_PENDING:
+        return None
+    if _is_test_research_request(row):
+        LOG.info("skipping traveler test research request request_id=%s", row.get("request_id"))
         return None
     topic = clean_text(row.get("topic"), limit=200)
     if not topic:
@@ -325,6 +341,11 @@ class StaticTechnicalSourceProvider:
         ("Hugging Face Papers", "https://huggingface.co/papers", "article_hub", "Public daily paper discovery hub."),
         ("Papers with Code Latest", "https://paperswithcode.com/latest", "article_hub", "Public paper and code trend hub."),
         ("OpenReview recent activity", "https://openreview.net/", "conference_feed", "Public conference and workshop paper review platform."),
+        ("OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research publication surface for AI systems."),
+        ("Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public AI and systems research blog."),
+        ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."),
+        ("Microsoft Research Blog", "https://www.microsoft.com/en-us/research/blog/", "research_lab_blog", "Official public research blog with recurring AI and systems posts."),
+        ("Meta AI Research", "https://ai.meta.com/research/", "research_lab_blog", "Official public AI research publication surface."),
     )
 
     async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002

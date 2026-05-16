@@ -85,8 +85,11 @@ def _jsonl_contains_candidate(path: Path, candidate_id: str) -> bool:
         return False
     try:
         for row in read_jsonl(path):
-            if row.get("candidate_id") == candidate_id:
-                return True
+            if row.get("candidate_id") != candidate_id:
+                continue
+            if row.get("status") in {"rejected_test", "completed_test", "cancelled_test", "ignored_test"}:
+                continue
+            return True
     except (OSError, json.JSONDecodeError):
         return False
     return False

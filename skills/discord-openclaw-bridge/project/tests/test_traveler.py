@@ -65,3 +65,18 @@ def test_record_source_candidate_rejects_private_urls(tmp_path: Path) -> None:
             TravelerSourceInput(url="http://127.0.0.1/source"),
             queue_path=tmp_path / "source-candidates.jsonl",
         )
+
+
+def test_record_source_candidate_allows_requeue_after_rejected_test(tmp_path: Path) -> None:
+    queue = tmp_path / "source-candidates.jsonl"
+    source = TravelerSourceInput(url="https://example.com/source", title="Example Source")
+    first = record_source_candidate(source, queue_path=queue, created_at=datetime(2026, 5, 15, tzinfo=UTC))
+    rows = [json.loads(line) for line in queue.read_text(encoding="utf-8").splitlines()]
+    rows[0]["status"] = "rejected_test"
+    queue.write_text(json.dumps(rows[0], ensure_ascii=False) + "\n", encoding="utf-8")
+
+    second = record_source_candidate(source, queue_path=queue, created_at=datetime(2026, 5, 16, tzinfo=UTC))
+
+    assert first.accepted
+    assert second.accepted
+    assert len(queue.read_text(encoding="utf-8").splitlines()) == 2

@@ -139,6 +139,15 @@ def _load_collection_context() -> CollectionContext:
     )
 
 
+def _is_test_candidate(row: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "").lower()
+        for key in ("title", "topic_fit", "reliability_rationale", "recommended_next_action")
+    )
+    tags = " ".join(str(tag).lower() for tag in row.get("tags", []) if isinstance(row.get("tags"), list))
+    return any(marker in f"{text} {tags}" for marker in ("live test", "safe to ignore", "completed_test", "rejected_test", "연결 검증", "표시 검증"))
+
+
 def _candidate_rows(path: Path) -> list[dict[str, Any]]:
     rows = _read_jsonl_rows(path)
     deduped: dict[str, dict[str, Any]] = {}
@@ -147,6 +156,8 @@ def _candidate_rows(path: Path) -> list[dict[str, Any]]:
         if not url:
             continue
         if row.get("status") not in {"pending_source_review", "accepted", "pending", None}:
+            continue
+        if _is_test_candidate(row):
             continue
         deduped[url] = row
     return list(deduped.values())
@@ -198,7 +209,7 @@ def build_report_items(rows: Iterable[dict[str, Any]], context: CollectionContex
     items: list[ReportItem] = []
     for row in rows:
         url = _row_url(row)
-        if not url:
+        if not url or _is_test_candidate(row):
             continue
         priority, differentiation = _differentiate(url, context)
         if priority == "보류":

@@ -328,3 +328,26 @@ def test_static_provider_reviews_many_public_sources(tmp_path: Path) -> None:
     assert result.reviewed_count >= 8
     assert result.candidates
     assert all(candidate.url.startswith("https://") for candidate in result.candidates)
+
+
+def test_load_pending_requests_skips_live_test_requests(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "source-candidates.jsonl"
+    research.write_text(
+        json.dumps({
+            "request_id": "traveler_request_test",
+            "status": "pending_deep_research",
+            "topic": "LIVE TEST - 집현전 여행자 연결 검증",
+            "requester_note": "safe to ignore",
+        }) + "\n" +
+        json.dumps({
+            "request_id": "traveler_request_real",
+            "status": "pending_deep_research",
+            "topic": "AI research engineering sources",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    requests = load_pending_requests(research, default_candidate_queue=candidates)
+
+    assert [request.request_id for request in requests] == ["traveler_request_real"]

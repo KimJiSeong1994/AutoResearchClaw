@@ -57,3 +57,25 @@ def test_traveler_collection_report_skips_exact_duplicates() -> None:
 
     assert items == []
     assert "신규 추가 수집 후보 없음" in body
+
+
+def test_traveler_collection_report_skips_live_test_candidates() -> None:
+    rows = [
+        {
+            "title": "arXiv cs.AI recent submissions",
+            "url": "https://arxiv.org/list/cs.AI/recent",
+            "status": "pending_source_review",
+            "topic_fit": "요청 주제 `LIVE TEST - 집현전 여행자 연결 검증`의 후보",
+        },
+        {
+            "title": "Real AI Source",
+            "url": "https://real.example.com/feed",
+            "status": "pending_source_review",
+            "topic_fit": "AI research engineering sources",
+        },
+    ]
+    context = CollectionContext(seed_urls=set(), seed_hosts=set(), collected_urls=set(), collected_hosts=set())
+
+    items = build_report_items(rows, context)
+
+    assert [item.site for item in items] == ["Real AI Source"]
