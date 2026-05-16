@@ -287,6 +287,67 @@ def format_report_body(items: list[ReportItem], *, generated_at: datetime | None
     return body
 
 
+def format_miner_collection_request(
+    items: list[ReportItem],
+    *,
+    miner_client_id: str,
+    traveler_thread_id: str | None = None,
+    guild_id: str | None = None,
+) -> str:
+    mention = f"<@{miner_client_id}>"
+    lines = [
+        f"{mention} 🧭 집현전-여행자 추가 수집 요청",
+        "",
+        "Traveler가 오늘 심층 리서치/중복 비교 후 광부 수집 검토가 필요한 공개 출처를 선별했습니다.",
+    ]
+    if traveler_thread_id:
+        if guild_id:
+            lines.append(f"- Traveler 보고 스레드: <https://discord.com/channels/{guild_id}/{traveler_thread_id}>")
+        else:
+            lines.append(f"- Traveler 보고 스레드 ID: {traveler_thread_id}")
+    lines += [
+        "- 요청: 아래 출처를 광부 seed 후보로 샘플 수집하고, 클로 리뷰 큐로 넘겨주세요.",
+        "- 승인 전에는 newsletter/manual approved 링크로 반영하지 마세요.",
+        "",
+        "## 추가 수집 요청",
+    ]
+    if not items:
+        lines.append("- 신규 요청 없음")
+    for idx, item in enumerate(items[:8], 1):
+        lines += [
+            f"{idx}. **{item.site}**",
+            f"   - URL: {item.url}",
+            f"   - 우선순위: {item.priority}",
+            f"   - 차별점: {item.differentiation}",
+            f"   - 기대 정보: {item.additional_info}",
+        ]
+    body = "\n".join(lines)
+    if len(body) > DISCORD_MESSAGE_LIMIT:
+        body = body[: DISCORD_MESSAGE_LIMIT - 3].rstrip() + "..."
+    return body
+
+
+async def _post_channel_message(
+    client: httpx.AsyncClient,
+    *,
+    token: str,
+    channel_id: str,
+    body: str,
+    mention_user_id: str | None = None,
+) -> str:
+    headers = {"Authorization": f"Bot {token}"}
+    allowed_mentions: dict[str, Any] = {"parse": []}
+    if mention_user_id:
+        allowed_mentions["users"] = [mention_user_id]
+    response = await client.post(
+        f"https://discord.com/api/v10/channels/{channel_id}/messages",
+        headers=headers,
+        json={"content": body, "allowed_mentions": allowed_mentions},
+    )
+    response.raise_for_status()
+    return str(response.json().get("id") or "")
+
+
 def _format_thread_title(items: list[ReportItem], *, generated_at: datetime | None = None) -> str:
     title = f"🧭 Traveler 추가 수집 보고 {_today_kst(generated_at)} — candidates={len(items)}"
     return title[:DISCORD_THREAD_TITLE_LIMIT]
@@ -311,12 +372,20 @@ async def _post_forum_thread(client: httpx.AsyncClient, *, token: str, channel_i
     return str(response.json().get("id") or "")
 
 
-def _write_status(path: Path, *, thread_id: str, title: str, item_count: int) -> None:
+def _write_status(
+    path: Path,
+    *,
+    thread_id: str,
+    title: str,
+    item_count: int,
+    miner_message_id: str | None = None,
+) -> None:
     payload = {
         "run_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "thread_id": thread_id,
         "title": title,
         "candidate_count": item_count,
+        "miner_message_id": miner_message_id,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -330,10 +399,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Post the daily Jiphyeonjeon Traveler additional-collection report.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Render the report to stdout without posting to Discord.")
+    parser.add_argument("--skip-miner-request", action="store_true", help="Post only the Traveler forum report; skip the Miner bot-to-bot request.")
     return parser
 
 
-async def run(*, dry_run: bool = False) -> None:
+async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> None:
     _load_dotenv(Path.cwd() / ".env")
     token = os.environ.get("DISCORD_TRAVELER_BOT_TOKEN", "").strip()
     channel_id = os.environ.get("DISCORD_TRAVELER_CHANNEL_ID", "").strip()
@@ -341,16 +411,26 @@ async def run(*, dry_run: bool = False) -> None:
     source_queue = Path(os.environ.get("JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH", str(default_source_queue_path()))).expanduser()
     limit = int(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_MAX_ITEMS", "8"))
     status_path = Path(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH", str(DEFAULT_REPORT_STATE_PATH))).expanduser()
+    miner_channel_id = os.environ.get("DISCORD_MINER_CHANNEL_ID", "").strip()
+    miner_client_id = os.environ.get("DISCORD_MINER_CLIENT_ID", "").strip()
+    guild_id = os.environ.get("DISCORD_GUILD_ID", "").strip()
 
     context = _load_collection_context()
     items = build_report_items(_candidate_rows(source_queue), context, limit=limit)
     title = _format_thread_title(items)
     body = format_report_body(items)
 
+    miner_body = ""
+    if not skip_miner_request and miner_client_id:
+        miner_body = format_miner_collection_request(items, miner_client_id=miner_client_id)
+
     if dry_run:
         print(title)
         print()
         print(body)
+        if miner_body:
+            print("\n--- Miner bot-to-bot request ---\n")
+            print(miner_body)
         return
 
     if not token:
@@ -358,18 +438,42 @@ async def run(*, dry_run: bool = False) -> None:
     if not channel_id:
         raise TravelerReportConfigError("missing DISCORD_TRAVELER_CHANNEL_ID")
 
+    miner_message_id: str | None = None
     async with httpx.AsyncClient(timeout=30) as client:
         thread_id = await _post_forum_thread(client, token=token, channel_id=channel_id, title=title, body=body)
+        if not skip_miner_request:
+            if not miner_channel_id or not miner_client_id:
+                logger.warning("skipping Miner request: DISCORD_MINER_CHANNEL_ID or DISCORD_MINER_CLIENT_ID is missing")
+            else:
+                miner_body = format_miner_collection_request(
+                    items,
+                    miner_client_id=miner_client_id,
+                    traveler_thread_id=thread_id,
+                    guild_id=guild_id or None,
+                )
+                miner_message_id = await _post_channel_message(
+                    client,
+                    token=token,
+                    channel_id=miner_channel_id,
+                    body=miner_body,
+                    mention_user_id=miner_client_id,
+                )
 
-    _write_status(status_path, thread_id=thread_id, title=title, item_count=len(items))
-    logger.info("posted traveler collection report channel=%s thread=%s candidates=%d", channel_id, thread_id, len(items))
+    _write_status(status_path, thread_id=thread_id, title=title, item_count=len(items), miner_message_id=miner_message_id)
+    logger.info(
+        "posted traveler collection report channel=%s thread=%s candidates=%d miner_message=%s",
+        channel_id,
+        thread_id,
+        len(items),
+        miner_message_id,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = _build_parser().parse_args(argv)
     try:
-        asyncio.run(run(dry_run=args.dry_run))
+        asyncio.run(run(dry_run=args.dry_run, skip_miner_request=args.skip_miner_request))
     except (TravelerReportConfigError, httpx.HTTPError, ValueError) as exc:
         print(f"traveler collection report error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

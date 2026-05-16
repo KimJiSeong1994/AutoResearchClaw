@@ -76,6 +76,7 @@ class MinerBotConfig:
     miner_intake_path: Path
     miner_review_queue_path: Path
     miner_enable_channel_collection: bool
+    traveler_client_id: int | None = None
     traveler_channel_id: int | None = None
     traveler_research_queue_path: Path | None = None
     traveler_source_queue_path: Path | None = None
@@ -129,6 +130,10 @@ def _miner_channel_id(default: int | None = None) -> int:
 
 def _traveler_channel_id(default: int | None = None) -> int | None:
     return _optional_int("DISCORD_TRAVELER_CHANNEL_ID", default)
+
+
+def _traveler_client_id(default: int | None = None) -> int | None:
+    return _optional_int("DISCORD_TRAVELER_CLIENT_ID", default)
 
 
 def _traveler_research_queue_path() -> Path:
@@ -222,6 +227,7 @@ def load_miner_config() -> MinerBotConfig:
         miner_intake_path=_miner_intake_path(),
         miner_review_queue_path=_miner_review_queue_path(),
         miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
+        traveler_client_id=_traveler_client_id(default=None),
         traveler_channel_id=_traveler_channel_id(default=None),
         traveler_research_queue_path=_traveler_research_queue_path(),
         traveler_source_queue_path=_traveler_source_queue_path(),

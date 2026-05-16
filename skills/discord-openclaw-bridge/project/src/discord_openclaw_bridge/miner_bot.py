@@ -22,7 +22,7 @@ class JiphyeonjeonMinerBot(discord.Client):
 
     def __init__(self, config: MinerBotConfig):
         intents = discord.Intents.default()
-        intents.message_content = config.miner_enable_channel_collection
+        intents.message_content = config.miner_enable_channel_collection or config.traveler_client_id is not None
         super().__init__(intents=intents)
         self.config = config
         self.tree = app_commands.CommandTree(self)
@@ -36,12 +36,27 @@ class JiphyeonjeonMinerBot(discord.Client):
     async def on_ready(self) -> None:
         LOG.info("ready user=%s guild=%s miner_channel=%s", self.user, self.config.guild_id, self.config.miner_channel_id)
 
+    def traveler_relay_allowed(self, message: discord.Message) -> bool:
+        if self.config.traveler_client_id is None or self.user is None:
+            return False
+        author_id = getattr(message.author, "id", None)
+        mentions = getattr(message, "mentions", []) or []
+        mentioned_ids = {getattr(user, "id", None) for user in mentions}
+        return bool(
+            getattr(message.author, "bot", False)
+            and author_id == self.config.traveler_client_id
+            and self.user.id in mentioned_ids
+        )
+
     async def on_message(self, message: discord.Message) -> None:
-        if not self.config.miner_enable_channel_collection:
-            return
-        if message.author.bot or message.guild is None:
+        if message.guild is None:
             return
         if message.guild.id != self.config.guild_id or message.channel.id != self.config.miner_channel_id:
+            return
+        traveler_relay = self.traveler_relay_allowed(message)
+        if not self.config.miner_enable_channel_collection and not traveler_relay:
+            return
+        if message.author.bot and not traveler_relay:
             return
         try:
             results = record_message_links(

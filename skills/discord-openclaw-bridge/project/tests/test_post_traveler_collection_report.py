@@ -5,7 +5,9 @@ from pathlib import Path
 
 from discord_openclaw_bridge.post_traveler_collection_report import (
     CollectionContext,
+    ReportItem,
     build_report_items,
+    format_miner_collection_request,
     format_report_body,
 )
 
@@ -79,3 +81,26 @@ def test_traveler_collection_report_skips_live_test_candidates() -> None:
     items = build_report_items(rows, context)
 
     assert [item.site for item in items] == ["Real AI Source"]
+
+
+def test_format_miner_collection_request_mentions_miner_first() -> None:
+    body = format_miner_collection_request(
+        [
+            ReportItem(
+                site="Anthropic Research",
+                url="https://www.anthropic.com/research",
+                analysis="신뢰 근거",
+                differentiation="신규 수집면",
+                additional_info="연구 발표",
+                action="review_for_miner_seed",
+                priority="높음",
+            )
+        ],
+        miner_client_id="12345",
+        traveler_thread_id="999",
+    )
+
+    assert body.startswith("<@12345>")
+    assert "집현전-여행자 추가 수집 요청" in body
+    assert "https://www.anthropic.com/research" in body
+    assert "승인 전에는" in body
