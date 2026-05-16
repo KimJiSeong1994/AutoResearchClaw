@@ -359,6 +359,8 @@ jobs:
       - remote ops readiness check
     inputs:
       - ~/.openclaw/workspace/state/miner-seeds-last-status.json
+      - ~/.openclaw/workspace/state/traveler-collection-report-last-status.json
+      - ~/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl
       - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
       - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
     outputs:
@@ -367,9 +369,51 @@ jobs:
       - operations reporting forum thread for miner-seeds run summaries
     checks:
       - miner-seeds status freshness
+      - Traveler report to Miner request to Miner intake confirmation
       - seed errors and zero-accepted anomalies
       - review queue pending count and oldest pending age
       - guard token and operations channel configuration presence
     safety:
       side_effects: read-only digest, optional append-only Guard issue queue write, and optional Discord report posting
       secrets: never print Discord bot token values
+
+  - id: jiphyeonjeon-review-queue-optimizer-report
+    name: Jiphyeonjeon review queue optimizer report
+    type: report
+    owner_agent: review-queue-optimizer
+    command_refs:
+      - uv run discord-openclaw-review-queue-optimizer
+      - uv run discord-openclaw-review-queue-optimizer --max-age-days 7
+    triggers:
+      - manual review planning
+      - before large Claw review sessions
+    inputs:
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+    outputs:
+      - duplicate candidate report
+      - stale pending item report
+      - priority recommendation report with no_mutation=true
+    safety:
+      side_effects: read-only report; never rewrites queue, decisions, or approved exports
+      secrets: public URLs and sanitized metadata only
+
+  - id: jiphyeonjeon-newsletter-candidate-orchestrator
+    name: Jiphyeonjeon newsletter candidate artifact generation
+    type: candidate-artifact
+    owner_agent: newsletter-candidate-orchestrator
+    command_refs:
+      - uv run discord-openclaw-newsletter-candidate-orchestrator --dry-run
+      - uv run discord-openclaw-newsletter-candidate-orchestrator
+    triggers:
+      - manual after Claw approved export
+      - before newsletter/card-news editorial planning
+    inputs:
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.openclaw/workspace/manual_links/approved-manual-links.jsonl
+    outputs:
+      - ~/.openclaw/workspace/review/newsletter-candidates/candidate-review.jsonl
+    safety:
+      side_effects: writes separate candidate-review artifact only; does not publish or modify newsletter/card-news sources
+      secrets: public approved-link metadata only

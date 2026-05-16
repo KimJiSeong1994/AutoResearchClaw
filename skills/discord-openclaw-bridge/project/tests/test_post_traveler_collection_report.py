@@ -6,9 +6,12 @@ from pathlib import Path
 from discord_openclaw_bridge.post_traveler_collection_report import (
     CollectionContext,
     ReportItem,
+    build_miner_collection_request_payload,
     build_report_items,
     format_miner_collection_request,
     format_report_body,
+    should_reuse_miner_request,
+    url_hash,
 )
 
 
@@ -104,3 +107,60 @@ def test_format_miner_collection_request_mentions_miner_first() -> None:
     assert "집현전-여행자 추가 수집 요청" in body
     assert "https://www.anthropic.com/research" in body
     assert "승인 전에는" in body
+
+
+def test_url_hash_uses_sanitized_public_url() -> None:
+    assert url_hash("https://example.com/research?utm_source=x&ok=1") == url_hash("https://example.com/research?ok=1")
+    assert url_hash("http://127.0.0.1/private") == ""
+
+
+def test_miner_collection_request_payload_tracks_only_included_items() -> None:
+    items = [
+        ReportItem(
+            site=f"Site {idx}",
+            url=f"https://example.com/{idx}",
+            analysis="신뢰 근거",
+            differentiation="차별점",
+            additional_info="정보",
+            action="review_for_miner_seed",
+            priority="높음",
+        )
+        for idx in range(10)
+    ]
+
+    payload = build_miner_collection_request_payload(items, miner_client_id="12345")
+
+    assert payload["request_item_count"] == 8
+    assert len(payload["requested_url_hashes"]) == 8
+    assert payload["request_truncated"] is True
+    assert "https://example.com/8" not in payload["body"]
+
+
+def test_should_reuse_miner_request_requires_same_payload() -> None:
+    payload = build_miner_collection_request_payload(
+        [
+            ReportItem(
+                site="Site",
+                url="https://example.com/0",
+                analysis="신뢰 근거",
+                differentiation="차별점",
+                additional_info="정보",
+                action="review_for_miner_seed",
+                priority="높음",
+            )
+        ],
+        miner_client_id="12345",
+    )
+    existing = {
+        "title": "title",
+        "thread_id": "thread",
+        "miner_request_state": "sent",
+        "miner_request_body_hash": payload["body_hash"],
+        "miner_request_url_hashes": payload["requested_url_hashes"],
+        "miner_message_id": "message",
+    }
+
+    assert should_reuse_miner_request(existing, title="title", thread_id="thread", payload=payload)
+    changed = dict(existing)
+    changed["miner_request_url_hashes"] = ["different"]
+    assert not should_reuse_miner_request(changed, title="title", thread_id="thread", payload=payload)

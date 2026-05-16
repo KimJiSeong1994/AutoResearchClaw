@@ -208,14 +208,58 @@ agents:
     responsibilities:
       - detect miner-seeds stale runs, seed errors, and zero-accepted anomalies
       - summarize review queue backlog and stale pending items
+      - observe Traveler report to Miner bot-to-bot request to Miner intake confirmation handoffs
       - record newly observed operations issues in a separate guard review queue when explicitly requested
       - surface guard configuration drift without printing secret token values
       - publish miner-seeds run summaries to the operations reporting forum
     boundaries:
       - does not approve, reject, or hold review records
       - does not mutate intake, content review, or approved export artifacts
+      - does not reorder queues, append Claw content decisions, rewrite approved exports, or trigger newsletter/card-news publishing
       - guard issue queue writes must be append-only and separate from Jiphyeonjeon-Claw content review
       - Discord posting remains observability only and must not hide collection failures
+
+  - id: review-queue-optimizer
+    name: 집현전 review queue optimizer
+    kind: report-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/review_queue_optimizer.py
+      - skills/discord-openclaw-bridge/README.md#집현전-광부-link-intake-path
+    owns_jobs:
+      - jiphyeonjeon-review-queue-optimizer-report
+    runtime:
+      review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
+      decisions_path: JIPHYEONJEON_MINER_DECISIONS_PATH
+    responsibilities:
+      - report duplicate, stale, and high-priority pending review items
+      - provide a no-mutation review ordering recommendation for operators
+      - preserve raw queue records while emitting explainable queue health summaries
+    boundaries:
+      - report-only; never rewrites queue, decisions, or approved export files
+      - does not approve, reject, hold, or otherwise create Claw decisions
+      - does not trigger Discord posting or newsletter/card-news publishing
+
+  - id: newsletter-candidate-orchestrator
+    name: 집현전 newsletter candidate orchestrator
+    kind: candidate-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/newsletter_candidate_orchestrator.py
+      - skills/discord-openclaw-bridge/README.md#집현전-광부-link-intake-path
+    owns_jobs:
+      - jiphyeonjeon-newsletter-candidate-orchestrator
+    runtime:
+      review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
+      decisions_path: JIPHYEONJEON_MINER_DECISIONS_PATH
+      approved_export_path: JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH
+      candidate_output_path: JIPHYEONJEON_NEWSLETTER_CANDIDATE_PATH
+    responsibilities:
+      - convert Claw-approved links into a separate editorial-review candidate artifact
+      - preserve intake, decision, and approved export provenance for each candidate
+      - keep candidate status at needs_editorial_review until a downstream owner acts
+    boundaries:
+      - reads approved-only Claw exports but does not create approval decisions
+      - does not write newsletter raw archives, card-news sources, or public Discord posts
+      - candidate artifacts are not publish-ready and must pass separate editorial review
 
   - id: jiphyeonjeon-claw
     name: 집현전-클로 content review owner

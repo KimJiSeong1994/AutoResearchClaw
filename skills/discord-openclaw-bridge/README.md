@@ -76,6 +76,12 @@ Operational controls:
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue. Newsletter archive/card-news jobs count approved Miner links for exclusion evidence but do not merge them into the public newsletter surfaces.
 
+Queue and publication-adjacent review helpers:
+
+- `discord-openclaw-guard-ops-digest` remains an observability-only Guard surface. It may read the Traveler report status, Miner request message id, Miner intake, and review queue to report whether the daily Traveler→Miner handoff was confirmed, but it must not reorder queues, append Claw decisions, rewrite approved exports, or trigger newsletter/card-news publishing.
+- `discord-openclaw-review-queue-optimizer` is report-only. It emits duplicate, stale, and priority recommendations with `no_mutation=true`; it never writes queue, decision, or approved export artifacts.
+- `discord-openclaw-newsletter-candidate-orchestrator` reads Claw-approved manual links and creates a separate editorial candidate artifact whose rows start as `candidate_status=needs_editorial_review`. It does not write newsletter raw archives, card-news source files, or public Discord posts.
+
 ## 집현전-여행자 source-discovery path
 
 집현전-여행자 is a research-only source discovery agent that works upstream of

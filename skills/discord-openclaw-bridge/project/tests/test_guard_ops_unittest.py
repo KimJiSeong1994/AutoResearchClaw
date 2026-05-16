@@ -161,6 +161,115 @@ class GuardOpsDigestTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertIn('"status": "open"', rows[0])
 
+    def test_traveler_to_miner_handoff_reports_unconfirmed_intake(self) -> None:
+        digest = build_ops_digest(
+            status={
+                "run_at": "2026-05-10T00:00:00Z",
+                "seeds_total": 1,
+                "seeds_skipped_cooldown": 1,
+                "seeds_with_errors": 0,
+                "total_accepted": 0,
+            },
+            status_path="/tmp/status.json",
+            traveler_report_status={
+                "miner_message_id": "123",
+                "miner_request_url_hashes": ["abc"],
+            },
+            traveler_status_path="/tmp/traveler.json",
+            miner_intake_rows=[],
+            enable_traveler_handoff=True,
+            now=datetime(2026, 5, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(digest["handoffs"]["traveler_to_miner"]["status"], "unconfirmed")
+        self.assertEqual(digest["handoffs"]["traveler_to_miner"]["missing_count"], 1)
+        self.assertIn("miner_intake_unconfirmed", {issue["signal"] for issue in digest["issues"]})
+
+    def test_traveler_to_miner_handoff_reports_request_missing(self) -> None:
+        digest = build_ops_digest(
+            status={
+                "run_at": "2026-05-10T00:00:00Z",
+                "seeds_total": 1,
+                "seeds_skipped_cooldown": 1,
+                "seeds_with_errors": 0,
+                "total_accepted": 0,
+            },
+            status_path="/tmp/status.json",
+            traveler_report_status={
+                "miner_request_url_hashes": ["abc"],
+            },
+            traveler_status_path="/tmp/traveler.json",
+            miner_intake_rows=[],
+            enable_traveler_handoff=True,
+            now=datetime(2026, 5, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(digest["handoffs"]["traveler_to_miner"]["status"], "request_missing")
+        self.assertIn("miner_request_missing", {issue["signal"] for issue in digest["issues"]})
+
+    def test_traveler_to_miner_handoff_confirms_matching_message(self) -> None:
+        digest = build_ops_digest(
+            status={
+                "run_at": "2026-05-10T00:00:00Z",
+                "seeds_total": 1,
+                "seeds_skipped_cooldown": 1,
+                "seeds_with_errors": 0,
+                "total_accepted": 0,
+            },
+            status_path="/tmp/status.json",
+            traveler_report_status={
+                "miner_message_id": "123",
+                "miner_request_url_hashes": ["468164e75ba0e4cf"],
+            },
+            traveler_status_path="/tmp/traveler.json",
+            miner_intake_rows=[
+                {
+                    "intake_id": "miner_ok",
+                    "url": "https://example.com/research",
+                    "discord": {"message_id": 123},
+                }
+            ],
+            enable_traveler_handoff=True,
+            now=datetime(2026, 5, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        handoff = digest["handoffs"]["traveler_to_miner"]
+        self.assertEqual(handoff["status"], "ok")
+        self.assertEqual(handoff["matched_intake_ids"], ["miner_ok"])
+        self.assertEqual(handoff["missing_count"], 0)
+
+    def test_traveler_to_miner_handoff_treats_preexisting_intake_as_covered(self) -> None:
+        digest = build_ops_digest(
+            status={
+                "run_at": "2026-05-10T00:00:00Z",
+                "seeds_total": 1,
+                "seeds_skipped_cooldown": 1,
+                "seeds_with_errors": 0,
+                "total_accepted": 0,
+            },
+            status_path="/tmp/status.json",
+            traveler_report_status={
+                "miner_message_id": "new-message",
+                "miner_request_url_hashes": ["468164e75ba0e4cf"],
+            },
+            traveler_status_path="/tmp/traveler.json",
+            miner_intake_rows=[
+                {
+                    "intake_id": "miner_preexisting",
+                    "url": "https://example.com/research",
+                    "discord": {"message_id": "old-message"},
+                }
+            ],
+            enable_traveler_handoff=True,
+            now=datetime(2026, 5, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+        handoff = digest["handoffs"]["traveler_to_miner"]
+        self.assertEqual(handoff["status"], "duplicate_preexisting")
+        self.assertEqual(handoff["missing_count"], 0)
+        self.assertEqual(handoff["duplicate_or_preexisting_count"], 1)
+        self.assertIn("miner_request_duplicate_preexisting", {issue["signal"] for issue in digest["issues"]})
+
 
 if __name__ == "__main__":
     unittest.main()

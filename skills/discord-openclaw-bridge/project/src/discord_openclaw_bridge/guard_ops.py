@@ -14,11 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .miner import _append_jsonl_unlocked, locked_jsonl_paths, read_jsonl
+from .miner import _append_jsonl_unlocked, locked_jsonl_paths, read_jsonl, sanitize_url
 from .review import latest_decisions
 
 DEFAULT_WORKSPACE = Path.home() / ".openclaw" / "workspace"
 DEFAULT_STATUS_PATH = DEFAULT_WORKSPACE / "state" / "miner-seeds-last-status.json"
+DEFAULT_TRAVELER_REPORT_STATUS_PATH = DEFAULT_WORKSPACE / "state" / "traveler-collection-report-last-status.json"
+DEFAULT_MINER_INTAKE_PATH = DEFAULT_WORKSPACE / "intake" / "jiphyeonjeon-miner" / "links.jsonl"
 DEFAULT_REVIEW_QUEUE_PATH = (
     DEFAULT_WORKSPACE / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"
 )
@@ -83,6 +85,13 @@ def _health_status(issues: list[dict[str, str]]) -> str:
     return "ok"
 
 
+def _url_hash(url: str) -> str:
+    safe_url = sanitize_url(url)
+    if not safe_url:
+        return ""
+    return hashlib.sha256(safe_url.encode("utf-8")).hexdigest()[:16]
+
+
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
         return
@@ -136,6 +145,101 @@ def _pending_review_items(
     ]
 
 
+def _traveler_miner_handoff(
+    *,
+    traveler_report_status: dict[str, Any] | None,
+    traveler_status_path: str,
+    miner_intake_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Summarize the Traveler report -> Miner intake handoff without mutating state."""
+
+    issues: list[dict[str, str]] = []
+    requested_hashes = [
+        str(value)
+        for value in (traveler_report_status or {}).get("miner_request_url_hashes", [])
+        if str(value)
+    ]
+    miner_message_id = str((traveler_report_status or {}).get("miner_message_id") or "")
+    matched_intake_ids: list[str] = []
+    covered_hashes: set[str] = set()
+    duplicate_or_preexisting = 0
+    for row in miner_intake_rows:
+        discord = row.get("discord") if isinstance(row.get("discord"), dict) else {}
+        url_digest = _url_hash(str(row.get("url") or ""))
+        if miner_message_id and str(discord.get("message_id") or "") == miner_message_id and url_digest in requested_hashes:
+            matched_intake_ids.append(str(row.get("intake_id") or ""))
+            covered_hashes.add(url_digest)
+        elif url_digest in requested_hashes:
+            duplicate_or_preexisting += 1
+            covered_hashes.add(url_digest)
+
+    missing_count = max(0, len(set(requested_hashes)) - len(covered_hashes))
+    status = "not_requested"
+    if traveler_report_status is None:
+        status = "missing_status"
+        issues.append(
+            _issue(
+                severity="warning",
+                category="traveler_miner_handoff",
+                signal="traveler_report_status_missing",
+                message="Traveler collection report status artifact is missing",
+                evidence=traveler_status_path,
+                recommended_action="Confirm the Traveler daily collection report cron has run and wrote its status artifact.",
+            )
+        )
+    elif requested_hashes and not miner_message_id:
+        status = "request_missing"
+        issues.append(
+            _issue(
+                severity="warning",
+                category="traveler_miner_handoff",
+                signal="miner_request_missing",
+                message="Traveler report selected Miner request URLs but no Miner request message id was recorded",
+                evidence=traveler_status_path,
+                recommended_action="Check Traveler report posting logs and DISCORD_MINER_CHANNEL_ID/DISCORD_MINER_CLIENT_ID configuration.",
+            )
+        )
+    elif requested_hashes and duplicate_or_preexisting and not matched_intake_ids and not missing_count:
+        status = "duplicate_preexisting"
+        issues.append(
+            _issue(
+                severity="warning",
+                category="traveler_miner_handoff",
+                signal="miner_request_duplicate_preexisting",
+                message="Traveler-requested URL(s) were already present before this Miner request; current message processing was not confirmed",
+                evidence=traveler_status_path,
+                recommended_action="Review whether the Miner bot processed the current request or skipped duplicates intentionally.",
+            )
+        )
+    elif requested_hashes and missing_count:
+        status = "unconfirmed"
+        issues.append(
+            _issue(
+                severity="warning",
+                category="traveler_miner_handoff",
+                signal="miner_intake_unconfirmed",
+                message=f"Miner intake has not confirmed {missing_count} Traveler-requested URL(s)",
+                evidence=traveler_status_path,
+                recommended_action="Check the Miner bot service, message-content intent, Traveler bot id gate, and Miner intake JSONL.",
+            )
+        )
+    elif requested_hashes:
+        status = "ok"
+
+    return (
+        {
+            "status": status,
+            "traveler_status_path": traveler_status_path,
+            "miner_message_id": miner_message_id,
+            "requested_url_hashes": requested_hashes,
+            "matched_intake_ids": [item for item in matched_intake_ids if item],
+            "missing_count": missing_count,
+            "duplicate_or_preexisting_count": duplicate_or_preexisting,
+        },
+        issues,
+    )
+
+
 def build_ops_digest(
     *,
     status: dict[str, Any] | None,
@@ -143,6 +247,10 @@ def build_ops_digest(
     review_queue_path: str = str(DEFAULT_REVIEW_QUEUE_PATH),
     queue_rows: list[dict[str, Any]] | None = None,
     decisions_rows: list[dict[str, Any]] | None = None,
+    traveler_report_status: dict[str, Any] | None = None,
+    traveler_status_path: str = str(DEFAULT_TRAVELER_REPORT_STATUS_PATH),
+    miner_intake_rows: list[dict[str, Any]] | None = None,
+    enable_traveler_handoff: bool = False,
     guard_config: dict[str, Any] | None = None,
     now: datetime | None = None,
     max_status_age_hours: float = DEFAULT_MAX_STATUS_AGE_HOURS,
@@ -153,6 +261,7 @@ def build_ops_digest(
 
     current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     issues: list[dict[str, str]] = []
+    handoffs: dict[str, Any] = {}
 
     if guard_config is not None:
         token_source = str(guard_config.get("token_source") or "missing")
@@ -258,6 +367,14 @@ def build_ops_digest(
 
     queue_rows = queue_rows or []
     decisions_rows = decisions_rows or []
+    if enable_traveler_handoff:
+        handoff, handoff_issues = _traveler_miner_handoff(
+            traveler_report_status=traveler_report_status,
+            traveler_status_path=traveler_status_path,
+            miner_intake_rows=miner_intake_rows or [],
+        )
+        handoffs["traveler_to_miner"] = handoff
+        issues.extend(handoff_issues)
     pending = _pending_review_items(queue_rows, decisions_rows)
     if len(pending) > max_pending_count:
         issues.append(
@@ -302,6 +419,7 @@ def build_ops_digest(
             "pending_review_count": len(pending),
             "oldest_pending_at": oldest_pending_at,
         },
+        "handoffs": handoffs,
         "issues": issues,
     }
     if status is not None:
@@ -383,6 +501,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path(os.getenv("MINER_SEEDS_STATUS_PATH", str(DEFAULT_STATUS_PATH))),
     )
     parser.add_argument(
+        "--traveler-report-status-path",
+        type=Path,
+        default=Path(os.getenv("JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH", str(DEFAULT_TRAVELER_REPORT_STATUS_PATH))),
+    )
+    parser.add_argument(
+        "--miner-intake-path",
+        type=Path,
+        default=Path(os.getenv("JIPHYEONJEON_MINER_INTAKE_PATH", str(DEFAULT_MINER_INTAKE_PATH))),
+    )
+    parser.add_argument(
         "--review-queue-path",
         type=Path,
         default=Path(os.getenv("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", str(DEFAULT_REVIEW_QUEUE_PATH))),
@@ -415,12 +543,18 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         status_path = args.status_path.expanduser()
+        traveler_status_path = args.traveler_report_status_path.expanduser()
+        miner_intake_path = args.miner_intake_path.expanduser()
         queue_path = args.review_queue_path.expanduser()
         decisions_path = args.decisions_path.expanduser()
         _load_dotenv(args.env_path.expanduser())
         digest = build_ops_digest(
             status=_read_status(status_path),
             status_path=str(status_path),
+            traveler_report_status=_read_status(traveler_status_path),
+            traveler_status_path=str(traveler_status_path),
+            miner_intake_rows=read_jsonl(miner_intake_path),
+            enable_traveler_handoff=True,
             review_queue_path=str(queue_path),
             queue_rows=read_jsonl(queue_path),
             decisions_rows=list(latest_decisions(decisions_path).values()),

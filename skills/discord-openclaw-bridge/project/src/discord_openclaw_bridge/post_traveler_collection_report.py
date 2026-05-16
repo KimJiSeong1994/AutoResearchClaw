@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -97,6 +98,15 @@ def _row_url(row: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def url_hash(url: str) -> str:
+    """Return a stable non-secret correlation hash for a public URL."""
+
+    safe_url = sanitize_url(url)
+    if not safe_url:
+        return ""
+    return hashlib.sha256(safe_url.encode("utf-8")).hexdigest()[:16]
 
 
 def _load_seed_urls(path: Path) -> set[str]:
@@ -294,6 +304,21 @@ def format_miner_collection_request(
     traveler_thread_id: str | None = None,
     guild_id: str | None = None,
 ) -> str:
+    return build_miner_collection_request_payload(
+        items,
+        miner_client_id=miner_client_id,
+        traveler_thread_id=traveler_thread_id,
+        guild_id=guild_id,
+    )["body"]
+
+
+def build_miner_collection_request_payload(
+    items: list[ReportItem],
+    *,
+    miner_client_id: str,
+    traveler_thread_id: str | None = None,
+    guild_id: str | None = None,
+) -> dict[str, Any]:
     mention = f"<@{miner_client_id}>"
     lines = [
         f"{mention} 🧭 집현전-여행자 추가 수집 요청",
@@ -313,18 +338,35 @@ def format_miner_collection_request(
     ]
     if not items:
         lines.append("- 신규 요청 없음")
-    for idx, item in enumerate(items[:8], 1):
-        lines += [
-            f"{idx}. **{item.site}**",
+    included: list[ReportItem] = []
+    truncated = False
+    for item in items[:8]:
+        next_idx = len(included) + 1
+        item_lines = [
+            f"{next_idx}. **{item.site}**",
             f"   - URL: {item.url}",
             f"   - 우선순위: {item.priority}",
             f"   - 차별점: {item.differentiation}",
             f"   - 기대 정보: {item.additional_info}",
         ]
+        candidate = "\n".join(lines + item_lines)
+        if len(candidate) > DISCORD_MESSAGE_LIMIT - 3:
+            truncated = True
+            break
+        lines += item_lines
+        included.append(item)
     body = "\n".join(lines)
     if len(body) > DISCORD_MESSAGE_LIMIT:
         body = body[: DISCORD_MESSAGE_LIMIT - 3].rstrip() + "..."
-    return body
+        truncated = True
+    return {
+        "body": body,
+        "requested_items": included,
+        "requested_url_hashes": [digest for item in included for digest in [url_hash(item.url)] if digest],
+        "request_item_count": len(included),
+        "request_truncated": truncated or len(items) > len(included),
+        "body_hash": hashlib.sha256(body.encode("utf-8")).hexdigest()[:16],
+    }
 
 
 async def _post_channel_message(
@@ -379,6 +421,12 @@ def _write_status(
     title: str,
     item_count: int,
     miner_message_id: str | None = None,
+    miner_request_url_hashes: list[str] | None = None,
+    miner_request_state: str = "skipped",
+    miner_request_item_count: int = 0,
+    miner_request_body_hash: str = "",
+    miner_request_truncated: bool = False,
+    miner_request_error: str = "",
 ) -> None:
     payload = {
         "run_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -386,11 +434,39 @@ def _write_status(
         "title": title,
         "candidate_count": item_count,
         "miner_message_id": miner_message_id,
+        "miner_request_url_hashes": miner_request_url_hashes or [],
+        "miner_request_state": miner_request_state,
+        "miner_request_item_count": miner_request_item_count,
+        "miner_request_body_hash": miner_request_body_hash,
+        "miner_request_truncated": miner_request_truncated,
+        "miner_request_error": miner_request_error,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _read_status(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def should_reuse_miner_request(existing_status: dict[str, Any] | None, *, title: str, thread_id: str, payload: dict[str, Any]) -> bool:
+    return bool(
+        existing_status
+        and existing_status.get("title") == title
+        and existing_status.get("thread_id") == thread_id
+        and existing_status.get("miner_request_state") == "sent"
+        and existing_status.get("miner_request_body_hash") == payload.get("body_hash")
+        and existing_status.get("miner_request_url_hashes") == payload.get("requested_url_hashes")
+        and existing_status.get("miner_message_id")
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -421,8 +497,10 @@ async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> Non
     body = format_report_body(items)
 
     miner_body = ""
+    miner_request_payload: dict[str, Any] | None = None
     if not skip_miner_request and miner_client_id:
-        miner_body = format_miner_collection_request(items, miner_client_id=miner_client_id)
+        miner_request_payload = build_miner_collection_request_payload(items, miner_client_id=miner_client_id)
+        miner_body = str(miner_request_payload["body"])
 
     if dry_run:
         print(title)
@@ -440,26 +518,60 @@ async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> Non
 
     miner_message_id: str | None = None
     async with httpx.AsyncClient(timeout=30) as client:
-        thread_id = await _post_forum_thread(client, token=token, channel_id=channel_id, title=title, body=body)
+        existing_status = _read_status(status_path)
+        if existing_status and existing_status.get("title") == title and existing_status.get("thread_id"):
+            thread_id = str(existing_status["thread_id"])
+        else:
+            thread_id = await _post_forum_thread(client, token=token, channel_id=channel_id, title=title, body=body)
+            _write_status(status_path, thread_id=thread_id, title=title, item_count=len(items), miner_request_state="pending")
         if not skip_miner_request:
             if not miner_channel_id or not miner_client_id:
                 logger.warning("skipping Miner request: DISCORD_MINER_CHANNEL_ID or DISCORD_MINER_CLIENT_ID is missing")
             else:
-                miner_body = format_miner_collection_request(
+                miner_request_payload = build_miner_collection_request_payload(
                     items,
                     miner_client_id=miner_client_id,
                     traveler_thread_id=thread_id,
                     guild_id=guild_id or None,
                 )
-                miner_message_id = await _post_channel_message(
-                    client,
-                    token=token,
-                    channel_id=miner_channel_id,
-                    body=miner_body,
-                    mention_user_id=miner_client_id,
-                )
+                if should_reuse_miner_request(existing_status, title=title, thread_id=thread_id, payload=miner_request_payload):
+                    miner_message_id = str(existing_status["miner_message_id"])
+                else:
+                    try:
+                        miner_message_id = await _post_channel_message(
+                            client,
+                            token=token,
+                            channel_id=miner_channel_id,
+                            body=str(miner_request_payload["body"]),
+                            mention_user_id=miner_client_id,
+                        )
+                    except httpx.HTTPError as exc:
+                        _write_status(
+                            status_path,
+                            thread_id=thread_id,
+                            title=title,
+                            item_count=len(items),
+                            miner_request_url_hashes=list(miner_request_payload["requested_url_hashes"]),
+                            miner_request_state="error",
+                            miner_request_item_count=int(miner_request_payload["request_item_count"]),
+                            miner_request_body_hash=str(miner_request_payload["body_hash"]),
+                            miner_request_truncated=bool(miner_request_payload["request_truncated"]),
+                            miner_request_error=str(exc)[:300],
+                        )
+                        raise
 
-    _write_status(status_path, thread_id=thread_id, title=title, item_count=len(items), miner_message_id=miner_message_id)
+    _write_status(
+        status_path,
+        thread_id=thread_id,
+        title=title,
+        item_count=len(items),
+        miner_message_id=miner_message_id,
+        miner_request_url_hashes=list((miner_request_payload or {}).get("requested_url_hashes", [])),
+        miner_request_state="sent" if miner_message_id else "skipped",
+        miner_request_item_count=int((miner_request_payload or {}).get("request_item_count", 0)),
+        miner_request_body_hash=str((miner_request_payload or {}).get("body_hash", "")),
+        miner_request_truncated=bool((miner_request_payload or {}).get("request_truncated", False)),
+    )
     logger.info(
         "posted traveler collection report channel=%s thread=%s candidates=%d miner_message=%s",
         channel_id,
