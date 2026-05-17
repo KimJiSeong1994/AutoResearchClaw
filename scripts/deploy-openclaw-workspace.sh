@@ -12,7 +12,7 @@ if [[ -n "${SSH_OPTIONS:-}" ]]; then
   SSH_BASE+=("${SSH_EXTRA_OPTIONS[@]}")
 fi
 SSH_BASE+=(-i "$KEY_FILE")
-RSYNC_SSH="$(printf "%q " "${SSH_BASE[@]}")"
+RSYNC_SSH="${SSH_BASE[*]}"
 
 cd "$ROOT_DIR"
 

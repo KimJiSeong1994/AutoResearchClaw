@@ -23,6 +23,7 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
         for secret in ("EC2_REMOTE_HOST", "EC2_SSH_PRIVATE_KEY", "EC2_KNOWN_HOSTS"):
             self.assertIn(f"secrets.{secret}", text)
         self.assertIn("StrictHostKeyChecking=yes", text)
+        self.assertIn("UserKnownHostsFile=/home/runner/.ssh/known_hosts", text)
         self.assertNotIn("StrictHostKeyChecking=no", text)
         self.assertNotIn("ssh-keyscan", text)
         self.assertNotIn("journalctl", text)
@@ -69,6 +70,8 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
         self.assertIn("SSH_OPTIONS", bridge)
         self.assertIn("SSH_BASE=(ssh)", workspace)
         self.assertIn("SSH_BASE=(ssh)", bridge)
+        self.assertIn('RSYNC_SSH="${SSH_BASE[*]}"', workspace)
+        self.assertIn('RSYNC_SSH="${SSH_BASE[*]}"', bridge)
         self.assertIn("runtime/", workspace)
         self.assertIn("scripts/", workspace)
         self.assertIn("REFRESH_OPENCLAW_IDENTITY", workspace)

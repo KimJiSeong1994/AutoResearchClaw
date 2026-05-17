@@ -109,7 +109,7 @@ jobs:
         env:
           REMOTE_HOST: ${{ env.EC2_REMOTE_HOST }}
           KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
-          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
         run: bash scripts/deploy-openclaw-workspace.sh
 
       - name: Deploy Discord OpenClaw bridge
@@ -117,7 +117,7 @@ jobs:
         env:
           REMOTE_HOST: ${{ env.EC2_REMOTE_HOST }}
           KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
-          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
         run: bash scripts/deploy-discord-openclaw-bridge.sh
 
       - name: Reinstall and restart Discord bridge
