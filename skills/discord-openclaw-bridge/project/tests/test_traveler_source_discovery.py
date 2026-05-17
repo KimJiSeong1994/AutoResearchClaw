@@ -50,6 +50,20 @@ class LowReviewProvider(FakeProvider):
         return DiscoveryProviderResult(provider=self.name, reviewed_count=1, candidates=self.candidates)
 
 
+class ErrorProvider:
+    name = "error-provider"
+
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+        return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error="rate limited", error_kind="rate_limited", rejected=["provider rate limited"])
+
+
+class ParseErrorProvider:
+    name = "parse-error-provider"
+
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+        return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error="JSON parse failed", error_kind="parse", rejected=["provider parse failed"])
+
+
 class RequestAwareProvider:
     name = "request-aware-provider"
 
@@ -414,6 +428,111 @@ def test_discovery_requires_many_sources_before_recording(tmp_path: Path) -> Non
     assert not candidates.exists()
 
 
+def test_discovery_allows_evidence_backed_static_fallback_when_network_providers_rate_limit(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "candidates.jsonl"
+    evidence = tmp_path / "evidence.jsonl"
+    record_research_request(
+        TravelerResearchRequest(topic="RAG evaluation benchmark retrieval augmented generation", min_sources_to_review=20),
+        queue_path=research,
+        candidate_queue_path=candidates,
+    )
+
+    def fetcher(url: str) -> FetchResult:
+        if "aclanthology" in url:
+            return FetchResult(
+                status="ok",
+                url=url,
+                canonical_url=url,
+                content_type="text/html",
+                bytes_read=140,
+                body="<html><head><title>T2-RAGBench RAG Evaluation Benchmark</title></head></html>",
+            )
+        return FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=80,
+            body="<html><head><title>Unrelated</title></head></html>",
+        )
+
+    summary = asyncio.run(discover_sources(
+        research_queue_path=research,
+        default_candidate_queue_path=candidates,
+        providers=[ErrorProvider(), StaticTechnicalSourceProvider()],
+        deep_research=True,
+        evidence_path=evidence,
+        evidence_fetcher=fetcher,
+    ))
+
+    rows = _jsonl(candidates)
+    assert summary.error_count == 1
+    assert summary.reviewed_count >= 10
+    assert summary.accepted_count == 1
+    assert rows[0]["url"] == "https://aclanthology.org/2026.eacl-long.8/"
+
+
+def test_discovery_does_not_fallback_for_parse_provider_errors(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "candidates.jsonl"
+    record_research_request(
+        TravelerResearchRequest(topic="RAG evaluation benchmark retrieval augmented generation", min_sources_to_review=20),
+        queue_path=research,
+        candidate_queue_path=candidates,
+    )
+
+    summary = asyncio.run(discover_sources(
+        research_queue_path=research,
+        default_candidate_queue_path=candidates,
+        providers=[ParseErrorProvider(), StaticTechnicalSourceProvider()],
+        deep_research=True,
+        evidence_path=tmp_path / "evidence.jsonl",
+        evidence_fetcher=lambda url: FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=140,
+            body="<html><head><title>T2-RAGBench RAG Evaluation Benchmark</title></head></html>",
+        ),
+    ))
+
+    assert summary.accepted_count == 0
+    assert summary.error_count == 1
+    assert not candidates.exists()
+
+
+def test_discovery_does_not_fallback_when_retryable_and_parse_errors_mix(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "candidates.jsonl"
+    record_research_request(
+        TravelerResearchRequest(topic="RAG evaluation benchmark retrieval augmented generation", min_sources_to_review=20),
+        queue_path=research,
+        candidate_queue_path=candidates,
+    )
+
+    summary = asyncio.run(discover_sources(
+        research_queue_path=research,
+        default_candidate_queue_path=candidates,
+        providers=[ErrorProvider(), ParseErrorProvider(), StaticTechnicalSourceProvider()],
+        deep_research=True,
+        evidence_path=tmp_path / "evidence.jsonl",
+        evidence_fetcher=lambda url: FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=140,
+            body="<html><head><title>T2-RAGBench RAG Evaluation Benchmark</title></head></html>",
+        ),
+    ))
+
+    assert summary.accepted_count == 0
+    assert summary.error_count == 2
+    assert not candidates.exists()
+
+
 def test_static_provider_reviews_many_public_sources(tmp_path: Path) -> None:
     async def run_provider() -> DiscoveryProviderResult:
         request = ResearchRequest(
@@ -428,9 +547,10 @@ def test_static_provider_reviews_many_public_sources(tmp_path: Path) -> None:
 
     result = asyncio.run(run_provider())
 
-    assert result.reviewed_count >= 8
+    assert result.reviewed_count >= 6
     assert result.candidates
     assert all(candidate.url.startswith("https://") for candidate in result.candidates)
+    assert result.reviewed_count == len({candidate.url for candidate in result.candidates})
 
 
 def test_static_provider_includes_topic_specific_paper_pages(tmp_path: Path) -> None:
@@ -451,6 +571,46 @@ def test_static_provider_includes_topic_specific_paper_pages(tmp_path: Path) -> 
     assert "https://aclanthology.org/2026.eacl-long.8/" in urls
     assert "https://arxiv.org/abs/2603.19281" in urls
     assert any(candidate.source_type == "paper_page" for candidate in result.candidates)
+    assert all(
+        candidate.next_action == "review_paper_lead_for_recurring_source"
+        for candidate in result.candidates
+        if candidate.source_type == "paper_page"
+    )
+
+
+def test_static_provider_skips_unrelated_paper_pages(tmp_path: Path) -> None:
+    async def run_provider() -> DiscoveryProviderResult:
+        request = ResearchRequest(
+            request_id="req-db",
+            topic="database storage engine concurrency control",
+            scope="public recurring sources",
+            min_sources_to_review=10,
+            candidate_queue_path=tmp_path / "candidates.jsonl",
+        )
+        async with httpx.AsyncClient() as client:
+            return await StaticTechnicalSourceProvider().discover(request, client=client)
+
+    result = asyncio.run(run_provider())
+
+    assert all(candidate.source_type != "paper_page" for candidate in result.candidates)
+    assert "T2-RAGBench" not in {candidate.title for candidate in result.candidates}
+
+
+def test_static_provider_skips_paper_pages_for_sparse_topic(tmp_path: Path) -> None:
+    async def run_provider() -> DiscoveryProviderResult:
+        request = ResearchRequest(
+            request_id="req-ai",
+            topic="AI",
+            scope="public recurring sources",
+            min_sources_to_review=10,
+            candidate_queue_path=tmp_path / "candidates.jsonl",
+        )
+        async with httpx.AsyncClient() as client:
+            return await StaticTechnicalSourceProvider().discover(request, client=client)
+
+    result = asyncio.run(run_provider())
+
+    assert all(candidate.source_type != "paper_page" for candidate in result.candidates)
 
 
 def test_provider_get_retries_once_for_rate_limit(monkeypatch: Any) -> None:
@@ -483,6 +643,39 @@ def test_provider_get_retries_once_for_rate_limit(monkeypatch: Any) -> None:
     assert response.status_code == 200
     assert calls == 2
     assert sleeps == [0.5]
+
+
+def test_provider_get_honors_retry_after_header(monkeypatch: Any) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+            self.request = httpx.Request("GET", "https://example.com/search")
+            self.headers = {"Retry-After": "1.25"}
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                response = httpx.Response(self.status_code, headers=self.headers, request=self.request)
+                raise httpx.HTTPStatusError("rate limited", request=self.request, response=response)
+
+    class FakeClient:
+        async def get(self, _url: str, *, params: dict[str, str]) -> FakeResponse:
+            nonlocal calls
+            calls += 1
+            return FakeResponse(429 if calls == 1 else 200)
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    response = asyncio.run(_get_with_backoff(FakeClient(), "https://example.com/search", params={"q": "rag"}, provider="fake", attempts=2))  # type: ignore[arg-type]
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert sleeps == [1.25]
 
 
 def test_load_pending_requests_skips_live_test_requests(tmp_path: Path) -> None:

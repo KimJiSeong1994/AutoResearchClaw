@@ -45,6 +45,7 @@ REQUEST_STATUS_COMPLETED = "completed_source_discovery"
 REQUEST_STATUS_COMPLETED_EMPTY = "completed_no_candidates"
 REQUEST_STATUS_FAILED = "failed_source_discovery"
 RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
+MIN_NETWORK_FAILURE_FALLBACK_REVIEWED = 10
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class DiscoveryProviderResult:
     candidates: list[DiscoveryCandidate] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
     error: str | None = None
+    error_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -287,18 +289,34 @@ async def _get_with_backoff(
             status_code = exc.response.status_code
             if status_code not in RETRYABLE_HTTP_STATUS or attempt >= max_attempts - 1:
                 raise
-            delay = min(2.0, 0.5 * (attempt + 1))
+            retry_after = exc.response.headers.get("Retry-After", "")
+            try:
+                delay = float(retry_after) if retry_after else 0.5 * (2**attempt)
+            except ValueError:
+                delay = 0.5 * (2**attempt)
+            delay = min(5.0, max(0.1, delay))
             LOG.info("traveler provider retry provider=%s status=%s attempt=%s delay=%s", provider, status_code, attempt + 1, delay)
             await asyncio.sleep(delay)
         except httpx.HTTPError as exc:
             last_exc = exc
             if attempt >= max_attempts - 1:
                 raise
-            delay = min(2.0, 0.5 * (attempt + 1))
+            delay = min(5.0, 0.5 * (2**attempt))
             LOG.info("traveler provider retry provider=%s error=%s attempt=%s delay=%s", provider, exc, attempt + 1, delay)
             await asyncio.sleep(delay)
     assert last_exc is not None
     raise last_exc
+
+
+def _provider_error_kind(exc: httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        if status_code == 429:
+            return "rate_limited"
+        if status_code in RETRYABLE_HTTP_STATUS:
+            return "retryable_http"
+        return "http_error"
+    return "network"
 
 
 class ArxivDiscoveryProvider:
@@ -315,7 +333,7 @@ class ArxivDiscoveryProvider:
         try:
             response = await _get_with_backoff(client, ARXIV_API_URL, params=params, provider=self.name)
         except httpx.HTTPError as exc:
-            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=str(exc), rejected=["arXiv API request failed"])
+            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=str(exc), error_kind=_provider_error_kind(exc), rejected=["arXiv API request failed"])
 
         reviewed = 0
         candidates: list[DiscoveryCandidate] = []
@@ -323,7 +341,7 @@ class ArxivDiscoveryProvider:
         try:
             root = ET.fromstring(response.text)
         except ET.ParseError as exc:
-            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=f"arXiv XML parse failed: {exc}")
+            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=f"arXiv XML parse failed: {exc}", error_kind="parse")
         ns = {"atom": "http://www.w3.org/2005/Atom"}
         for entry in root.findall("atom:entry", ns):
             reviewed += 1
@@ -361,11 +379,11 @@ class SemanticScholarDiscoveryProvider:
         try:
             response = await _get_with_backoff(client, SEMANTIC_SCHOLAR_SEARCH_URL, params=params, provider=self.name)
         except httpx.HTTPError as exc:
-            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=str(exc), rejected=["Semantic Scholar API request failed"])
+            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=str(exc), error_kind=_provider_error_kind(exc), rejected=["Semantic Scholar API request failed"])
         try:
             payload = response.json()
         except ValueError as exc:
-            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=f"Semantic Scholar JSON parse failed: {exc}")
+            return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=f"Semantic Scholar JSON parse failed: {exc}", error_kind="parse")
         data = payload.get("data", []) if isinstance(payload, dict) else []
         reviewed = 0
         candidates: list[DiscoveryCandidate] = []
@@ -436,16 +454,29 @@ class StaticTechnicalSourceProvider:
         ("Agent-as-a-Graph", "https://arxiv.org/abs/2511.18194", "paper_page", "arXiv abstract page for knowledge graph based LLM agent and tool retrieval."),
     )
 
-    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+    def _candidate_rows(self, request: ResearchRequest) -> list[tuple[str, str, str, str]]:
         keys = _keywords(request.topic, limit=8)
-        candidates: list[DiscoveryCandidate] = []
+        candidates: list[tuple[str, str, str, str]] = []
         for title, url, source_type, reliability in self._SOURCES:
             title_lower = title.lower()
-            if keys and not any(key in title_lower or key in reliability.lower() for key in keys):
-                # Keep broad academic sources for sparse Korean or niche prompts,
-                # but do not flood unrelated lab blogs for every request.
+            reliability_lower = reliability.lower()
+            has_topic_match = any(key in title_lower or key in reliability_lower for key in keys)
+            if source_type == "paper_page" and (not keys or not has_topic_match):
+                continue
+            if keys and not has_topic_match:
+                # Keep broad academic/infrastructure hubs for sparse prompts,
+                # but do not flood unrelated lab blogs or paper pages.
                 if source_type == "research_lab_blog" and len(candidates) >= 2:
                     continue
+            candidates.append((title, url, source_type, reliability))
+        return candidates
+
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+        candidates: list[DiscoveryCandidate] = []
+        rows = self._candidate_rows(request)
+        for title, url, source_type, reliability in rows:
+            next_action = "review_paper_lead_for_recurring_source" if source_type == "paper_page" else "review_for_miner_seed"
+            collection_hint = "review_paper_page_for_feed_or_author_source" if source_type == "paper_page" else "review_static_public_source_surface"
             candidates.append(
                 DiscoveryCandidate(
                     url=url,
@@ -454,11 +485,12 @@ class StaticTechnicalSourceProvider:
                     reliability_note=f"정적 고신뢰 공개 출처 포트폴리오: {reliability}",
                     cadence_note="공개 목록/블로그/허브 형태로 반복 갱신 확인이 가능한 출처입니다.",
                     topic_fit=f"요청 주제 `{clean_text(request.topic, limit=120)}`의 수집면 확장을 위해 운영자 검토가 필요한 후보입니다.",
-                    collection_hint="review_static_public_source_surface",
+                    collection_hint=collection_hint,
+                    next_action=next_action,
                     provider=self.name,
                 )
             )
-        return DiscoveryProviderResult(provider=self.name, reviewed_count=len(self._SOURCES), candidates=_dedupe_candidates(candidates))
+        return DiscoveryProviderResult(provider=self.name, reviewed_count=len({sanitize_url(url) or url for _, url, _, _ in rows}), candidates=_dedupe_candidates(candidates))
 
 
 def default_providers() -> list[DiscoveryProvider]:
@@ -498,6 +530,7 @@ def _status_payload(summary: DiscoveryRunSummary, *, provider_results: list[Disc
                 "rejected_count": len(result.rejected),
                 "rejected_samples": result.rejected[:10],
                 "error": result.error,
+                "error_kind": result.error_kind,
             }
             for result in provider_results
         ],
@@ -563,6 +596,7 @@ async def discover_sources(
                         provider=provider.name,
                         reviewed_count=0,
                         error=str(exc),
+                        error_kind="unexpected",
                         rejected=["provider raised an unexpected error"],
                     )
                 request_results.append(result)
@@ -574,7 +608,20 @@ async def discover_sources(
                     LOG.warning("traveler discovery provider failed request=%s provider=%s error=%s", request.request_id, result.provider, result.error)
 
             request_reviewed = sum(result.reviewed_count for result in request_results)
-            if request_reviewed < request.min_sources_to_review:
+            provider_error_count = sum(1 for result in request_results if result.error)
+            retryable_error_kinds = {"rate_limited", "retryable_http", "network"}
+            retryable_error_count = sum(1 for result in request_results if result.error_kind in retryable_error_kinds)
+            nonretryable_error_count = sum(1 for result in request_results if result.error and result.error_kind not in retryable_error_kinds)
+            candidate_count = sum(len(result.candidates) for result in request_results)
+            fallback_threshold = min(request.min_sources_to_review, MIN_NETWORK_FAILURE_FALLBACK_REVIEWED)
+            allow_evidence_backed_fallback = (
+                deep_enabled
+                and retryable_error_count > 0
+                and nonretryable_error_count == 0
+                and candidate_count > 0
+                and request_reviewed >= fallback_threshold
+            )
+            if request_reviewed < request.min_sources_to_review and not allow_evidence_backed_fallback:
                 rejected += sum(len(result.candidates) for result in request_results)
                 LOG.warning(
                     "traveler discovery below minimum review threshold request=%s reviewed=%s required=%s",
@@ -594,6 +641,14 @@ async def discover_sources(
                     },
                 }
                 continue
+            if allow_evidence_backed_fallback:
+                LOG.warning(
+                    "traveler discovery using evidence-backed fallback request=%s reviewed=%s required=%s provider_errors=%s",
+                    request.request_id,
+                    request_reviewed,
+                    request.min_sources_to_review,
+                    provider_error_count,
+                )
 
             request_limit = request.max_candidates if request.max_candidates is not None else max_to_record
             request_recorded = 0
