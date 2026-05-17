@@ -26,6 +26,8 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
         self.assertNotIn("StrictHostKeyChecking=no", text)
         self.assertNotIn("ssh-keyscan", text)
         self.assertNotIn("journalctl", text)
+        self.assertIn("EC2 deploy skipped because one or more production secrets are not configured", text)
+        self.assertIn("steps.deploy_secrets.outputs.configured == 'true'", text)
         self.assertRegex(text, r"chmod 600 \"\$RUNNER_TEMP/ec2_deploy_key\"")
 
     def test_workflow_pins_actions_before_using_ec2_credentials(self) -> None:

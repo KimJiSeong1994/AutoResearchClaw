@@ -5,7 +5,7 @@ This repository uses `.github/workflows/ec2-deploy.yml` to validate changes and 
 ## Triggers
 
 - `pull_request` to `main`: validation only.
-- `push` to `main`: validation, workspace deploy, Discord bridge deploy, and bridge reinstall/restart.
+- `push` to `main`: validation, then workspace deploy, Discord bridge deploy, and bridge reinstall/restart when EC2 production secrets are configured.
 - `workflow_dispatch`: manual deploy with booleans for workspace, Discord bridge, and restart.
 
 ## Required GitHub environment
@@ -17,6 +17,8 @@ Create a GitHub Actions environment named `production` and add these as **enviro
 - `EC2_KNOWN_HOSTS`: pinned SSH host key line for the EC2 host, matched to the exact host/IP in `EC2_REMOTE_HOST`.
 
 Configure the `production` environment with required reviewers and branch protection for `main` before enabling automatic production deployment.
+
+If any of `EC2_REMOTE_HOST`, `EC2_SSH_PRIVATE_KEY`, or `EC2_KNOWN_HOSTS` is missing, the workflow keeps validation green and skips the EC2 deploy steps with an explicit warning. This prevents credential setup gaps from blocking unrelated validation while still making deployment readiness visible.
 
 Generate `EC2_KNOWN_HOSTS` only after verifying the host identity out of band. `ssh-keyscan` is only a collection tool; verify the fingerprint through AWS console/SSM, an existing trusted SSH session, or your infrastructure inventory before storing it:
 
