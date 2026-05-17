@@ -25,8 +25,8 @@ responds in `DISCORD_MINER_CHANNEL_ID`.
 
 ## Discord agent registry and cowork process
 
-The main OpenClaw bridge registers `/jiphyeonjeon_agents` as a safe, ephemeral
-read-only roster. The command documents how the Jiphyeonjeon agents cooperate;
+The main OpenClaw bridge registers `/jiphyeonjeon_agents` as a safe, channel-visible
+read-only roster with the Editor/Advisor badge images attached. The command documents how the Jiphyeonjeon agents cooperate;
 it does not run trust scripts, approve links, promote candidates, or publish to
 Discord. It is synchronized with the guild when the main bridge starts and
 `setup_hook()` calls `CommandTree.sync()`.
@@ -42,10 +42,12 @@ Registered workflow roles:
    or hold decisions and produces approved-only exports.
 4. **집현정-편집자** — advisory-only canonical identity editor. It compares
    JSON/JSONL artifacts across newsletter, manual links, research, card-news,
-   and wiki-adjacent surfaces to report duplicate content identities.
+   and wiki-adjacent surfaces to report duplicate content identities. Badge asset:
+   `project/assets/jiphyeonjeon-editor-agent.png`.
 5. **집현전-지도교수** — advisory-only evidence/citation quality validator. It
    checks source URL coverage, source diversity, row-level citation coverage,
-   and overclaim risk before publication planning.
+   and overclaim risk before publication planning. Badge asset:
+   `project/assets/jiphyeonjeon-advisor-agent.png`.
 6. **집현전-경비원** — operations guard. It reports stale runs, backlog, and
    Traveler→Miner handoff confirmation without mutating review state.
 7. **Card-news publisher** — publication renderer. It consumes sanitized,

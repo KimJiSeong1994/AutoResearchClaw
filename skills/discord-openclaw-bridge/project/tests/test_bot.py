@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from pathlib import Path
 
-from discord_openclaw_bridge.bot import build_bot, render_jiphyeonjeon_agent_registry
+from discord_openclaw_bridge.bot import build_bot, jiphyeonjeon_agent_image_paths, render_jiphyeonjeon_agent_registry
 from discord_openclaw_bridge.config import BridgeConfig
 
 
@@ -75,3 +75,12 @@ def test_agent_registry_mentions_new_agents_and_pending_promotion() -> None:
     assert "pending_future_phase" in rendered
     assert "queue 수정" in rendered
     assert "자동 승격 없음" in rendered
+
+
+def test_agent_registry_image_assets_are_packaged() -> None:
+    paths = jiphyeonjeon_agent_image_paths()
+
+    names = {path.name for path in paths}
+    assert "jiphyeonjeon-editor-agent.png" in names
+    assert "jiphyeonjeon-advisor-agent.png" in names
+    assert all(path.stat().st_size > 0 for path in paths)

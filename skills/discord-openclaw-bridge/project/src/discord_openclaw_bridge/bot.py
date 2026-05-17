@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -12,6 +13,12 @@ from .config import BridgeConfig, ConfigError, load_config
 from .openclaw import OpenClawClient
 
 LOG = logging.getLogger("discord_openclaw_bridge")
+ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
+JIPHYEONJEON_AGENT_IMAGE_FILES = (
+    ASSETS_DIR / "jiphyeonjeon-editor-agent.png",
+    ASSETS_DIR / "jiphyeonjeon-advisor-agent.png",
+)
+
 
 
 def _trim(text: str, limit: int) -> str:
@@ -85,6 +92,12 @@ class OpenClawDiscordBot(discord.Client):
             and interaction.channel.id == self.config.allowed_channel_id
         )
 
+def jiphyeonjeon_agent_image_paths() -> list[Path]:
+    """Return available visual identity assets for the Jiphyeonjeon registry."""
+
+    return [path for path in JIPHYEONJEON_AGENT_IMAGE_FILES if path.exists()]
+
+
 def render_jiphyeonjeon_agent_registry() -> str:
     """Return a Discord-safe roster/workflow summary for Jiphyeonjeon agents.
 
@@ -97,8 +110,8 @@ def render_jiphyeonjeon_agent_registry() -> str:
         "- 집현전-여행자: 공개 출처 후보를 찾는 research-only agent. 광부 seed/클로 review로 넘기지만 직접 승인하지 않습니다.\n"
         "- 집현전-광부: Discord/seed 링크를 수집해 pending review queue에 넣는 collection-only agent.\n"
         "- 집현전-클로: Miner pending link를 approve/reject/hold로 판단하는 content review owner.\n"
-        "- 집현정-편집자: 여러 표면의 JSON/JSONL artifact를 canonical identity로 묶고 중복 그룹을 보고하는 advisory-only agent.\n"
-        "- 집현전-지도교수: 연구/게시 artifact의 evidence URL, source diversity, citation coverage, overclaim risk를 검토하는 advisory-only agent.\n"
+        "- 집현정-편집자: 여러 표면의 JSON/JSONL artifact를 canonical identity로 묶고 중복 그룹을 보고하는 advisory-only agent. 이미지: jiphyeonjeon-editor-agent.png\n"
+        "- 집현전-지도교수: 연구/게시 artifact의 evidence URL, source diversity, citation coverage, overclaim risk를 검토하는 advisory-only agent. 이미지: jiphyeonjeon-advisor-agent.png\n"
         "- 집현전-경비원: stale run, backlog, handoff 실패를 관측하는 ops guard.\n"
         "- Card-news publisher: sanitized archive를 Discord card-news로 렌더링하되 quality gate 실패 시 게시 전 중단합니다.\n\n"
         "**권장 워크프로세스**\n"
@@ -166,9 +179,12 @@ async def _agents_command(interaction: discord.Interaction) -> None:
     if not bot.channel_allowed(interaction):
         await interaction.response.send_message("집현전 에이전트 등록 현황은 지정된 채널에서만 확인할 수 있습니다.", ephemeral=True)
         return
+    image_paths = jiphyeonjeon_agent_image_paths()
+    files = [discord.File(path, filename=path.name) for path in image_paths]
     await interaction.response.send_message(
         _trim(render_jiphyeonjeon_agent_registry(), bot.config.max_response_chars),
-        ephemeral=True,
+        files=files,
+        ephemeral=False,
     )
 
 
