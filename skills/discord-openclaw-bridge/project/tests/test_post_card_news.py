@@ -23,11 +23,14 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _card_content_fingerprint,
     _card_identity_fingerprint,
     _card_news_quality_gate_config_from_env,
+    _card_news_skip_is_duplicate_related,
     _agent_context,
     _agent_duplicate_indices,
     _content_signature_hashes,
     _create_forum_card_news_thread,
     _evaluate_card_news_quality,
+    _format_card_news_skip_ops_body,
+    _format_card_news_skip_ops_title,
     _is_card_news_bot_message,
     _load_recent_published_card_history,
     _load_recent_published_agent_contexts,
@@ -35,6 +38,7 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _load_recent_published_identities,
     _purge_previous_card_news_messages,
     _purge_previous_card_news_threads,
+    _post_card_news_skip_ops_report,
     _sanitize_public_url,
     _select_cards,
     _split_discord_content,
@@ -1141,6 +1145,100 @@ def test_quality_gate_skips_when_previous_overlap_exceeds_threshold() -> None:
     assert evaluation["counts"]["new"] == 2
 
 
+def test_duplicate_quality_skip_formats_ops_report(tmp_path) -> None:
+    cards = [_gate_card(idx) for idx in range(4)]
+    previous = {_card_identity_fingerprint(card) for card in cards[:3]}
+    config = CardNewsQualityGateConfig(
+        min_publishable_cards=3,
+        min_new_cards=3,
+        max_previous_overlap_ratio=0.5,
+        min_evidence_cards=2,
+    )
+    evaluation = _evaluate_card_news_quality(cards, previous, config)
+    payload = {"date": "2026-05-17"}
+    source = tmp_path / "raw" / "newsletters" / "2026-05-17" / "items.json"
+
+    assert evaluation["decision"] == "skip"
+    assert _card_news_skip_is_duplicate_related(evaluation) is True
+
+    title = _format_card_news_skip_ops_title(payload, evaluation)
+    body = _format_card_news_skip_ops_body(
+        payload=payload,
+        source=source,
+        evaluation=evaluation,
+        audit_path=tmp_path / "audit.jsonl",
+        token_source="guard",
+    )
+
+    assert "2026-05-17" in title
+    assert "Card News 보류" in title
+    assert "카드뉴스 발행 보류" in body
+    assert "duplicate/newness reasons" in body
+    assert "min_new_cards" in body
+    assert "max_previous_overlap_ratio" in body
+    assert "new: `1`" in body
+    assert "overlap: `0.75`" in body
+    assert "DISCORD_CARD_NEWS_QUALITY_GATE=0" in body
+
+
+def test_non_duplicate_quality_skip_does_not_trigger_ops_report() -> None:
+    evaluation = {
+        "decision": "skip",
+        "reason_codes": ["min_evidence_cards"],
+        "counts": {"selected": 3, "new": 3, "overlap_ratio": 0.0},
+        "thresholds": {},
+    }
+
+    assert _card_news_skip_is_duplicate_related(evaluation) is False
+
+
+def test_duplicate_quality_skip_posts_ops_forum_thread(tmp_path, monkeypatch) -> None:
+    posts: list[dict[str, object]] = []
+
+    class FakeClient:
+        async def get(self, url, *, headers):
+            return post_card_news.httpx.Response(
+                200,
+                json={"type": 15},
+                request=post_card_news.httpx.Request("GET", url),
+            )
+
+        async def post(self, url, *, headers, json):
+            posts.append({"url": url, "json": json, "headers": headers})
+            return post_card_news.httpx.Response(
+                200,
+                json={"id": "ops-thread-1"},
+                request=post_card_news.httpx.Request("POST", url),
+            )
+
+    evaluation = {
+        "decision": "skip",
+        "reason_codes": ["min_new_cards", "max_previous_overlap_ratio"],
+        "counts": {"selected": 4, "publishable": 4, "evidence": 4, "new": 1, "repeated": 3, "overlap_ratio": 0.75},
+        "thresholds": {"min_new_cards": 3, "max_previous_overlap_ratio": 0.5},
+    }
+    monkeypatch.setenv("DISCORD_GUARD_BOT_TOKEN", "guard-token")
+    monkeypatch.setenv("DISCORD_OPS_REPORT_CHANNEL_ID", "1502980129343672504")
+
+    thread_id = asyncio.run(
+        _post_card_news_skip_ops_report(
+            FakeClient(),
+            payload={"date": "2026-05-17"},
+            source=tmp_path / "raw" / "newsletters" / "2026-05-17" / "items.json",
+            evaluation=evaluation,
+            audit_path=tmp_path / "audit.jsonl",
+        )
+    )
+
+    assert thread_id == "ops-thread-1"
+    assert posts[0]["url"] == "https://discord.com/api/v10/channels/1502980129343672504/threads"
+    payload = posts[0]["json"]
+    assert "Card News 보류" in payload["name"]
+    assert payload["message"]["allowed_mentions"] == {"parse": []}
+    assert payload["message"]["flags"] == DISCORD_SUPPRESS_EMBEDS_FLAG
+    assert "카드뉴스 발행 보류" in payload["message"]["content"]
+
+
 def test_quality_gate_allows_enough_new_publishable_evidence_cards() -> None:
     cards = [_gate_card(idx) for idx in range(3)]
     config = CardNewsQualityGateConfig(
@@ -1709,6 +1807,7 @@ def test_run_skips_before_discord_calls_and_writes_audit(tmp_path: Path, monkeyp
     monkeypatch.setenv("DISCORD_CARD_NEWS_SOURCE", str(source))
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
+    monkeypatch.setenv("DISCORD_CARD_NEWS_REPORT_SKIP_TO_OPS", "0")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "3")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "3")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "2")

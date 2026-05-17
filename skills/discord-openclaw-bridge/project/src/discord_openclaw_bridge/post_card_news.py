@@ -31,6 +31,7 @@ from .post_newsletter import (
 )
 
 DEFAULT_CARD_NEWS_CHANNEL_ID = ""
+DEFAULT_OPS_REPORT_CHANNEL_ID = "1502980129343672504"  # 운영리포팅 forum
 CARD_NEWS_TITLE = "집현전-Claw 카드뉴스"
 FORUM_CHANNEL_TYPES = {15}
 CARD_NEWS_THREAD_NAME_MARKERS = (
@@ -54,6 +55,7 @@ TOPIC_PRIORITY: dict[str, int] = {
     "논문/리서치": 80,
     GENERIC_TOPIC: 900,
 }
+CARD_NEWS_DUPLICATE_SKIP_REASONS = {"min_new_cards", "max_previous_overlap_ratio"}
 _REGISTER_PAIRS = (
     # Order matters: longer / more specific endings first so they win the lookahead match.
     ("되었다", "되었습니다"),
@@ -763,6 +765,127 @@ def _card_news_quality_gate_config_from_env() -> CardNewsQualityGateConfig:
         agent_dedupe_max_previous=_env_int("DISCORD_CARD_NEWS_AGENT_DEDUPE_MAX_PREVIOUS", 5),
         agent_dedupe_timeout_sec=_env_float("DISCORD_CARD_NEWS_AGENT_DEDUPE_TIMEOUT_SEC", 45.0),
     )
+
+
+def _resolve_ops_bot_token() -> tuple[str, str]:
+    guard_token = os.environ.get("DISCORD_GUARD_BOT_TOKEN", "").strip()
+    if guard_token:
+        return guard_token, "guard"
+    bridge_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+    if bridge_token:
+        return bridge_token, "bridge-fallback"
+    raise NewsletterPostConfigError(
+        "missing DISCORD_GUARD_BOT_TOKEN (preferred) and DISCORD_BOT_TOKEN (fallback) for ops reporting"
+    )
+
+
+def _card_news_skip_is_duplicate_related(evaluation: dict[str, Any]) -> bool:
+    reason_codes = {str(reason) for reason in evaluation.get("reason_codes", [])}
+    return bool(reason_codes & CARD_NEWS_DUPLICATE_SKIP_REASONS)
+
+
+def _format_card_news_skip_ops_title(payload: dict[str, Any], evaluation: dict[str, Any]) -> str:
+    run_date = _clean(payload.get("date") or date.today().isoformat())
+    counts = evaluation.get("counts") if isinstance(evaluation.get("counts"), dict) else {}
+    new_count = counts.get("new", "?")
+    overlap = counts.get("overlap_ratio", "?")
+    return f"⚠️ Card News 보류 {run_date} — new={new_count} overlap={overlap}"[:90]
+
+
+def _format_card_news_skip_ops_body(
+    *,
+    payload: dict[str, Any],
+    source: Path,
+    evaluation: dict[str, Any],
+    audit_path: Path,
+    token_source: str,
+) -> str:
+    run_date = _clean(payload.get("date") or date.today().isoformat())
+    counts = evaluation.get("counts") if isinstance(evaluation.get("counts"), dict) else {}
+    thresholds = evaluation.get("thresholds") if isinstance(evaluation.get("thresholds"), dict) else {}
+    reason_codes = [str(reason) for reason in evaluation.get("reason_codes", [])]
+    duplicate_reasons = [reason for reason in reason_codes if reason in CARD_NEWS_DUPLICATE_SKIP_REASONS]
+    lines = [
+        f"**카드뉴스 발행 보류 — {run_date}**",
+        "",
+        "뉴스레타 아카이브는 생성/게시됐지만, 카드뉴스는 중복·신규성 게이트로 발행하지 않았습니다.",
+        "",
+        "**품질 게이트 판정**",
+        f"- decision: `skip`",
+        f"- reasons: `{', '.join(reason_codes) or 'unknown'}`",
+        f"- duplicate/newness reasons: `{', '.join(duplicate_reasons) or 'none'}`",
+        f"- selected: `{counts.get('selected', 0)}` publishable: `{counts.get('publishable', 0)}` evidence: `{counts.get('evidence', 0)}`",
+        f"- new: `{counts.get('new', 0)}` repeated: `{counts.get('repeated', 0)}` overlap: `{counts.get('overlap_ratio', 0)}`",
+        "",
+        "**기준값**",
+        f"- min_new_cards: `{thresholds.get('min_new_cards', '?')}`",
+        f"- max_previous_overlap_ratio: `{thresholds.get('max_previous_overlap_ratio', '?')}`",
+        f"- min_publishable_cards: `{thresholds.get('min_publishable_cards', '?')}`",
+        f"- min_evidence_cards: `{thresholds.get('min_evidence_cards', '?')}`",
+        "",
+        "**근거 위치**",
+        f"- source: `{_source_ref(source, payload)}`",
+        f"- audit: `{audit_path}`",
+        "",
+        "**권장 조치**",
+        "- 정상 중복 방지라면 조치 없음.",
+        "- 운영상 강제 발행이 필요하면 일회성으로 품질 게이트 임계값을 완화하거나 `DISCORD_CARD_NEWS_QUALITY_GATE=0`을 명시해 재실행.",
+        f"",
+        f"_Reported by card-news quality gate via `{token_source}` ops identity._",
+    ]
+    body = "\n".join(lines)
+    if len(body) > 1900:
+        body = body[:1897].rstrip() + "..."
+    return body
+
+
+async def _post_card_news_skip_ops_report(
+    client: httpx.AsyncClient,
+    *,
+    payload: dict[str, Any],
+    source: Path,
+    evaluation: dict[str, Any],
+    audit_path: Path,
+) -> str:
+    if os.environ.get("DISCORD_CARD_NEWS_REPORT_SKIP_TO_OPS", "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return ""
+    if not _card_news_skip_is_duplicate_related(evaluation):
+        return ""
+    token, token_source = _resolve_ops_bot_token()
+    channel_id = os.environ.get("DISCORD_OPS_REPORT_CHANNEL_ID", DEFAULT_OPS_REPORT_CHANNEL_ID).strip()
+    if not channel_id:
+        raise NewsletterPostConfigError("DISCORD_OPS_REPORT_CHANNEL_ID is empty")
+    headers = {"Authorization": f"Bot {token}"}
+    info = await client.get(f"https://discord.com/api/v10/channels/{channel_id}", headers=headers)
+    info.raise_for_status()
+    if int(info.json().get("type", 0)) not in FORUM_CHANNEL_TYPES:
+        raise NewsletterPostConfigError(f"DISCORD_OPS_REPORT_CHANNEL_ID={channel_id} is not a forum channel")
+    response = await client.post(
+        f"https://discord.com/api/v10/channels/{channel_id}/threads",
+        headers=headers,
+        json={
+            "name": _format_card_news_skip_ops_title(payload, evaluation),
+            "auto_archive_duration": 4320,
+            "message": {
+                "content": _format_card_news_skip_ops_body(
+                    payload=payload,
+                    source=source,
+                    evaluation=evaluation,
+                    audit_path=audit_path,
+                    token_source=token_source,
+                ),
+                "allowed_mentions": {"parse": []},
+                "flags": DISCORD_SUPPRESS_EMBEDS_FLAG,
+            },
+        },
+    )
+    response.raise_for_status()
+    return str(response.json().get("id") or "")
 
 
 def _card_identity_fingerprint(item: dict[str, Any]) -> str:
@@ -2330,12 +2453,24 @@ async def run() -> None:
                     evaluation=evaluation,
                 )
                 _append_card_news_audit(audit_path, record)
+                ops_thread_id = ""
+                try:
+                    ops_thread_id = await _post_card_news_skip_ops_report(
+                        client,
+                        payload=payload,
+                        source=source,
+                        evaluation=evaluation,
+                        audit_path=audit_path,
+                    )
+                except (NewsletterPostConfigError, httpx.HTTPError) as ops_exc:
+                    print(f"card news skip ops report failed: {ops_exc}", file=sys.stderr)
                 counts = evaluation["counts"]
+                ops_suffix = f" ops_thread={ops_thread_id}" if ops_thread_id else ""
                 print(
                     "skipped card news quality_gate "
                     f"reason={','.join(evaluation['reason_codes'])} "
                     f"source={_source_ref(source, payload)} selected={counts['selected']} "
-                    f"new={counts['new']} overlap={counts['overlap_ratio']} audit={audit_path}"
+                    f"new={counts['new']} overlap={counts['overlap_ratio']} audit={audit_path}{ops_suffix}"
                 )
                 return
         else:
