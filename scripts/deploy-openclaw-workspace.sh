@@ -65,7 +65,7 @@ COPYFILE_DISABLE=1 rsync -az --delete \
   "$REMOTE_HOST:$REMOTE_WORKSPACE/scripts/"
 
 "${SSH_BASE[@]}" "$REMOTE_HOST" "find $REMOTE_WORKSPACE -maxdepth 2 -name '._*' -delete; find $REMOTE_WORKSPACE/skills $REMOTE_WORKSPACE/scripts -name '*.sh' -exec chmod +x {} +; find $REMOTE_WORKSPACE/scripts -name '*.py' -exec chmod +x {} +"
-if ! "${SSH_BASE[@]}" "$REMOTE_HOST" "export PATH=\$HOME/.npm-global/bin:\$PATH; openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity >/dev/null 2>&1"; then
+if ! "${SSH_BASE[@]}" "$REMOTE_HOST" "export PATH=\$HOME/.npm-global/bin:\$PATH; timeout 20s openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity >/dev/null 2>&1"; then
   echo "warning: openclaw identity refresh failed; workspace files were deployed" >&2
 fi
 

@@ -48,6 +48,7 @@ Do not commit private keys, `.env` files, Discord tokens, OpenClaw gateway token
    - `skills/`
    - `runtime/`
    - `scripts/`
+   The optional OpenClaw identity refresh is bounded by a remote timeout and only emits a warning if unavailable.
 5. Runs `scripts/deploy-discord-openclaw-bridge.sh`.
 6. Reinstalls/restarts `discord-openclaw-bridge.service` and prints sanitized `systemctl show` state only. Raw `journalctl` output is intentionally not emitted to GitHub Actions logs.
 
