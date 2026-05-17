@@ -71,6 +71,7 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
         self.assertIn("SSH_BASE=(ssh)", bridge)
         self.assertIn("runtime/", workspace)
         self.assertIn("scripts/", workspace)
+        self.assertIn("REFRESH_OPENCLAW_IDENTITY", workspace)
         self.assertIn("timeout 20s openclaw agents set-identity", workspace)
         self.assertIn("--exclude '.env'", workspace)
         self.assertIn("--exclude '.env'", bridge)
