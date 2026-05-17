@@ -25,6 +25,7 @@ _ALLOWED_SOURCE_TYPES = {
     "research_lab_blog",
     "engineering_blog",
     "conference_feed",
+    "paper_page",
     "dataset_release_feed",
     "manual_watch",
     "other",

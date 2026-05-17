@@ -221,6 +221,7 @@ def _additional_info_for(row: dict[str, Any]) -> str:
         "research_lab_blog": "연구 발표, 논문 해설, 데이터셋/모델 릴리스 정보를 확보할 수 있습니다.",
         "engineering_blog": "운영 경험, 아키텍처, 성능/장애 분석 등 실무 기술 정보를 확보할 수 있습니다.",
         "conference_feed": "컨퍼런스 논문/세션/프로시딩 갱신을 확보할 수 있습니다.",
+        "paper_page": "개별 논문 초록, 저자, 발표 venue, 코드/데이터 링크, 후속 인용 추적 단서를 확보할 수 있습니다.",
         "dataset_release_feed": "데이터셋·벤치마크 릴리스와 변경 이력을 확보할 수 있습니다.",
         "manual_watch": "자동화 전 운영자가 선별해야 하는 후보 링크를 확보할 수 있습니다.",
     }

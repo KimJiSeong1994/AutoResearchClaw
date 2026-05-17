@@ -191,24 +191,17 @@ def fetch_public_evidence(url: str, *, limits: FetchLimits | None = None) -> Fet
                     reason="unsupported_content_type",
                 )
             raw = response.read(max(0, limits.max_bytes) + 1)
-            if len(raw) > limits.max_bytes:
-                return FetchResult(
-                    status="blocked",
-                    url=safe_url,
-                    canonical_url=str(response.geturl() or safe_url),
-                    http_status=getattr(response, "status", None),
-                    content_type=content_type,
-                    bytes_read=limits.max_bytes,
-                    reason="response_too_large",
-                )
+            truncated = len(raw) > limits.max_bytes
+            body_bytes = raw[: limits.max_bytes] if truncated else raw
             return FetchResult(
                 status="ok",
                 url=safe_url,
                 canonical_url=sanitize_url(response.geturl() or safe_url) or safe_url,
                 http_status=getattr(response, "status", None),
                 content_type=content_type,
-                bytes_read=len(raw),
-                body=raw.decode("utf-8", "replace"),
+                bytes_read=len(body_bytes),
+                body=body_bytes.decode("utf-8", "replace"),
+                reason="response_truncated_to_metadata_window" if truncated else "",
             )
     except HTTPError as exc:
         return FetchResult(status="failed", url=safe_url, http_status=exc.code, reason=clean_text(exc.reason, limit=160))
@@ -251,6 +244,22 @@ def _topic_terms(topic: str) -> list[str]:
             continue
         if key not in terms:
             terms.append(key)
+    topic_lower = topic.lower()
+    expansions = {
+        "llm": ["llm", "agent", "agents", "tool", "reasoning"],
+        "agent": ["llm", "agent", "agents", "tool", "reasoning"],
+        "rag": ["rag", "retrieval", "augmented", "generation", "benchmark", "evaluation", "faithfulness", "reranker"],
+        "retrieval": ["rag", "retrieval", "benchmark", "evaluation", "reranker"],
+        "infrastructure": ["infrastructure", "inference", "serving", "latency", "throughput", "gpu"],
+        "inference": ["infrastructure", "inference", "serving", "latency", "throughput", "gpu"],
+        "knowledge graph": ["knowledge", "graph", "kg", "kgqa", "subgraph", "retrieval", "reasoning"],
+        "graph": ["knowledge", "graph", "kg", "kgqa", "subgraph", "retrieval", "reasoning"],
+    }
+    for marker, extra_terms in expansions.items():
+        if marker in topic_lower:
+            for term in extra_terms:
+                if term not in terms:
+                    terms.append(term)
     return terms[:8]
 
 

@@ -44,6 +44,7 @@ REQUEST_STATUS_PENDING = "pending_deep_research"
 REQUEST_STATUS_COMPLETED = "completed_source_discovery"
 REQUEST_STATUS_COMPLETED_EMPTY = "completed_no_candidates"
 REQUEST_STATUS_FAILED = "failed_source_discovery"
+RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -265,6 +266,41 @@ def _dedupe_candidates(candidates: Iterable[DiscoveryCandidate]) -> list[Discove
     return deduped
 
 
+async def _get_with_backoff(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    params: dict[str, str],
+    provider: str,
+    attempts: int | None = None,
+) -> httpx.Response:
+    max_attempts = attempts if attempts is not None else int(os.environ.get("JIPHYEONJEON_TRAVELER_PROVIDER_RETRY_ATTEMPTS", "2"))
+    max_attempts = max(1, min(max_attempts, 4))
+    last_exc: httpx.HTTPError | None = None
+    for attempt in range(max_attempts):
+        try:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            status_code = exc.response.status_code
+            if status_code not in RETRYABLE_HTTP_STATUS or attempt >= max_attempts - 1:
+                raise
+            delay = min(2.0, 0.5 * (attempt + 1))
+            LOG.info("traveler provider retry provider=%s status=%s attempt=%s delay=%s", provider, status_code, attempt + 1, delay)
+            await asyncio.sleep(delay)
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt >= max_attempts - 1:
+                raise
+            delay = min(2.0, 0.5 * (attempt + 1))
+            LOG.info("traveler provider retry provider=%s error=%s attempt=%s delay=%s", provider, exc, attempt + 1, delay)
+            await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
 class ArxivDiscoveryProvider:
     name = "arxiv-api"
 
@@ -277,8 +313,7 @@ class ArxivDiscoveryProvider:
             "sortOrder": "descending",
         }
         try:
-            response = await client.get(ARXIV_API_URL, params=params)
-            response.raise_for_status()
+            response = await _get_with_backoff(client, ARXIV_API_URL, params=params, provider=self.name)
         except httpx.HTTPError as exc:
             return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=str(exc), rejected=["arXiv API request failed"])
 
@@ -324,8 +359,7 @@ class SemanticScholarDiscoveryProvider:
             "fields": "title,venue,year,externalIds,openAccessPdf,url",
         }
         try:
-            response = await client.get(SEMANTIC_SCHOLAR_SEARCH_URL, params=params)
-            response.raise_for_status()
+            response = await _get_with_backoff(client, SEMANTIC_SCHOLAR_SEARCH_URL, params=params, provider=self.name)
         except httpx.HTTPError as exc:
             return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error=str(exc), rejected=["Semantic Scholar API request failed"])
         try:
@@ -395,6 +429,11 @@ class StaticTechnicalSourceProvider:
         ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."),
         ("Microsoft Research Blog", "https://www.microsoft.com/en-us/research/blog/", "research_lab_blog", "Official public research blog with recurring AI and systems posts."),
         ("Meta AI Research", "https://ai.meta.com/research/", "research_lab_blog", "Official public AI research publication surface."),
+        ("T2-RAGBench", "https://aclanthology.org/2026.eacl-long.8/", "paper_page", "ACL Anthology paper page for text-and-table retrieval augmented generation evaluation benchmark."),
+        ("URAG benchmark", "https://arxiv.org/abs/2603.19281", "paper_page", "arXiv abstract page for uncertainty quantification in retrieval augmented generation evaluation."),
+        ("IBM RAG hyper-parameter optimization", "https://research.ibm.com/publications/an-analysis-of-hyper-parameter-optimization-methods-for-retrieval-augmented-generation", "paper_page", "IBM Research publication page for retrieval augmented generation hyper-parameter optimization analysis."),
+        ("DCTR graph RAG", "https://ojs.aaai.org/index.php/AAAI/article/view/40265", "paper_page", "AAAI paper page for knowledge graph and retrieval augmented generation subgraph optimization."),
+        ("Agent-as-a-Graph", "https://arxiv.org/abs/2511.18194", "paper_page", "arXiv abstract page for knowledge graph based LLM agent and tool retrieval."),
     )
 
     async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002

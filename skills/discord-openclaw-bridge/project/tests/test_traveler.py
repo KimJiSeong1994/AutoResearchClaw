@@ -59,6 +59,20 @@ def test_record_source_candidate_sanitizes_and_deduplicates_public_sources(tmp_p
     assert row["url"] == "https://example.com/archive?id=7"
 
 
+def test_record_source_candidate_preserves_paper_page_source_type(tmp_path: Path) -> None:
+    queue = tmp_path / "source-candidates.jsonl"
+
+    record_source_candidate(
+        TravelerSourceInput(url="https://aclanthology.org/2026.eacl-long.8/", title="T2-RAGBench", source_type="paper_page"),
+        queue_path=queue,
+        created_at=datetime(2026, 5, 15, tzinfo=UTC),
+    )
+
+    row = json.loads(queue.read_text(encoding="utf-8").strip())
+    assert row["source_type"] == "paper_page"
+    assert "paper_page" in row["tags"]
+
+
 def test_record_source_candidate_rejects_private_urls(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="공개 http/https"):
         record_source_candidate(

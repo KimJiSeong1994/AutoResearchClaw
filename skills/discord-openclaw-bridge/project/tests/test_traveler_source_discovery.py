@@ -20,6 +20,7 @@ from discord_openclaw_bridge.traveler_source_discovery import (
     StaticTechnicalSourceProvider,
     discover_sources,
     load_pending_requests,
+    _get_with_backoff,
 )
 from discord_openclaw_bridge.traveler_scout import create_scout_requests, load_scout_topics
 
@@ -430,6 +431,58 @@ def test_static_provider_reviews_many_public_sources(tmp_path: Path) -> None:
     assert result.reviewed_count >= 8
     assert result.candidates
     assert all(candidate.url.startswith("https://") for candidate in result.candidates)
+
+
+def test_static_provider_includes_topic_specific_paper_pages(tmp_path: Path) -> None:
+    async def run_provider() -> DiscoveryProviderResult:
+        request = ResearchRequest(
+            request_id="req-rag",
+            topic="RAG evaluation benchmark retrieval augmented generation",
+            scope="public recurring sources",
+            min_sources_to_review=10,
+            candidate_queue_path=tmp_path / "candidates.jsonl",
+        )
+        async with httpx.AsyncClient() as client:
+            return await StaticTechnicalSourceProvider().discover(request, client=client)
+
+    result = asyncio.run(run_provider())
+
+    urls = {candidate.url for candidate in result.candidates}
+    assert "https://aclanthology.org/2026.eacl-long.8/" in urls
+    assert "https://arxiv.org/abs/2603.19281" in urls
+    assert any(candidate.source_type == "paper_page" for candidate in result.candidates)
+
+
+def test_provider_get_retries_once_for_rate_limit(monkeypatch: Any) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+            self.request = httpx.Request("GET", "https://example.com/search")
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                response = httpx.Response(self.status_code, request=self.request)
+                raise httpx.HTTPStatusError("rate limited", request=self.request, response=response)
+
+    class FakeClient:
+        async def get(self, _url: str, *, params: dict[str, str]) -> FakeResponse:
+            nonlocal calls
+            calls += 1
+            return FakeResponse(429 if calls == 1 else 200)
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    response = asyncio.run(_get_with_backoff(FakeClient(), "https://example.com/search", params={"q": "rag"}, provider="fake", attempts=2))  # type: ignore[arg-type]
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert sleeps == [0.5]
 
 
 def test_load_pending_requests_skips_live_test_requests(tmp_path: Path) -> None:

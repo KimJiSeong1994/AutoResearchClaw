@@ -77,6 +77,42 @@ def test_safe_evidence_fetch_blocks_private_urls_before_http_request(monkeypatch
     assert result.body == ""
 
 
+def test_safe_evidence_fetch_uses_truncated_metadata_window(monkeypatch: Any) -> None:
+    class FakeHeaders(dict):
+        def get(self, key: str, default: str = "") -> str:
+            return super().get(key, default)
+
+    class FakeResponse:
+        status = 200
+        headers = FakeHeaders({"Content-Type": "text/html"})
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://example.com/large"
+
+        def read(self, _size: int) -> bytes:
+            return b'<html><head><title>RAG Evaluation Benchmark</title></head>' + (b"x" * 30)
+
+    monkeypatch.setattr(traveler_evidence, "_safe_evidence_url_open", lambda *_args, **_kwargs: FakeResponse())
+
+    fetch = traveler_evidence.fetch_public_evidence(
+        "https://example.com/large",
+        limits=traveler_evidence.FetchLimits(max_bytes=64),
+    )
+    extracted = traveler_evidence.extract_evidence(fetch, topic="RAG evaluation benchmark")
+    decision = traveler_evidence.decide_evidence(fetch, extracted, topic="RAG evaluation benchmark")
+
+    assert fetch.status == "ok"
+    assert fetch.reason == "response_truncated_to_metadata_window"
+    assert extracted.title == "RAG Evaluation Benchmark"
+    assert decision.candidate_state == "accepted"
+
+
 def test_evidence_extracts_summary_without_persisting_full_html(tmp_path: Path) -> None:
     private_marker = "SECRET_TOKEN_SHOULD_NOT_BE_PERSISTED"
     html = f"""
