@@ -32,7 +32,9 @@ class RuntimeManifestTest(unittest.TestCase):
         prompt_index = deploy.index("python3 scripts/check-prompt-governance.py")
         runtime_index = deploy.index("python3 scripts/check-runtime-manifests.py")
         self.assertLess(prompt_index, runtime_index)
-        self.assertLess(runtime_index, deploy.index('${SSH_CMD} "$REMOTE_HOST" "mkdir -p $REMOTE_WORKSPACE/skills"'))
+        mkdir_index = deploy.index('"${SSH_BASE[@]}" "$REMOTE_HOST" "mkdir -p')
+        self.assertLess(runtime_index, mkdir_index)
+        self.assertIn("$REMOTE_WORKSPACE/skills", deploy[mkdir_index:])
 
     def test_required_phase_one_jobs_and_agents_are_declared(self) -> None:
         checker = load_checker()

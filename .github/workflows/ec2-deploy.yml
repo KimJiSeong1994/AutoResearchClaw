@@ -1,0 +1,129 @@
+name: EC2 Deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_workspace:
+        description: Deploy OpenClaw workspace/runtime/scripts
+        type: boolean
+        default: true
+      deploy_discord_bridge:
+        description: Deploy Discord OpenClaw bridge skill
+        type: boolean
+        default: true
+      restart_discord_bridge:
+        description: Reinstall and restart discord-openclaw-bridge.service after bridge deploy
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ec2-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate manifests and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Validate runtime and prompt governance
+        run: |
+          python3 scripts/check-runtime-manifests.py
+          python3 scripts/check-prompt-governance.py
+
+      - name: Run repository unit tests
+        run: |
+          python3 -m unittest tests/test_jiphyeonjeon_trust_agents.py tests/test_runtime_manifests.py tests/test_prompt_governance.py tests/test_github_actions_ec2_deploy.py
+
+      - name: Run Discord bridge tests
+        working-directory: skills/discord-openclaw-bridge/project
+        run: |
+          uv run pytest -q \
+            tests/test_bot.py \
+            tests/test_traveler_scout.py \
+            tests/test_traveler_evidence_deep_research.py \
+            tests/test_traveler_source_discovery.py \
+            tests/test_post_traveler_collection_report.py
+
+  deploy:
+    name: Deploy to EC2
+    needs: validate
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    environment: production
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install SSH and rsync clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-client rsync
+
+      - name: Prepare SSH key and known hosts
+        env:
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          test -n "$EC2_SSH_PRIVATE_KEY"
+          test -n "$EC2_KNOWN_HOSTS"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ec2_deploy_key"
+          chmod 600 "$RUNNER_TEMP/ec2_deploy_key"
+
+      - name: Deploy OpenClaw workspace
+        if: ${{ github.event_name == 'push' || inputs.deploy_workspace == true }}
+        env:
+          REMOTE_HOST: ${{ secrets.EC2_REMOTE_HOST }}
+          KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
+          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+        run: bash scripts/deploy-openclaw-workspace.sh
+
+      - name: Deploy Discord OpenClaw bridge
+        if: ${{ github.event_name == 'push' || inputs.deploy_discord_bridge == true }}
+        env:
+          REMOTE_HOST: ${{ secrets.EC2_REMOTE_HOST }}
+          KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
+          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+        run: bash scripts/deploy-discord-openclaw-bridge.sh
+
+      - name: Reinstall and restart Discord bridge
+        if: ${{ github.event_name == 'push' || inputs.restart_discord_bridge == true }}
+        env:
+          REMOTE_HOST: ${{ secrets.EC2_REMOTE_HOST }}
+          KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
+        run: |
+          test -n "$REMOTE_HOST"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i "$KEY_FILE" "$REMOTE_HOST" '
+            set -euo pipefail
+            cd ~/.openclaw/workspace/skills/discord-openclaw-bridge
+            bash project/scripts/install.sh
+            bash project/scripts/restart.sh
+            systemctl --user is-active discord-openclaw-bridge.service
+            systemctl --user show discord-openclaw-bridge.service \
+              -p ActiveState \
+              -p SubState \
+              -p ExecMainStatus \
+              -p NRestarts \
+              --no-pager
+          '
