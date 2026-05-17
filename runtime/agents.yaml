@@ -266,7 +266,7 @@ agents:
     kind: trust-agent
     source_refs:
       - scripts/jiphyeonjeon_content_identity.py
-      - .omx/plans/prd-jiphyeonjeon-editor-professor-agents.md
+      - docs/jiphyeonjeon-editor-professor-agents.md
     owns_jobs:
       - jiphyeonjeon-editor-canonical-identity-report
     runtime:
@@ -285,7 +285,7 @@ agents:
     kind: trust-agent
     source_refs:
       - scripts/jiphyeonjeon_research_quality_gate.py
-      - .omx/plans/prd-jiphyeonjeon-editor-professor-agents.md
+      - docs/jiphyeonjeon-editor-professor-agents.md
     owns_jobs:
       - jiphyeonjeon-advisor-evidence-quality-gate
     runtime:
