@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from pathlib import Path
 
-from discord_openclaw_bridge.bot import build_bot
+from discord_openclaw_bridge.bot import build_bot, render_jiphyeonjeon_agent_registry
 from discord_openclaw_bridge.config import BridgeConfig
 
 
@@ -34,7 +34,7 @@ def test_main_bridge_does_not_register_miner_command(tmp_path: Path) -> None:
 
     command_names = [command.name for command in bot.tree.get_commands()]
 
-    assert command_names == ["openclaw", "jiphyeonjeon_briefing", "openclaw_status"]
+    assert command_names == ["openclaw", "jiphyeonjeon_briefing", "jiphyeonjeon_agents", "openclaw_status"]
     assert "jiphyeonjeon_mine" not in command_names
 
 
@@ -65,3 +65,13 @@ def test_main_bridge_ignores_messages_in_miner_channel(tmp_path: Path) -> None:
     asyncio.run(bot.on_message(message))
 
     reply.assert_not_awaited()
+
+
+def test_agent_registry_mentions_new_agents_and_pending_promotion() -> None:
+    rendered = render_jiphyeonjeon_agent_registry()
+
+    assert "집현정-편집자" in rendered
+    assert "집현전-지도교수" in rendered
+    assert "pending_future_phase" in rendered
+    assert "queue 수정" in rendered
+    assert "자동 승격 없음" in rendered

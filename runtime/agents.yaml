@@ -261,6 +261,44 @@ agents:
       - does not write newsletter raw archives, card-news sources, or public Discord posts
       - candidate artifacts are not publish-ready and must pass separate editorial review
 
+  - id: jiphyeonjeon-editor
+    name: 집현정-편집자 canonical identity editor
+    kind: trust-agent
+    source_refs:
+      - scripts/jiphyeonjeon_content_identity.py
+      - .omx/plans/prd-jiphyeonjeon-editor-professor-agents.md
+    owns_jobs:
+      - jiphyeonjeon-editor-canonical-identity-report
+    runtime:
+      report_entrypoint: python3 scripts/jiphyeonjeon_content_identity.py
+    responsibilities:
+      - compute stable canonical content identities across Miner, Traveler, newsletter, paper, card-news, and wiki-adjacent artifacts
+      - report duplicate groups before editorial or public publication planning
+      - preserve source artifact provenance while keeping all reports read-only
+    boundaries:
+      - report-only; never rewrites queues, decisions, archives, publication history, or wiki pages
+      - does not approve, reject, promote, or publish content
+      - Human Review / Promotion Coordinator remains pending and is not active in this phase
+
+  - id: jiphyeonjeon-advisor
+    name: 집현전-지도교수 evidence and citation advisor
+    kind: trust-agent
+    source_refs:
+      - scripts/jiphyeonjeon_research_quality_gate.py
+      - .omx/plans/prd-jiphyeonjeon-editor-professor-agents.md
+    owns_jobs:
+      - jiphyeonjeon-advisor-evidence-quality-gate
+    runtime:
+      report_entrypoint: python3 scripts/jiphyeonjeon_research_quality_gate.py
+    responsibilities:
+      - evaluate evidence URL coverage, source diversity, and row-level citation coverage for research/publication artifacts
+      - flag weak evidence, missing citations, and possible overclaim language before public rendering or promotion
+      - emit independent pass, needs_review, or fail verdicts without generating prose
+    boundaries:
+      - verifier-only; never writes source artifacts, generates final prose, or posts to Discord
+      - does not approve editorial promotion or bypass Jiphyeonjeon-Claw review
+      - Human Review / Promotion Coordinator remains pending and is not active in this phase
+
   - id: jiphyeonjeon-claw
     name: 집현전-클로 content review owner
     kind: review-agent

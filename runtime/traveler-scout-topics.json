@@ -1,0 +1,36 @@
+{
+  "topics": [
+    {
+      "id": "llm_agents",
+      "query": "LLM agents research engineering",
+      "scope": "high-trust recurring public research and engineering sources for LLM agents",
+      "min_sources_to_review": 10,
+      "max_candidates": 4,
+      "priority": "high"
+    },
+    {
+      "id": "rag_evaluation",
+      "query": "RAG evaluation benchmark retrieval augmented generation",
+      "scope": "public research and engineering sources for RAG evaluation and benchmarks",
+      "min_sources_to_review": 10,
+      "max_candidates": 4,
+      "priority": "high"
+    },
+    {
+      "id": "ai_infra",
+      "query": "AI infrastructure inference serving systems research",
+      "scope": "public technical sources for AI infrastructure, serving, inference, and systems research",
+      "min_sources_to_review": 10,
+      "max_candidates": 4,
+      "priority": "medium"
+    },
+    {
+      "id": "knowledge_graph",
+      "query": "knowledge graph LLM retrieval agents research",
+      "scope": "public research and engineering sources for knowledge graphs, retrieval, and agents",
+      "min_sources_to_review": 10,
+      "max_candidates": 3,
+      "priority": "medium"
+    }
+  ]
+}

@@ -278,11 +278,13 @@ jobs:
     owner_agent: jiphyeonjeon-traveler
     command_refs:
       - /jiphyeonjeon_travel topic:<topic> min_sources_to_review:<count>
+      - uv run discord-openclaw-traveler-scout
+      - uv run discord-openclaw-traveler-scout --dry-run
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-traveler-discover-sources --dry-run
       - web research over public metadata/source/newsletter/article endpoints
-      - update JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH with deep-research requests
-      - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH with evidence-backed candidate source records
+      - update JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH with requested or autonomous scout deep-research requests
+      - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH and JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH with evidence-backed candidate source records
       - route accepted candidates to 집현전-광부 seed expansion or 집현전-클로 review
     triggers:
       - manual source discovery request
@@ -307,6 +309,7 @@ jobs:
     command_refs:
       - bash skills/discord-openclaw-bridge/install-traveler-collection-report-cron.sh
       - bash skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh
+      - uv run discord-openclaw-traveler-scout
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-post-traveler-collection-report
     schedule:
@@ -317,9 +320,12 @@ jobs:
     inputs:
       - JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH
       - JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
+      - JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH
+      - optional runtime/traveler-scout-topics.json or JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH
       - current Miner seed/intake/review/approved surfaces
     outputs:
       - Discord Traveler forum collection-gap report
+      - traveler-scout-last-status.json
       - traveler-source-discovery-last-status.json
       - traveler-collection-report-last-status.json
     safety:
@@ -397,6 +403,50 @@ jobs:
     safety:
       side_effects: read-only report; never rewrites queue, decisions, or approved exports
       secrets: public URLs and sanitized metadata only
+
+  - id: jiphyeonjeon-editor-canonical-identity-report
+    name: Jiphyeonjeon Editor canonical identity and dedupe report
+    type: local-advisory-report
+    owner_agent: jiphyeonjeon-editor
+    command_refs:
+      - python3 scripts/jiphyeonjeon_content_identity.py <artifact.json> [artifact.jsonl ...]
+    triggers:
+      - before large Claw review sessions
+      - before newsletter/card-news/blog/wiki editorial planning
+      - after daily research or newsletter archive artifact generation
+    inputs:
+      - Miner intake/review JSONL artifacts
+      - newsletter raw archive items.json
+      - paper recommender raw.json or daily-research-raw.json
+      - card-news publication audit JSONL
+      - wiki-adjacent public source metadata artifacts
+    outputs:
+      - canonical identity report with duplicate_groups and no_mutation=true
+    safety:
+      side_effects: local read-only report to stdout; never rewrites queues, archives, decisions, or publication history
+      secrets: sanitized public metadata only; no private email bodies or token values
+
+  - id: jiphyeonjeon-advisor-evidence-quality-gate
+    name: Jiphyeonjeon Advisor evidence and citation quality gate
+    type: local-advisory-verdict
+    owner_agent: jiphyeonjeon-advisor
+    command_refs:
+      - python3 scripts/jiphyeonjeon_research_quality_gate.py <artifact.md|artifact.json|artifact.jsonl>
+      - python3 scripts/jiphyeonjeon_research_quality_gate.py --min-evidence 2 --min-domains 1 <artifact>
+    triggers:
+      - manual advisory check before public card-news/blog/wiki publication
+      - manual advisory check before promoting daily research or trend reports to publishable artifacts
+      - manual advisory check after deep research synthesis artifact generation
+    inputs:
+      - daily research notes and raw evidence artifacts
+      - weekly trend reports
+      - newsletter/card-news draft artifacts
+      - blog post drafts with source links
+    outputs:
+      - evidence quality verdict with quality_status, evidence_coverage_pct, source_diversity, issues, and no_mutation=true
+    safety:
+      side_effects: local read-only verdict to stdout; never approves promotion, rewrites source artifacts, or posts to Discord
+      secrets: public source URLs and sanitized metadata only
 
   - id: jiphyeonjeon-newsletter-candidate-orchestrator
     name: Jiphyeonjeon newsletter candidate artifact generation

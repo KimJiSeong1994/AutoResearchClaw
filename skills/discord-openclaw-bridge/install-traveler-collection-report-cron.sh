@@ -34,7 +34,9 @@ fi
 _RW_QUOTED=$(printf '%q' "$REMOTE_WORKSPACE")
 _SCHED_QUOTED=$(printf '%q' "$TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOCAL_RUNNER="$SCRIPT_DIR/project/scripts/run-traveler-collection-report.sh"
+LOCAL_SCOUT_TOPICS="$REPO_DIR/runtime/traveler-scout-topics.json"
 if [ ! -f "$LOCAL_RUNNER" ]; then
   echo "ERROR: cannot find committed runner at $LOCAL_RUNNER" >&2
   exit 2
@@ -46,6 +48,14 @@ mkdir -p "$WORKSPACE/scripts" "$WORKSPACE/logs"
 REMOTE_PREP
 
 rsync -az -e "ssh -i $KEY_FILE" "$LOCAL_RUNNER" "$REMOTE_HOST:$REMOTE_WORKSPACE/scripts/traveler-collection-report.sh"
+if [ -f "$LOCAL_SCOUT_TOPICS" ]; then
+  ssh -i "$KEY_FILE" "$REMOTE_HOST" "REMOTE_WORKSPACE=$_RW_QUOTED bash -s" <<'REMOTE_TOPICS_PREP'
+set -euo pipefail
+WORKSPACE="${REMOTE_WORKSPACE/#\~/$HOME}"
+mkdir -p "$WORKSPACE/runtime"
+REMOTE_TOPICS_PREP
+  rsync -az -e "ssh -i $KEY_FILE" "$LOCAL_SCOUT_TOPICS" "$REMOTE_HOST:$REMOTE_WORKSPACE/runtime/traveler-scout-topics.json"
+fi
 
 ssh -i "$KEY_FILE" "$REMOTE_HOST" \
   "REMOTE_WORKSPACE=$_RW_QUOTED TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE=$_SCHED_QUOTED bash -s" <<'REMOTE'

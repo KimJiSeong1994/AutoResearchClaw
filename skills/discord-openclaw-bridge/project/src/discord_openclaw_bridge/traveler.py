@@ -60,6 +60,13 @@ class TravelerSourceInput:
     collection_hint: str | None = None
     access_constraints: str | None = None
     next_action: str | None = None
+    evidence_id: str | None = None
+    evidence_status: str | None = None
+    evidence_summary: str | None = None
+    evidence_confidence: float | None = None
+    discovery_mode: str | None = None
+    scout_topic_id: str | None = None
+    scout_priority: str | None = None
 
 
 def _candidate_id(url: str) -> str:
@@ -127,7 +134,16 @@ def build_source_candidate_record(
         "collection_method_hint": clean_text(source.collection_hint or source_type, limit=80),
         "access_constraints": clean_text(source.access_constraints or "public_http", limit=300),
         "recommended_next_action": clean_text(source.next_action or "review_for_miner_seed", limit=300),
-        "tags": ["source-discovery", AGENT_ID, PENDING_STATUS, source_type],
+        "evidence": {
+            "id": clean_text(source.evidence_id, limit=120),
+            "status": clean_text(source.evidence_status or "metadata_only", limit=80),
+            "summary": clean_text(source.evidence_summary, limit=300),
+            "confidence": source.evidence_confidence,
+        },
+        "discovery_mode": clean_text(source.discovery_mode or "requested", limit=80),
+        "scout_topic_id": clean_text(source.scout_topic_id, limit=120),
+        "scout_priority": clean_text(source.scout_priority, limit=40),
+        "tags": [tag for tag in ["source-discovery", AGENT_ID, PENDING_STATUS, source_type, "autonomous-scout" if source.discovery_mode == "autonomous_scout" else "requested-research"] if tag],
         "review": {
             "owner": REVIEWER_ID,
             "required": True,
@@ -195,7 +211,11 @@ class TravelerResearchRequest:
     topic: str
     scope: str | None = None
     min_sources_to_review: int = 20
+    max_candidates: int | None = None
     requester_note: str | None = None
+    discovery_mode: str = "requested"
+    scout_topic_id: str | None = None
+    scout_priority: str | None = None
 
 
 def default_research_queue_path() -> Path:
@@ -224,6 +244,7 @@ def record_research_request(
     if not topic:
         raise ValueError("집현전-여행자 리서치 주제를 입력해야 합니다.")
     min_sources = max(10, min(int(request.min_sources_to_review or 20), 80))
+    max_candidates = max(1, min(int(request.max_candidates), 50)) if request.max_candidates is not None else None
     now = created_at or datetime.now(timezone.utc)
     created = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     discord_meta = discord or DiscordLinkMetadata()
@@ -234,10 +255,14 @@ def record_research_request(
         "topic": topic,
         "scope": clean_text(request.scope or "high-trust recurring technical sources", limit=300),
         "min_sources_to_review": min_sources,
+        "max_candidates": max_candidates,
         "required_method": "deep_research_compare_many_sources_before_candidate_selection",
         "candidate_queue_path": str(candidate_queue_path),
         "created_at": created,
         "requester_note": clean_text(request.requester_note, limit=700),
+        "discovery_mode": clean_text(request.discovery_mode or "requested", limit=80),
+        "scout_topic_id": clean_text(request.scout_topic_id, limit=120),
+        "scout_priority": clean_text(request.scout_priority, limit=40),
         "acceptance_criteria": {
             "review_many_sources": True,
             "minimum_sources_to_review": min_sources,

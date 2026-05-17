@@ -42,6 +42,42 @@ class RuntimeManifestTest(unittest.TestCase):
         agent_ids = {entry.id for entry in checker._entries(agents_text)}
         self.assertTrue(checker.REQUIRED_JOB_IDS.issubset(job_ids))
         self.assertTrue(checker.REQUIRED_AGENT_IDS.issubset(agent_ids))
+        self.assertIn("jiphyeonjeon-editor-canonical-identity-report", job_ids)
+        self.assertIn("jiphyeonjeon-advisor-evidence-quality-gate", job_ids)
+        self.assertIn("jiphyeonjeon-editor", agent_ids)
+        self.assertIn("jiphyeonjeon-advisor", agent_ids)
+        self.assertNotIn("editorial-promotion-coordinator", job_ids)
+        self.assertNotIn("editorial-promotion-coordinator", agent_ids)
+        self.assertIn("집현정-편집자", agents_text)
+        self.assertIn("집현전-지도교수", agents_text)
+
+    def test_editor_and_advisor_are_advisory_only_without_promotion_activation(self) -> None:
+        checker = load_checker()
+        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text()
+        agents_text = (ROOT / "runtime" / "agents.yaml").read_text()
+        jobs = {entry.id: entry for entry in checker._entries(jobs_text)}
+        agents = {entry.id: entry for entry in checker._entries(agents_text)}
+        for job_id in ("jiphyeonjeon-editor-canonical-identity-report", "jiphyeonjeon-advisor-evidence-quality-gate"):
+            job = jobs[job_id]
+            self.assertIn("local-advisory", job.fields["type"])
+            command_refs = " ".join(job.lists["command_refs"])
+            self.assertNotIn("discord", command_refs.lower())
+            self.assertNotIn("systemctl", command_refs.lower())
+            self.assertNotIn("cron", command_refs.lower())
+        self.assertNotIn("editorial-promotion-coordinator", jobs)
+        self.assertNotIn("editorial-promotion-coordinator", agents)
+        for job in jobs.values():
+            self.assertNotEqual("editorial-promotion-coordinator", job.fields.get("owner_agent", ""))
+            self.assertNotIn("editorial-promotion-coordinator", " ".join(job.lists.get("command_refs", [])))
+        for agent in agents.values():
+            self.assertNotIn("editorial-promotion-coordinator", agent.lists.get("owns_jobs", []))
+
+    def test_traveler_runner_uses_runtime_scout_topics(self) -> None:
+        runner = ROOT / "skills" / "discord-openclaw-bridge" / "project" / "scripts" / "run-traveler-collection-report.sh"
+        installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"
+
+        self.assertIn("runtime/traveler-scout-topics.json", runner.read_text(encoding="utf-8"))
+        self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
 
     def test_malformed_yaml_is_rejected_when_yaml_parser_available(self) -> None:
         if shutil.which("ruby") is None:

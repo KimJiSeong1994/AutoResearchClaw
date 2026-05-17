@@ -27,6 +27,7 @@ import httpx
 from .miner import read_jsonl, sanitize_url
 from .seeds import DEFAULT_SEEDS_PATH
 from .traveler import default_source_queue_path
+from .traveler_scout import default_scout_queue_path
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,12 @@ class ReportItem:
     additional_info: str
     action: str
     priority: str
+    evidence_status: str = "metadata_only"
+    evidence_summary: str = ""
+    evidence_confidence: float | None = None
+    discovery_mode: str = "requested"
+    scout_topic_id: str = ""
+    scout_priority: str = ""
 
 
 def _load_dotenv(path: Path) -> None:
@@ -173,6 +180,37 @@ def _candidate_rows(path: Path) -> list[dict[str, Any]]:
     return list(deduped.values())
 
 
+def _evidence_for(row: dict[str, Any]) -> tuple[str, str, float | None]:
+    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    status = str(evidence.get("status") or "metadata_only") if isinstance(evidence, dict) else "metadata_only"
+    summary = str(evidence.get("summary") or "") if isinstance(evidence, dict) else ""
+    confidence_raw = evidence.get("confidence") if isinstance(evidence, dict) else None
+    try:
+        confidence = float(confidence_raw) if confidence_raw is not None else None
+    except (TypeError, ValueError):
+        confidence = None
+    return status, summary, confidence
+
+
+def _merge_candidate_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        url = _row_url(row)
+        if not url:
+            continue
+        existing = deduped.get(url)
+        if existing is None:
+            deduped[url] = row
+            continue
+        _, existing_summary, existing_confidence = _evidence_for(existing)
+        _, summary, confidence = _evidence_for(row)
+        existing_score = existing_confidence if existing_confidence is not None else -1.0
+        score = confidence if confidence is not None else -1.0
+        if score > existing_score or (score == existing_score and len(summary) > len(existing_summary)):
+            deduped[url] = row
+    return list(deduped.values())
+
+
 def _additional_info_for(row: dict[str, Any]) -> str:
     source_type = str(row.get("source_type") or "other")
     mapping = {
@@ -217,12 +255,15 @@ def _differentiate(url: str, context: CollectionContext) -> tuple[str, str]:
 
 def build_report_items(rows: Iterable[dict[str, Any]], context: CollectionContext, *, limit: int = 8) -> list[ReportItem]:
     items: list[ReportItem] = []
-    for row in rows:
+    for row in _merge_candidate_rows(rows):
         url = _row_url(row)
         if not url or _is_test_candidate(row):
             continue
         priority, differentiation = _differentiate(url, context)
         if priority == "보류":
+            continue
+        evidence_status, evidence_summary, evidence_confidence = _evidence_for(row)
+        if evidence_status != "fetched":
             continue
         site = str(row.get("title") or _host(url) or url).strip()
         action = str(row.get("recommended_next_action") or "광부 seed 후보로 샘플 수집 후 클로 리뷰").strip()
@@ -235,10 +276,16 @@ def build_report_items(rows: Iterable[dict[str, Any]], context: CollectionContex
                 additional_info=_additional_info_for(row),
                 action=action,
                 priority=priority,
+                evidence_status=evidence_status,
+                evidence_summary=evidence_summary,
+                evidence_confidence=evidence_confidence,
+                discovery_mode=str(row.get("discovery_mode") or "requested"),
+                scout_topic_id=str(row.get("scout_topic_id") or ""),
+                scout_priority=str(row.get("scout_priority") or ""),
             )
         )
     order = {"높음": 0, "중간": 1, "낮음": 2}
-    items.sort(key=lambda item: (order.get(item.priority, 9), item.site.lower()))
+    items.sort(key=lambda item: (order.get(item.priority, 9), -(item.evidence_confidence or 0.0), item.site.lower()))
     return items[:limit]
 
 
@@ -278,6 +325,9 @@ def format_report_body(items: list[ReportItem], *, generated_at: datetime | None
             f"### {idx}. {item.site}",
             f"- **사이트:** {item.url}",
             f"- **우선순위:** {item.priority}",
+            f"- **탐험 모드:** {item.discovery_mode}" + (f" / scout={item.scout_topic_id}" if item.scout_topic_id else ""),
+            f"- **증거 상태:** {item.evidence_status}" + (f" / confidence={item.evidence_confidence:.2f}" if item.evidence_confidence is not None else ""),
+            f"- **증거 요약:** {item.evidence_summary or '공개 메타데이터 근거 요약 없음'}",
             f"- **탐색/분석 결과:** {item.analysis}",
             f"- **현재 수집 내용과의 차별점:** {item.differentiation}",
             f"- **추가로 얻을 수 있는 정보:** {item.additional_info}",
@@ -348,6 +398,9 @@ def build_miner_collection_request_payload(
             f"   - 우선순위: {item.priority}",
             f"   - 차별점: {item.differentiation}",
             f"   - 기대 정보: {item.additional_info}",
+            f"   - 탐험 모드: {item.discovery_mode}" + (f" / scout={item.scout_topic_id}" if item.scout_topic_id else ""),
+            f"   - 증거 상태: {item.evidence_status}" + (f" / confidence={item.evidence_confidence:.2f}" if item.evidence_confidence is not None else ""),
+            f"   - 증거 요약: {item.evidence_summary or '공개 메타데이터 근거 요약 없음'}",
         ]
         candidate = "\n".join(lines + item_lines)
         if len(candidate) > DISCORD_MESSAGE_LIMIT - 3:
@@ -485,6 +538,7 @@ async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> Non
     channel_id = os.environ.get("DISCORD_TRAVELER_CHANNEL_ID", "").strip()
 
     source_queue = Path(os.environ.get("JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH", str(default_source_queue_path()))).expanduser()
+    scout_queue = Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", str(default_scout_queue_path()))).expanduser()
     limit = int(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_MAX_ITEMS", "8"))
     status_path = Path(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH", str(DEFAULT_REPORT_STATE_PATH))).expanduser()
     miner_channel_id = os.environ.get("DISCORD_MINER_CHANNEL_ID", "").strip()
@@ -492,13 +546,16 @@ async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> Non
     guild_id = os.environ.get("DISCORD_GUILD_ID", "").strip()
 
     context = _load_collection_context()
-    items = build_report_items(_candidate_rows(source_queue), context, limit=limit)
+    rows = _candidate_rows(source_queue)
+    if scout_queue != source_queue:
+        rows.extend(_candidate_rows(scout_queue))
+    items = build_report_items(rows, context, limit=limit)
     title = _format_thread_title(items)
     body = format_report_body(items)
 
     miner_body = ""
     miner_request_payload: dict[str, Any] | None = None
-    if not skip_miner_request and miner_client_id:
+    if items and not skip_miner_request and miner_client_id:
         miner_request_payload = build_miner_collection_request_payload(items, miner_client_id=miner_client_id)
         miner_body = str(miner_request_payload["body"])
 
@@ -524,7 +581,7 @@ async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> Non
         else:
             thread_id = await _post_forum_thread(client, token=token, channel_id=channel_id, title=title, body=body)
             _write_status(status_path, thread_id=thread_id, title=title, item_count=len(items), miner_request_state="pending")
-        if not skip_miner_request:
+        if items and not skip_miner_request:
             if not miner_channel_id or not miner_client_id:
                 logger.warning("skipping Miner request: DISCORD_MINER_CHANNEL_ID or DISCORD_MINER_CLIENT_ID is missing")
             else:

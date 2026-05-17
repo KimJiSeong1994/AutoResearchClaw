@@ -20,12 +20,13 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 from urllib.parse import quote_plus
 
 import httpx
 
 from .miner import clean_text, read_jsonl, sanitize_url
+from .traveler_evidence import append_evidence, collect_evidence_for_url, default_evidence_path
 from .traveler import (
     TravelerRecordResult,
     TravelerSourceInput,
@@ -40,6 +41,9 @@ DEFAULT_DISCOVERY_STATE_PATH = Path.home() / ".openclaw" / "workspace" / "state"
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 REQUEST_STATUS_PENDING = "pending_deep_research"
+REQUEST_STATUS_COMPLETED = "completed_source_discovery"
+REQUEST_STATUS_COMPLETED_EMPTY = "completed_no_candidates"
+REQUEST_STATUS_FAILED = "failed_source_discovery"
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,10 @@ class ResearchRequest:
     scope: str
     min_sources_to_review: int
     candidate_queue_path: Path
+    max_candidates: int | None = None
+    discovery_mode: str = "requested"
+    scout_topic_id: str = ""
+    scout_priority: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,6 +94,10 @@ class DiscoveryRunSummary:
     error_count: int
     candidate_queue_path: str
     status_path: str | None = None
+    evidence_path: str | None = None
+    evidence_count: int = 0
+    evidence_rejected_count: int = 0
+    deep_research_enabled: bool = False
 
 
 class DiscoveryProvider(Protocol):
@@ -166,6 +178,12 @@ def _request_from_row(row: dict[str, Any], *, default_candidate_queue: Path) -> 
     except (TypeError, ValueError):
         min_sources = 20
     min_sources = max(10, min(min_sources, 80))
+    try:
+        max_candidates = int(row["max_candidates"]) if row.get("max_candidates") is not None else None
+    except (TypeError, ValueError):
+        max_candidates = None
+    if max_candidates is not None:
+        max_candidates = max(1, min(max_candidates, 50))
     candidate_path = _safe_candidate_queue_path(row.get("candidate_queue_path"), default_candidate_queue=default_candidate_queue)
     return ResearchRequest(
         request_id=request_id,
@@ -173,6 +191,10 @@ def _request_from_row(row: dict[str, Any], *, default_candidate_queue: Path) -> 
         scope=scope,
         min_sources_to_review=min_sources,
         candidate_queue_path=candidate_path,
+        max_candidates=max_candidates,
+        discovery_mode=clean_text(row.get("discovery_mode") or "requested", limit=80),
+        scout_topic_id=clean_text(row.get("scout_topic_id"), limit=120),
+        scout_priority=clean_text(row.get("scout_priority"), limit=40),
     )
 
 
@@ -182,6 +204,33 @@ def load_pending_requests(path: Path, *, default_candidate_queue: Path) -> list[
         for row in _read_jsonl_rows(path)
         if (request := _request_from_row(row, default_candidate_queue=default_candidate_queue)) is not None
     ]
+
+
+def _write_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def _mark_processed_requests(path: Path, updates: dict[str, dict[str, Any]]) -> None:
+    if not updates or not path.exists():
+        return
+    rows = _read_jsonl_rows(path)
+    changed = False
+    completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    for row in rows:
+        request_id = clean_text(row.get("request_id"), limit=120)
+        update = updates.get(request_id)
+        if not update or row.get("status") != REQUEST_STATUS_PENDING:
+            continue
+        row.update(update)
+        row["completed_at"] = completed_at
+        changed = True
+    if changed:
+        _write_jsonl_rows(path, rows)
 
 
 def _keywords(topic: str, *, limit: int = 8) -> list[str]:
@@ -398,6 +447,10 @@ def _status_payload(summary: DiscoveryRunSummary, *, provider_results: list[Disc
         "rejected_count": summary.rejected_count,
         "error_count": summary.error_count,
         "candidate_queue_path": summary.candidate_queue_path,
+        "evidence_path": summary.evidence_path,
+        "evidence_count": summary.evidence_count,
+        "evidence_rejected_count": summary.evidence_rejected_count,
+        "deep_research_enabled": summary.deep_research_enabled,
         "provider_results": [
             {
                 "provider": result.provider,
@@ -428,6 +481,9 @@ async def discover_sources(
     status_path: Path | None = None,
     dry_run: bool = False,
     timeout_sec: float = 20.0,
+    deep_research: bool | None = None,
+    evidence_path: Path | None = None,
+    evidence_fetcher: Callable[[str], Any] | None = None,
 ) -> DiscoveryRunSummary:
     research_queue = (research_queue_path or default_research_queue_path()).expanduser()
     candidate_queue = (default_candidate_queue_path or default_source_queue_path()).expanduser()
@@ -438,19 +494,28 @@ async def discover_sources(
     selected_providers = providers or default_providers()
     max_to_record = max_candidates if max_candidates is not None else int(os.environ.get("JIPHYEONJEON_TRAVELER_DISCOVERY_MAX_CANDIDATES", "12"))
     max_to_record = max(0, max_to_record)
+    deep_enabled = (os.environ.get("JIPHYEONJEON_TRAVELER_DEEP_RESEARCH", "1") != "0") if deep_research is None else deep_research
+    evidence_queue = (evidence_path or default_evidence_path()).expanduser()
 
     accepted = 0
     duplicate = 0
     rejected = 0
     errors = 0
     reviewed = 0
+    evidence_count = 0
+    evidence_rejected_count = 0
     provider_results: list[DiscoveryProviderResult] = []
     processed_ids: set[str] = set()
+    request_updates: dict[str, dict[str, Any]] = {}
 
     async with httpx.AsyncClient(timeout=timeout_sec, headers={"User-Agent": "AutoResearchClaw-Traveler/0.1"}) as client:
         for request in requests:
             processed_ids.add(request.request_id)
             request_results: list[DiscoveryProviderResult] = []
+            request_accepted_before = accepted
+            request_duplicate_before = duplicate
+            request_errors_before = errors
+            request_rejected_before = rejected
             for provider in selected_providers:
                 try:
                     result = await provider.discover(request, client=client)
@@ -478,11 +543,53 @@ async def discover_sources(
                     request_reviewed,
                     request.min_sources_to_review,
                 )
+                request_updates[request.request_id] = {
+                    "status": REQUEST_STATUS_FAILED,
+                    "processed_summary": {
+                        "reviewed_count": request_reviewed,
+                        "accepted_count": 0,
+                        "duplicate_count": 0,
+                        "rejected_count": rejected - request_rejected_before,
+                        "error_count": errors - request_errors_before,
+                        "reason": "below_min_sources_to_review",
+                    },
+                }
                 continue
 
+            request_limit = request.max_candidates if request.max_candidates is not None else max_to_record
+            request_recorded = 0
             for candidate in _dedupe_candidates(candidate for result in request_results for candidate in result.candidates):
                 if accepted >= max_to_record:
                     break
+                if request_recorded >= request_limit:
+                    break
+                evidence_record: dict[str, Any] | None = None
+                evidence_summary = ""
+                evidence_status = "metadata_only"
+                evidence_confidence: float | None = None
+                if deep_enabled:
+                    evidence_record = collect_evidence_for_url(
+                        candidate.url,
+                        request_id=request.request_id,
+                        provider=candidate.provider,
+                        query=request.topic,
+                        topic=request.topic,
+                        fetcher=evidence_fetcher,
+                    )
+                    evidence_count += 1
+                    if not dry_run:
+                        append_evidence(evidence_queue, evidence_record)
+                    decision = evidence_record.get("decision", {}) if isinstance(evidence_record, dict) else {}
+                    if decision.get("candidate_state") != "accepted":
+                        evidence_rejected_count += 1
+                        rejected += 1
+                        LOG.info("traveler deep research rejected url=%s reason=%s", candidate.url, decision.get("reason"))
+                        continue
+                    extract = evidence_record.get("extract", {})
+                    fetch = evidence_record.get("fetch", {})
+                    evidence_status = "fetched" if fetch.get("status") == "ok" else str(fetch.get("status") or "metadata_only")
+                    evidence_summary = str(extract.get("summary_excerpt") or extract.get("title") or decision.get("reason") or "")
+                    evidence_confidence = float(decision.get("confidence_score") or 0.0)
                 source = TravelerSourceInput(
                     url=candidate.url,
                     title=candidate.title,
@@ -493,6 +600,13 @@ async def discover_sources(
                     collection_hint=candidate.collection_hint,
                     access_constraints=candidate.access_constraints,
                     next_action=candidate.next_action,
+                    evidence_id=str((evidence_record or {}).get("evidence_id") or ""),
+                    evidence_status=evidence_status,
+                    evidence_summary=evidence_summary,
+                    evidence_confidence=evidence_confidence,
+                    discovery_mode=request.discovery_mode,
+                    scout_topic_id=request.scout_topic_id,
+                    scout_priority=request.scout_priority,
                 )
                 try:
                     build_source_candidate_record(source, queue_path=request.candidate_queue_path)
@@ -509,8 +623,37 @@ async def discover_sources(
                     duplicate += 1
                 else:
                     accepted += 1
+                request_recorded += 1
+            request_accepted = accepted - request_accepted_before
+            request_duplicate = duplicate - request_duplicate_before
+            request_errors = errors - request_errors_before
+            request_rejected = rejected - request_rejected_before
+            if request_accepted or request_duplicate:
+                status = REQUEST_STATUS_COMPLETED
+                reason = "candidates_recorded"
+            elif request_errors:
+                status = REQUEST_STATUS_FAILED
+                reason = "provider_or_evidence_errors"
+            else:
+                status = REQUEST_STATUS_COMPLETED_EMPTY
+                reason = "no_candidates_recorded"
+            request_updates[request.request_id] = {
+                "status": status,
+                "processed_summary": {
+                    "reviewed_count": request_reviewed,
+                    "accepted_count": request_accepted,
+                    "duplicate_count": request_duplicate,
+                    "rejected_count": request_rejected,
+                    "error_count": request_errors,
+                    "max_candidates": request.max_candidates,
+                    "reason": reason,
+                },
+            }
             if accepted >= max_to_record:
                 break
+
+    if not dry_run:
+        _mark_processed_requests(research_queue, request_updates)
 
     summary = DiscoveryRunSummary(
         requests_seen=len(requests),
@@ -523,6 +666,10 @@ async def discover_sources(
         error_count=errors,
         candidate_queue_path=str(candidate_queue),
         status_path=str(status_path) if status_path else None,
+        evidence_path=str(evidence_queue) if deep_enabled else None,
+        evidence_count=evidence_count,
+        evidence_rejected_count=evidence_rejected_count,
+        deep_research_enabled=deep_enabled,
     )
     if status_path is not None:
         _write_status(status_path.expanduser(), _status_payload(summary, provider_results=provider_results))
@@ -535,10 +682,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Discover public Traveler source candidates and write them to the pending review queue.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Run providers and print the summary without appending candidates.")
+    parser.add_argument("--deep-research", action="store_true", help="Force safe bounded HTML/RSS/Atom evidence collection before candidate promotion.")
+    parser.add_argument("--no-deep-research", action="store_true", help="Disable evidence collection for legacy metadata-only compatibility.")
+    parser.add_argument("--deep-research-dry-run", action="store_true", help="Enable deep research evidence collection while keeping candidate/evidence writes disabled.")
     parser.add_argument("--research-queue", type=Path, default=None, help="Override Traveler research-request JSONL path.")
     parser.add_argument("--source-queue", type=Path, default=None, help="Override default Traveler source-candidate JSONL path.")
     parser.add_argument("--max-candidates", type=int, default=None, help="Maximum new candidates to append in this run.")
     parser.add_argument("--status-path", type=Path, default=None, help="Status JSON path. Defaults to env or workspace state path.")
+    parser.add_argument("--evidence-path", type=Path, default=None, help="Evidence JSONL path for deep research runs.")
     parser.add_argument("--timeout-sec", type=float, default=20.0, help="HTTP timeout per provider request.")
     return parser
 
@@ -555,8 +706,10 @@ def main(argv: list[str] | None = None) -> None:
                 default_candidate_queue_path=args.source_queue,
                 max_candidates=args.max_candidates,
                 status_path=status_path,
-                dry_run=args.dry_run,
+                dry_run=args.dry_run or args.deep_research_dry_run,
                 timeout_sec=args.timeout_sec,
+                deep_research=False if args.no_deep_research else (True if args.deep_research or args.deep_research_dry_run else None),
+                evidence_path=args.evidence_path,
             )
         )
     except Exception as exc:

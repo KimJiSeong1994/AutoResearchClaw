@@ -26,6 +26,7 @@ def test_traveler_collection_report_surfaces_gap_fields() -> None:
             "topic_fit": "AI systems and evaluation reports.",
             "access_constraints": "public_http",
             "recommended_next_action": "review_for_miner_seed",
+            "evidence": {"status": "fetched", "summary": "Public page metadata confirms AI systems updates.", "confidence": 0.8},
             "status": "pending_source_review",
         }
     ]
@@ -64,6 +65,32 @@ def test_traveler_collection_report_skips_exact_duplicates() -> None:
     assert "신규 추가 수집 후보 없음" in body
 
 
+def test_traveler_collection_report_dedupes_cross_queue_rows_by_url() -> None:
+    rows = [
+        {
+            "title": "Requested Source",
+            "url": "https://research.example.com/blog?utm_source=request",
+            "status": "pending_source_review",
+            "evidence": {"status": "fetched", "summary": "Short", "confidence": 0.6},
+        },
+        {
+            "title": "Scout Source",
+            "url": "https://research.example.com/blog",
+            "status": "pending_source_review",
+            "discovery_mode": "autonomous_scout",
+            "scout_topic_id": "llm_agents",
+            "evidence": {"status": "fetched", "summary": "Richer scout evidence summary", "confidence": 0.8},
+        },
+    ]
+    context = CollectionContext(seed_urls=set(), seed_hosts=set(), collected_urls=set(), collected_hosts=set())
+
+    items = build_report_items(rows, context)
+
+    assert len(items) == 1
+    assert items[0].site == "Scout Source"
+    assert items[0].scout_topic_id == "llm_agents"
+
+
 def test_traveler_collection_report_skips_live_test_candidates() -> None:
     rows = [
         {
@@ -77,6 +104,7 @@ def test_traveler_collection_report_skips_live_test_candidates() -> None:
             "url": "https://real.example.com/feed",
             "status": "pending_source_review",
             "topic_fit": "AI research engineering sources",
+            "evidence": {"status": "fetched", "summary": "Public feed metadata", "confidence": 0.7},
         },
     ]
     context = CollectionContext(seed_urls=set(), seed_hosts=set(), collected_urls=set(), collected_hosts=set())
@@ -164,3 +192,31 @@ def test_should_reuse_miner_request_requires_same_payload() -> None:
     changed = dict(existing)
     changed["miner_request_url_hashes"] = ["different"]
     assert not should_reuse_miner_request(changed, title="title", thread_id="thread", payload=payload)
+
+
+def test_traveler_collection_report_surfaces_scout_mode() -> None:
+    rows = [
+        {
+            "title": "Scout Research Source",
+            "url": "https://scout.example.com/research",
+            "source_type": "research_lab_blog",
+            "reliability_rationale": "Official public page.",
+            "update_cadence_evidence": "Recent updates observed.",
+            "evidence": {"status": "fetched", "summary": "LLM agents research updates", "confidence": 0.75},
+            "topic_fit": "LLM agents research.",
+            "access_constraints": "public_http_evidence_verified",
+            "recommended_next_action": "review_for_miner_seed",
+            "status": "pending_source_review",
+            "discovery_mode": "autonomous_scout",
+            "scout_topic_id": "llm_agents",
+            "scout_priority": "high",
+        }
+    ]
+    context = CollectionContext(seed_urls=set(), seed_hosts=set(), collected_urls=set(), collected_hosts=set())
+
+    items = build_report_items(rows, context)
+    body = format_report_body(items)
+
+    assert items[0].discovery_mode == "autonomous_scout"
+    assert items[0].scout_topic_id == "llm_agents"
+    assert "**탐험 모드:** autonomous_scout / scout=llm_agents" in body

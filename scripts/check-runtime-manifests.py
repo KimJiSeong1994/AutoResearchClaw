@@ -42,6 +42,8 @@ REQUIRED_JOB_IDS = {
     "jiphyeonjeon-guard-ops-digest",
     "jiphyeonjeon-review-queue-optimizer-report",
     "jiphyeonjeon-newsletter-candidate-orchestrator",
+    "jiphyeonjeon-editor-canonical-identity-report",
+    "jiphyeonjeon-advisor-evidence-quality-gate",
     "jiphyeonjeon-traveler-source-discovery",
     "discord-card-news-publish",
 }
@@ -56,6 +58,8 @@ REQUIRED_AGENT_IDS = {
     "jiphyeonjeon-guard",
     "review-queue-optimizer",
     "newsletter-candidate-orchestrator",
+    "jiphyeonjeon-editor",
+    "jiphyeonjeon-advisor",
     "jiphyeonjeon-traveler",
     "jiphyeonjeon-claw",
     "card-news-publisher",

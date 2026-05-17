@@ -13,6 +13,7 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 - `/openclaw prompt:<text>` — ask OpenClaw from the allowlisted channel
 - `/openclaw_status` — lightweight OpenClaw health check
 - `/jiphyeonjeon_briefing` — post the latest Jiphyeonjeon-Claw AI briefing from `DISCORD_BRIEFING_SOURCE`
+- `/jiphyeonjeon_agents` — show the registered Jiphyeonjeon agent roster, workflow, and advisory-only trust gates
 - standalone `discord-jiphyeonjeon-miner.service` for running 집현전-광부 as an individual Discord bot with `DISCORD_MINER_BOT_TOKEN`
 - post-only 집현전-경비원 agent (`discord-openclaw-post-miner-seeds-report`) that publishes the daily miner-seeds run summary to the 운영리포팅 forum under its own bot identity when `DISCORD_GUARD_BOT_TOKEN` is provided
 - one-shot newsletter/card-news publishers from the installed project scripts
@@ -21,6 +22,54 @@ The bridge runs on the EC2 OpenClaw host and calls the OpenClaw gateway over loo
 The main OpenClaw bridge intentionally does not collect links or register
 `/jiphyeonjeon_mine`; the dedicated Miner bot is the only application that
 responds in `DISCORD_MINER_CHANNEL_ID`.
+
+## Discord agent registry and cowork process
+
+The main OpenClaw bridge registers `/jiphyeonjeon_agents` as a safe, ephemeral
+read-only roster. The command documents how the Jiphyeonjeon agents cooperate;
+it does not run trust scripts, approve links, promote candidates, or publish to
+Discord. It is synchronized with the guild when the main bridge starts and
+`setup_hook()` calls `CommandTree.sync()`.
+
+Registered workflow roles:
+
+1. **집현전-여행자** — source-discovery research agent. It proposes credible,
+   recurring source candidates and hands them toward Miner/Claw review without
+   deciding inclusion.
+2. **집현전-광부** — collection-only intake agent. It sanitizes Discord/seed URLs
+   and appends pending review records.
+3. **집현전-클로** — content review owner. It records append-only approve, reject,
+   or hold decisions and produces approved-only exports.
+4. **집현정-편집자** — advisory-only canonical identity editor. It compares
+   JSON/JSONL artifacts across newsletter, manual links, research, card-news,
+   and wiki-adjacent surfaces to report duplicate content identities.
+5. **집현전-지도교수** — advisory-only evidence/citation quality validator. It
+   checks source URL coverage, source diversity, row-level citation coverage,
+   and overclaim risk before publication planning.
+6. **집현전-경비원** — operations guard. It reports stale runs, backlog, and
+   Traveler→Miner handoff confirmation without mutating review state.
+7. **Card-news publisher** — publication renderer. It consumes sanitized,
+   approved artifacts and stops before Discord side effects when its quality
+   gate fails.
+
+Cowork boundary:
+
+```text
+Traveler source discovery
+→ Miner collection-only intake
+→ Claw append-only content review
+→ Newsletter candidate artifact / daily research artifacts
+→ 집현정-편집자 duplicate/canonical identity advisory report
+→ 집현전-지도교수 evidence/citation advisory verdict
+→ human editorial review (promotion coordinator pending_future_phase)
+→ card-news/newsletter/blog/wiki publication surfaces
+→ Guard observability and audit review
+```
+
+The pending human review/promotion coordinator is intentionally not registered
+as an active Discord command, runtime agent, or job. Until a later approval
+phase defines that state machine, Editor/Advisor verdicts remain advisory and
+must not be interpreted as automatic promotion approval.
 
 ## 집현전-광부 link-intake path
 

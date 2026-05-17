@@ -1,0 +1,291 @@
+"""Autonomous scout request generator for 집현전-여행자.
+
+Scout mode creates evidence-backed discovery requests when no operator request is
+pending. It does not approve sources or mutate Miner seeds.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .miner import clean_text
+from .traveler import TravelerResearchRequest, default_research_queue_path, default_source_queue_path, record_research_request
+
+DEFAULT_SCOUT_QUEUE_PATH = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
+DEFAULT_SCOUT_STATUS_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-scout-last-status.json"
+DEFAULT_TOPICS = (
+    {
+        "id": "llm_agents",
+        "query": "LLM agents research engineering",
+        "scope": "high-trust recurring public research and engineering sources for LLM agents",
+        "min_sources_to_review": 10,
+        "max_candidates": 4,
+        "priority": "high",
+    },
+    {
+        "id": "rag_evaluation",
+        "query": "RAG evaluation benchmark retrieval augmented generation",
+        "scope": "public research and engineering sources for RAG evaluation and benchmarks",
+        "min_sources_to_review": 10,
+        "max_candidates": 4,
+        "priority": "high",
+    },
+    {
+        "id": "ai_infra",
+        "query": "AI infrastructure inference serving systems research",
+        "scope": "public technical sources for AI infrastructure, serving, inference, and systems research",
+        "min_sources_to_review": 10,
+        "max_candidates": 4,
+        "priority": "medium",
+    },
+    {
+        "id": "knowledge_graph",
+        "query": "knowledge graph LLM retrieval agents research",
+        "scope": "public research and engineering sources for knowledge graphs, retrieval, and agents",
+        "min_sources_to_review": 10,
+        "max_candidates": 3,
+        "priority": "medium",
+    },
+)
+
+
+@dataclass(frozen=True)
+class ScoutTopic:
+    topic_id: str
+    query: str
+    scope: str
+    min_sources_to_review: int = 10
+    max_candidates: int = 4
+    priority: str = "medium"
+
+
+def default_scout_queue_path() -> Path:
+    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", str(DEFAULT_SCOUT_QUEUE_PATH))).expanduser()
+
+
+def default_scout_status_path() -> Path:
+    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH", str(DEFAULT_SCOUT_STATUS_PATH))).expanduser()
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def _default_topics_path() -> Path | None:
+    raw = os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH", "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def _topic_from_row(row: dict[str, Any]) -> ScoutTopic:
+    topic_id = clean_text(row.get("id"), limit=120)
+    query = clean_text(row.get("query"), limit=200)
+    if not topic_id or not query:
+        raise ValueError("scout topic requires non-empty id and query")
+    scope = clean_text(row.get("scope") or "high-trust recurring public technical sources", limit=300)
+    try:
+        min_sources = int(row.get("min_sources_to_review") or 10)
+    except (TypeError, ValueError):
+        min_sources = 10
+    try:
+        max_candidates = int(row.get("max_candidates") or 4)
+    except (TypeError, ValueError):
+        max_candidates = 4
+    priority = clean_text(row.get("priority") or "medium", limit=40).lower()
+    if priority not in {"high", "medium", "low"}:
+        priority = "medium"
+    return ScoutTopic(
+        topic_id=topic_id,
+        query=query,
+        scope=scope,
+        min_sources_to_review=max(10, min(min_sources, 80)),
+        max_candidates=max(1, min(max_candidates, 20)),
+        priority=priority,
+    )
+
+
+def load_scout_topics(path: Path | None = None) -> list[ScoutTopic]:
+    topics_path = path or _default_topics_path()
+    if topics_path is None:
+        rows = list(DEFAULT_TOPICS)
+    else:
+        payload = json.loads(topics_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            rows = payload.get("topics", [])
+        else:
+            rows = payload
+    if not isinstance(rows, list):
+        raise ValueError("scout topics config must contain a list")
+    topics = [_topic_from_row(row) for row in rows if isinstance(row, dict)]
+    if not topics:
+        raise ValueError("at least one scout topic is required")
+    seen: set[str] = set()
+    deduped: list[ScoutTopic] = []
+    for topic in topics:
+        if topic.topic_id in seen:
+            continue
+        seen.add(topic.topic_id)
+        deduped.append(topic)
+    return deduped
+
+
+def _write_status(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _pending_scout_topic_ids(path: Path) -> set[str]:
+    topic_ids: set[str] = set()
+    for row in _read_jsonl_rows(path):
+        if row.get("status") != "pending_deep_research":
+            continue
+        if row.get("discovery_mode") != "autonomous_scout":
+            continue
+        topic_id = clean_text(row.get("scout_topic_id"), limit=120)
+        if topic_id:
+            topic_ids.add(topic_id)
+    return topic_ids
+
+
+def create_scout_requests(
+    *,
+    topics: list[ScoutTopic],
+    research_queue_path: Path | None = None,
+    scout_queue_path: Path | None = None,
+    status_path: Path | None = None,
+    topic_filter: str | None = None,
+    max_topics: int | None = None,
+    dry_run: bool = False,
+    skip_existing_pending: bool = True,
+) -> dict[str, Any]:
+    research_queue = (research_queue_path or default_research_queue_path()).expanduser()
+    scout_queue = (scout_queue_path or default_scout_queue_path()).expanduser()
+    selected = [topic for topic in topics if not topic_filter or topic.topic_id == topic_filter or topic.query == topic_filter]
+    if max_topics is not None:
+        selected = selected[: max(0, max_topics)]
+    created: list[dict[str, Any]] = []
+    skipped_existing: list[str] = []
+    pending_topic_ids = _pending_scout_topic_ids(research_queue) if skip_existing_pending else set()
+    planned_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    for topic in selected:
+        if topic.topic_id in pending_topic_ids:
+            skipped_existing.append(topic.topic_id)
+            continue
+        request = TravelerResearchRequest(
+            topic=topic.query,
+            scope=topic.scope,
+            min_sources_to_review=topic.min_sources_to_review,
+            max_candidates=topic.max_candidates,
+            requester_note=f"autonomous scout topic={topic.topic_id} priority={topic.priority}",
+            discovery_mode="autonomous_scout",
+            scout_topic_id=topic.topic_id,
+            scout_priority=topic.priority,
+        )
+        if dry_run:
+            record = {
+                "status": "planned",
+                "topic": request.topic,
+                "scope": request.scope,
+                "min_sources_to_review": request.min_sources_to_review,
+                "max_candidates": request.max_candidates,
+                "candidate_queue_path": str(scout_queue),
+                "discovery_mode": request.discovery_mode,
+                "scout_topic_id": request.scout_topic_id,
+                "scout_priority": request.scout_priority,
+            }
+        else:
+            record = record_research_request(request, queue_path=research_queue, candidate_queue_path=scout_queue)
+        created.append(record)
+    status = {
+        "run_at": planned_at,
+        "dry_run": dry_run,
+        "topics_seen": len(topics),
+        "topics_selected": len(selected),
+        "requests_created": 0 if dry_run else len(created),
+        "requests_planned": len(created),
+        "requests_skipped_existing": len(skipped_existing),
+        "research_queue_path": str(research_queue),
+        "scout_queue_path": str(scout_queue),
+        "topics": [topic.topic_id for topic in selected],
+        "skipped_existing_topics": skipped_existing,
+        "request_ids": [str(record.get("request_id")) for record in created if record.get("request_id")],
+    }
+    if status_path is not None and not dry_run:
+        _write_status(status_path.expanduser(), status)
+    return {"status": status, "requests": created}
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="discord-openclaw-traveler-scout",
+        description="Create autonomous Traveler scout research requests from configured topics.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Print planned scout requests without appending queues.")
+    parser.add_argument("--topics-path", type=Path, default=None, help="JSON file with {topics:[...]} or a list of topics.")
+    parser.add_argument("--topic", default=None, help="Only run a matching scout topic id or query.")
+    parser.add_argument("--max-topics", type=int, default=None, help="Maximum number of scout topics to enqueue.")
+    parser.add_argument("--research-queue", type=Path, default=None, help="Override research request queue path.")
+    parser.add_argument("--scout-queue", type=Path, default=None, help="Override autonomous scout candidate queue path.")
+    parser.add_argument("--status-path", type=Path, default=None, help="Override scout status path.")
+    parser.add_argument(
+        "--allow-duplicate-pending",
+        action="store_true",
+        help="Append a scout request even when the same scout topic is already pending.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    _load_dotenv(Path.cwd() / ".env")
+    args = _build_parser().parse_args(argv)
+    try:
+        topics = load_scout_topics(args.topics_path)
+        result = create_scout_requests(
+            topics=topics,
+            research_queue_path=args.research_queue,
+            scout_queue_path=args.scout_queue,
+            status_path=args.status_path or default_scout_status_path(),
+            topic_filter=args.topic,
+            max_topics=args.max_topics,
+            dry_run=args.dry_run,
+            skip_existing_pending=not args.allow_duplicate_pending,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"traveler scout error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
