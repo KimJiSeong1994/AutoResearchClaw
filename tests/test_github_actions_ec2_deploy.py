@@ -41,6 +41,7 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
 
         self.assertIn("bash scripts/deploy-openclaw-workspace.sh", text)
         self.assertIn("bash scripts/deploy-discord-openclaw-bridge.sh", text)
+        self.assertIn("uv run --with pytest pytest -q", text)
         self.assertIn("bash project/scripts/install.sh", text)
         self.assertIn("bash project/scripts/restart.sh", text)
         self.assertIn("systemctl --user is-active discord-openclaw-bridge.service", text)

@@ -55,7 +55,7 @@ jobs:
       - name: Run Discord bridge tests
         working-directory: skills/discord-openclaw-bridge/project
         run: |
-          uv run pytest -q \
+          uv run --with pytest pytest -q \
             tests/test_bot.py \
             tests/test_traveler_scout.py \
             tests/test_traveler_evidence_deep_research.py \

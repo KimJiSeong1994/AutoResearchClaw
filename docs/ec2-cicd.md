@@ -70,5 +70,5 @@ python3 scripts/check-runtime-manifests.py
 python3 scripts/check-prompt-governance.py
 python3 -m unittest tests/test_jiphyeonjeon_trust_agents.py tests/test_runtime_manifests.py tests/test_prompt_governance.py tests/test_github_actions_ec2_deploy.py
 cd skills/discord-openclaw-bridge/project
-uv run pytest -q tests/test_bot.py tests/test_traveler_scout.py tests/test_traveler_evidence_deep_research.py tests/test_traveler_source_discovery.py tests/test_post_traveler_collection_report.py
+uv run --with pytest pytest -q tests/test_bot.py tests/test_traveler_scout.py tests/test_traveler_evidence_deep_research.py tests/test_traveler_source_discovery.py tests/test_post_traveler_collection_report.py
 ```
