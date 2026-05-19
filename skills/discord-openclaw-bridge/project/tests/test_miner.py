@@ -472,3 +472,336 @@ def test_safe_redirect_handler_blocks_userinfo_target() -> None:
         assert exc.code == 302
     else:
         raise AssertionError("expected redirect with userinfo to raise HTTPError")
+
+
+def test_record_miner_link_accepts_no_provider_youtube_with_technical_note(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+    intake_path = tmp_path / "intake.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    result = record_miner_link(
+        url="https://youtu.be/abc123XYZ09?t=90",
+        title="LLM agent benchmark lecture",
+        note="retrieval benchmark and graph rag research",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert result.accepted
+    row = _read_jsonl(review_path)[0]
+    assert row["url"] == "https://www.youtube.com/watch?v=abc123XYZ09"
+    assert row["media"]["type"] == "video"
+    assert row["media"]["platform"] == "youtube"
+    assert row["media"]["video_id"] == "abc123XYZ09"
+    assert row["media"]["start_seconds"] == 90
+    assert row["media"]["analysis_status"] == "metadata_unavailable"
+    assert row["content_analysis"]["analysis_status"] == "ready"
+    assert row["content_analysis"]["evidence_tier"] == "operator_note"
+    assert row["content_analysis"]["operator_note_used"] is True
+    assert row["content_analysis"]["source_separation"] == "operator_note"
+    assert row["content_analysis"]["provider"] == "operator"
+
+
+def test_record_miner_link_rejects_no_provider_youtube_without_technical_signal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+
+    result = record_miner_link(
+        url="https://www.youtube.com/watch?v=abc123XYZ09",
+        title="daily vlog",
+        note="music and travel",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "queue.jsonl",
+    )
+
+    assert result.rejected
+
+
+def test_record_miner_link_rejects_channel_url_not_video(tmp_path: Path) -> None:
+    result = record_miner_link(
+        url="https://www.youtube.com/@dsba2979",
+        title="DSBA channel",
+        note="LLM benchmark machine learning research channel",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "review.jsonl",
+    )
+
+    assert result.rejected
+    assert result.reason.startswith("unsupported_youtube_url")
+
+
+def test_youtube_dedupe_uses_video_id_not_start_seconds(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+    intake_path = tmp_path / "intake.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    first = record_miner_link(
+        url="https://youtu.be/abc123XYZ09?t=10",
+        title="LLM benchmark",
+        note="agent evaluation",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+    second = record_miner_link(
+        url="https://www.youtube.com/watch?v=abc123XYZ09&start=90",
+        title="LLM benchmark",
+        note="agent evaluation",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert first.accepted
+    assert second.duplicate
+    assert len(_read_jsonl(review_path)) == 1
+
+
+def test_record_miner_link_accepts_metadata_ready_youtube_provider(monkeypatch, tmp_path: Path) -> None:
+    from discord_openclaw_bridge.youtube_video import YouTubeVideoIdentity, YouTubeVideoReport
+
+    def fake_report(url: str) -> YouTubeVideoReport:
+        identity = YouTubeVideoIdentity(
+            video_id="abc123XYZ09",
+            canonical_url="https://www.youtube.com/watch?v=abc123XYZ09",
+            original_url=url,
+        )
+        return YouTubeVideoReport(
+            identity=identity,
+            title="LLM agent benchmark lecture",
+            description="Retrieval augmented generation benchmark and agent evaluation research.",
+            channel_title="DSBA",
+            duration="PT12M34S",
+            published_at="2026-05-19",
+            provider="youtube_data_api",
+            parts=("snippet", "contentDetails", "status"),
+            etag="etag-1",
+            metadata_provenance="youtube_data_api_v3_videos_list",
+            analysis_provenance="metadata_only",
+            analysis_status="metadata_ready",
+            confidence=0.55,
+            fetched_at="2026-05-19T00:00:00Z",
+            expires_at="2026-06-18T00:00:00Z",
+            quota_units=1,
+        )
+
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", fake_report)
+    result = record_miner_link(
+        url="https://www.youtube.com/watch?v=abc123XYZ09",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "queue.jsonl",
+    )
+
+    assert result.accepted
+    row = _read_jsonl(tmp_path / "queue.jsonl")[0]
+    assert row["title"] == "LLM agent benchmark lecture"
+    assert row["summary"].startswith("YouTube 영상 `LLM agent benchmark lecture`")
+    assert row["media"]["analysis_status"] == "metadata_ready"
+    assert row["media"]["provider"] == "youtube_data_api"
+    assert row["media"]["parts"] == ["snippet", "contentDetails", "status"]
+    assert row["media"]["etag"] == "etag-1"
+    assert row["media"]["quota_units"] == 1
+    assert row["media"]["expires_at"] == "2026-06-18T00:00:00Z"
+    assert row["content_analysis"]["analysis_status"] == "ready"
+    assert row["content_analysis"]["evidence_tier"] == "metadata_only"
+    assert row["content_analysis"]["analysis_provenance"] == "metadata_only"
+    assert row["content_analysis"]["provider"] == "youtube_data_api"
+    assert row["content_analysis"]["quota_units"] == 1
+    assert row["content_analysis"]["operator_note_used"] is False
+
+
+def test_record_miner_link_rejects_nontechnical_youtube_provider_metadata(monkeypatch, tmp_path: Path) -> None:
+    from discord_openclaw_bridge.youtube_video import YouTubeVideoIdentity, YouTubeVideoReport
+
+    def fake_report(url: str) -> YouTubeVideoReport:
+        identity = YouTubeVideoIdentity(
+            video_id="abc123XYZ09",
+            canonical_url="https://www.youtube.com/watch?v=abc123XYZ09",
+            original_url=url,
+        )
+        return YouTubeVideoReport(
+            identity=identity,
+            title="daily travel music vlog",
+            description="food, travel, weekend vlog and music",
+            channel_title="Lifestyle Channel",
+            provider="youtube_data_api",
+            parts=("snippet", "contentDetails", "status"),
+            metadata_provenance="youtube_data_api_v3_videos_list",
+            analysis_provenance="metadata_only",
+            analysis_status="metadata_ready",
+            fetched_at="2026-05-19T00:00:00Z",
+            expires_at="2026-06-18T00:00:00Z",
+            quota_units=1,
+        )
+
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", fake_report)
+    result = record_miner_link(
+        url="https://www.youtube.com/watch?v=abc123XYZ09",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "queue.jsonl",
+    )
+
+    assert result.rejected
+    assert not (tmp_path / "queue.jsonl").exists()
+
+
+def test_record_message_links_uses_surrounding_text_for_no_provider_youtube(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+    intake_path = tmp_path / "intake.jsonl"
+    review_path = tmp_path / "queue.jsonl"
+
+    results = record_message_links(
+        message_text="LLM benchmark lecture with retrieval agent https://youtu.be/abc123XYZ09?t=90",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert [result.status for result in results] == ["accepted"]
+    row = _read_jsonl(review_path)[0]
+    assert row["media"]["analysis_status"] == "metadata_unavailable"
+    assert row["summary"].startswith("YouTube 영상 링크를 감지")
+    assert row["content_analysis"]["operator_note_used"] is True
+    assert row["content_analysis"]["source_separation"] == "operator_note"
+
+
+def test_record_requested_links_expands_youtube_channel_to_video_records(monkeypatch, tmp_path: Path) -> None:
+    from discord_openclaw_bridge.youtube_video import YouTubeChannelIdentity, YouTubeChannelVideosResult
+
+    def fake_channel_videos(url: str, *, max_results: int = 5):
+        assert url == "https://www.youtube.com/@dsba2979"
+        return YouTubeChannelVideosResult(
+            status="ready",
+            channel=YouTubeChannelIdentity(handle="@dsba2979", canonical_url="https://www.youtube.com/@dsba2979"),
+            video_urls=("https://www.youtube.com/watch?v=abc123XYZ09", "https://www.youtube.com/watch?v=rN5UpLmt2HM"),
+            quota_units=2,
+        )
+
+    monkeypatch.setattr(miner_module, "fetch_youtube_channel_video_urls", fake_channel_videos)
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+    intake_path = tmp_path / "intake.jsonl"
+    review_path = tmp_path / "review.jsonl"
+
+    results = record_requested_links(
+        url="https://www.youtube.com/@dsba2979",
+        note="LLM agent benchmark retrieval research channel",
+        intake_path=intake_path,
+        review_queue_path=review_path,
+    )
+
+    assert [result.status for result in results] == ["accepted", "accepted"]
+    rows = _read_jsonl(review_path)
+    assert [row["media"]["video_id"] for row in rows] == ["abc123XYZ09", "rN5UpLmt2HM"]
+    assert all("YouTube channel collection source" in row["content_analysis"]["summary_lines"][2] for row in rows)
+
+
+def test_record_requested_links_rejects_youtube_channel_without_api_key(monkeypatch, tmp_path: Path) -> None:
+    from discord_openclaw_bridge.youtube_video import YouTubeChannelIdentity, YouTubeChannelVideosResult
+
+    monkeypatch.setattr(
+        miner_module,
+        "fetch_youtube_channel_video_urls",
+        lambda url, *, max_results=5: YouTubeChannelVideosResult(
+            status="unavailable",
+            channel=YouTubeChannelIdentity(handle="@dsba2979", canonical_url="https://www.youtube.com/@dsba2979"),
+            reason="missing_youtube_data_api_key",
+        ),
+    )
+
+    results = record_requested_links(
+        url="https://www.youtube.com/@dsba2979",
+        note="LLM agent benchmark retrieval research channel",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "review.jsonl",
+    )
+
+    assert len(results) == 1
+    assert results[0].rejected
+    assert results[0].reason == "youtube_channel_unavailable:missing_youtube_data_api_key"
+
+
+def test_record_requested_links_channel_invalid_max_env_falls_back(monkeypatch, tmp_path: Path) -> None:
+    from discord_openclaw_bridge.youtube_video import YouTubeChannelIdentity, YouTubeChannelVideosResult
+
+    seen: dict[str, int] = {}
+
+    def fake_channel_videos(url: str, *, max_results: int = 5):
+        seen["max_results"] = max_results
+        return YouTubeChannelVideosResult(
+            status="ready",
+            channel=YouTubeChannelIdentity(handle="@dsba2979", canonical_url="https://www.youtube.com/@dsba2979"),
+            video_urls=("https://www.youtube.com/watch?v=abc123XYZ09",),
+            quota_units=2,
+        )
+
+    monkeypatch.setenv("JIPHYEONJEON_MINER_YOUTUBE_CHANNEL_MAX_VIDEOS", "not-an-int")
+    monkeypatch.setattr(miner_module, "fetch_youtube_channel_video_urls", fake_channel_videos)
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+
+    results = record_requested_links(
+        url="https://www.youtube.com/@dsba2979",
+        note="LLM agent benchmark retrieval research channel",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "review.jsonl",
+    )
+
+    assert seen["max_results"] == 5
+    assert results[0].accepted
+
+
+
+def test_record_requested_links_channel_request_max_overrides_env(monkeypatch, tmp_path: Path) -> None:
+    from discord_openclaw_bridge.youtube_video import YouTubeChannelIdentity, YouTubeChannelVideosResult
+
+    seen: dict[str, int] = {}
+
+    def fake_channel_videos(url: str, *, max_results: int = 5):
+        seen["max_results"] = max_results
+        return YouTubeChannelVideosResult(
+            status="ready",
+            channel=YouTubeChannelIdentity(handle="@dsba2979", canonical_url="https://www.youtube.com/@dsba2979"),
+            video_urls=("https://www.youtube.com/watch?v=abc123XYZ09",),
+            quota_units=2,
+        )
+
+    monkeypatch.setenv("JIPHYEONJEON_MINER_YOUTUBE_CHANNEL_MAX_VIDEOS", "3")
+    monkeypatch.setattr(miner_module, "fetch_youtube_channel_video_urls", fake_channel_videos)
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+
+    results = record_requested_links(
+        url="https://www.youtube.com/@dsba2979",
+        note="LLM agent benchmark retrieval research channel",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=tmp_path / "review.jsonl",
+        channel_max_videos=99,
+    )
+
+    assert seen["max_results"] == 25
+    assert results[0].accepted
+
+def test_record_message_links_drops_sensitive_operator_context_from_content_analysis(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+    review_path = tmp_path / "review.jsonl"
+
+    results = record_message_links(
+        message_text="LLM agent benchmark https://youtu.be/abc123XYZ09 key=SECRET api_key=SECRET auth=x password=hunter2 code=abc signature=sig sig=sig relay_token=secret",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=review_path,
+    )
+
+    assert results[0].accepted
+    dumped = json.dumps(_read_jsonl(review_path), ensure_ascii=False)
+    for marker in ("key=", "api_key=", "auth=", "password=", "code=", "signature=", "sig=", "relay_token="):
+        assert marker not in dumped
+
+
+def test_record_message_links_drops_colon_sensitive_operator_context(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(miner_module, "fetch_youtube_metadata_report", lambda url: None)
+    review_path = tmp_path / "review.jsonl"
+
+    results = record_message_links(
+        message_text="LLM agent benchmark https://youtu.be/abc123XYZ09 api_key: SECRET api key: SECRET relay_token: secret relay token: secret auth: bearer password: hunter2 signature: sig",
+        intake_path=tmp_path / "intake.jsonl",
+        review_queue_path=review_path,
+    )
+
+    assert results[0].accepted
+    dumped = json.dumps(_read_jsonl(review_path), ensure_ascii=False)
+    for marker in ("api_key:", "api key:", "relay_token:", "relay token:", "auth:", "password:", "signature:"):
+        assert marker not in dumped

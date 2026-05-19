@@ -15,6 +15,17 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
+from .youtube_video import (
+    YouTubeVideoReport,
+    build_unavailable_report,
+    fetch_youtube_channel_video_urls,
+    fetch_youtube_metadata_report,
+    is_youtube_channel_url,
+    is_youtube_url,
+    parse_youtube_url,
+    sanitize_content_analysis,
+)
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - non-POSIX fallback keeps API importable.
@@ -425,6 +436,7 @@ def record_miner_link(
     note: str | None = None,
     summary: str | None = None,
     published_at: str | None = None,
+    context_text: str | None = None,
     intake_path: Path,
     review_queue_path: Path,
     discord: DiscordLinkMetadata | None = None,
@@ -434,9 +446,44 @@ def record_miner_link(
     if not safe_url:
         raise ValueError("집현전-광부는 공개 http/https 링크만 수집합니다.")
 
+    if is_youtube_url(safe_url) and parse_youtube_url(str(url)) is None and parse_youtube_url(safe_url) is None:
+        intake_id = _intake_id(safe_url)
+        return MinerRecordResult(
+            status="rejected",
+            intake_id=intake_id,
+            url=safe_url,
+            title=clean_text(title, limit=180) or _fallback_title(safe_url),
+            intake_path=intake_path,
+            review_queue_path=review_queue_path,
+            reason="unsupported_youtube_url: video URL만 수집합니다.",
+        )
+
+    youtube_report = _youtube_report_for_intake(str(url) if is_youtube_url(safe_url) else safe_url)
+    if youtube_report is not None:
+        safe_url = youtube_report.identity.canonical_url
     intake_id = _intake_id(safe_url)
-    safe_title = clean_text(title, limit=180) or _fallback_title(safe_url)
-    eligible, reason = _looks_academic_or_technical(url=safe_url, title=safe_title, note=clean_text(note, limit=500))
+    safe_title = clean_text(title, limit=180) or clean_text(youtube_report.title if youtube_report else "", limit=180) or _fallback_title(safe_url)
+    gate_note = " ".join(
+        part
+        for part in [
+            clean_text(note, limit=500),
+            clean_text(context_text, limit=700),
+            clean_text(summary, limit=700),
+            clean_text(youtube_report.description if youtube_report else "", limit=900),
+            clean_text(youtube_report.channel_title if youtube_report else "", limit=180),
+        ]
+        if part
+    )
+    eligible, reason = _looks_academic_or_technical(url=safe_url, title=safe_title, note=gate_note)
+    if youtube_report is not None and not eligible:
+        no_provider = youtube_report.analysis_status == "metadata_unavailable"
+        operator_signal, operator_reason = _looks_academic_or_technical(
+            url="https://example.invalid/youtube-video",
+            title=clean_text(title, limit=180),
+            note=" ".join(part for part in [clean_text(note, limit=500), clean_text(context_text, limit=700)] if part),
+        )
+        if no_provider and operator_signal:
+            eligible, reason = True, f"youtube_{youtube_report.analysis_status}:{operator_reason}"
     if not eligible:
         return MinerRecordResult(
             status="rejected",
@@ -452,10 +499,12 @@ def record_miner_link(
         url=safe_url,
         title=safe_title,
         note=note,
-        summary=summary,
-        published_at=published_at,
+        summary=summary or _youtube_summary(youtube_report),
+        published_at=published_at or (youtube_report.published_at if youtube_report else None),
         discord=discord or DiscordLinkMetadata(),
         created_at=created_at,
+        youtube_report=youtube_report,
+        operator_context=context_text,
     )
 
     wrote = False
@@ -487,6 +536,7 @@ def record_message_links(
     review_queue_path: Path,
     discord: DiscordLinkMetadata | None = None,
     created_at: datetime | None = None,
+    channel_max_videos: int | None = None,
 ) -> list[MinerRecordResult]:
     results: list[MinerRecordResult] = []
     seen: set[str] = set()
@@ -496,13 +546,15 @@ def record_message_links(
             if not safe_url or safe_url in seen:
                 continue
             seen.add(safe_url)
-            results.append(
-                record_miner_link(
+            results.extend(
+                _record_channel_or_link(
                     url=safe_url,
+                    context_text=message_text,
                     intake_path=intake_path,
                     review_queue_path=review_queue_path,
                     discord=discord,
                     created_at=created_at,
+                    channel_max_videos=channel_max_videos,
                 )
             )
     return results
@@ -517,11 +569,12 @@ def record_requested_links(
     review_queue_path: Path,
     discord: DiscordLinkMetadata | None = None,
     created_at: datetime | None = None,
+    channel_max_videos: int | None = None,
 ) -> list[MinerRecordResult]:
     results: list[MinerRecordResult] = []
     for candidate_url in _expand_or_keep_url(url):
-        results.append(
-            record_miner_link(
+        results.extend(
+            _record_channel_or_link(
                 url=candidate_url,
                 title=title if candidate_url == url else None,
                 note=note,
@@ -529,6 +582,7 @@ def record_requested_links(
                 review_queue_path=review_queue_path,
                 discord=discord,
                 created_at=created_at,
+                channel_max_videos=channel_max_videos,
             )
         )
     return results
@@ -551,6 +605,103 @@ def render_ack(results: list[MinerRecordResult]) -> str:
         parts.append(f"학술검색/기술리포트 범위 밖 {rejected}개는 수집 제외했습니다.")
     parts.append("검토 전에는 뉴스레터 아카이브/뉴스레터에 자동 반영하지 않습니다.")
     return " ".join(parts)
+
+
+def _youtube_report_for_intake(url: str) -> YouTubeVideoReport | None:
+    if not is_youtube_url(url):
+        return None
+    if parse_youtube_url(url) is None:
+        return None
+    return fetch_youtube_metadata_report(url) or build_unavailable_report(url)
+
+
+def _youtube_summary(report: YouTubeVideoReport | None) -> str | None:
+    if report is None:
+        return None
+    if report.summary_lines:
+        return " ".join(report.summary_lines)[:700]
+    if report.analysis_status == "metadata_unavailable":
+        return "YouTube 영상 링크를 감지했지만 provider key가 없어 metadata_unavailable 상태로 검토 큐에 보냅니다."
+    if report.title or report.description:
+        return f"YouTube 영상 `{report.title or report.identity.video_id}`의 공개 메타데이터를 수집했습니다. {report.description}"[:700]
+    return None
+
+
+def _youtube_channel_max_videos(override: int | None = None) -> int:
+    if override is not None:
+        value = override
+    else:
+        try:
+            value = int(os.environ.get("JIPHYEONJEON_MINER_YOUTUBE_CHANNEL_MAX_VIDEOS", "5"))
+        except ValueError:
+            value = 5
+    return max(1, min(25, value))
+
+
+def _record_channel_or_link(
+    *,
+    url: str,
+    title: str | None = None,
+    note: str | None = None,
+    context_text: str | None = None,
+    intake_path: Path,
+    review_queue_path: Path,
+    discord: DiscordLinkMetadata | None = None,
+    created_at: datetime | None = None,
+    channel_max_videos: int | None = None,
+) -> list[MinerRecordResult]:
+    safe_url = sanitize_url(url)
+    if safe_url and is_youtube_channel_url(safe_url):
+        max_results = _youtube_channel_max_videos(channel_max_videos)
+        result = fetch_youtube_channel_video_urls(safe_url, max_results=max_results)
+        if result is None or result.status != "ready":
+            intake_id = _intake_id(safe_url)
+            reason = f"youtube_channel_{result.status if result else 'unsupported'}:{result.reason if result else 'unsupported_channel_url'}"
+            return [
+                MinerRecordResult(
+                    status="rejected",
+                    intake_id=intake_id,
+                    url=safe_url,
+                    title=clean_text(title, limit=180) or _fallback_title(safe_url),
+                    intake_path=intake_path,
+                    review_queue_path=review_queue_path,
+                    reason=reason,
+                )
+            ]
+        channel_note = " ".join(
+            part
+            for part in [
+                clean_text(note, limit=500),
+                clean_text(context_text, limit=700),
+                f"YouTube channel collection source: {result.channel.canonical_url}",
+            ]
+            if part
+        )
+        return [
+            record_miner_link(
+                url=video_url,
+                title=None,
+                note=channel_note,
+                context_text=context_text,
+                intake_path=intake_path,
+                review_queue_path=review_queue_path,
+                discord=discord,
+                created_at=created_at,
+            )
+            for video_url in result.video_urls
+        ]
+    return [
+        record_miner_link(
+            url=url,
+            title=title,
+            note=note,
+            context_text=context_text,
+            intake_path=intake_path,
+            review_queue_path=review_queue_path,
+            discord=discord,
+            created_at=created_at,
+        )
+    ]
 
 
 @contextmanager
@@ -598,12 +749,14 @@ def _build_record(
     published_at: str | None = None,
     discord: DiscordLinkMetadata,
     created_at: datetime | None,
+    youtube_report: YouTubeVideoReport | None = None,
+    operator_context: str | None = None,
 ) -> dict[str, Any]:
     now = created_at or datetime.now(timezone.utc)
     run_at = now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     summary_text = clean_text(summary, limit=700) if summary is not None else clean_text(note, limit=700)
     published = clean_text(published_at, limit=40) or run_at[:10]
-    return {
+    record: dict[str, Any] = {
         "intake_id": intake_id,
         "agent": AGENT_ID,
         "reviewer": REVIEWER_ID,
@@ -630,6 +783,18 @@ def _build_record(
             "user_id": discord.user_id,
         },
     }
+    if youtube_report is not None:
+        record.update(youtube_report.to_record_fields())
+        content_analysis = youtube_report.content_analysis(
+            operator_note=clean_text(note, limit=500),
+            operator_context=clean_text(operator_context, limit=700),
+        )
+        if content_analysis:
+            record["content_analysis"] = sanitize_content_analysis(content_analysis)
+        tags = list(record.get("tags", []))
+        tags.extend(["youtube-video", f"youtube:{youtube_report.analysis_status}"])
+        record["tags"] = list(dict.fromkeys(str(tag) for tag in tags if str(tag)))
+    return record
 
 
 def _public_host(host: str | None) -> bool:

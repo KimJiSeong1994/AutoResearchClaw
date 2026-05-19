@@ -124,11 +124,50 @@ async def _mine_command(
     await interaction.response.send_message(render_ack(results), ephemeral=True)
 
 
+
+async def _mine_youtube_channel_command(
+    interaction: discord.Interaction,
+    channel_url: str,
+    max_videos: int = 5,
+    note: str | None = None,
+) -> None:
+    bot = interaction.client
+    assert isinstance(bot, JiphyeonjeonMinerBot)
+    if not bot.channel_allowed(interaction):
+        await interaction.response.send_message("집현전-광부 YouTube 채널 수집은 지정된 채널에서만 사용할 수 있습니다.", ephemeral=True)
+        return
+    safe_max_videos = max(1, min(25, int(max_videos or 5)))
+    try:
+        results = record_requested_links(
+            url=channel_url,
+            note=note,
+            intake_path=bot.config.miner_intake_path,
+            review_queue_path=bot.config.miner_review_queue_path,
+            discord=DiscordLinkMetadata(
+                guild_id=interaction.guild_id,
+                channel_id=interaction.channel_id,
+                user_id=interaction.user.id if interaction.user else None,
+            ),
+            channel_max_videos=safe_max_videos,
+        )
+    except ValueError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+    except Exception:
+        LOG.exception("miner YouTube channel request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
+        await interaction.response.send_message("집현전-광부 YouTube 채널 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
+        return
+    await interaction.response.send_message(render_ack(results), ephemeral=True)
+
 def build_miner_bot(config: MinerBotConfig) -> JiphyeonjeonMinerBot:
     bot = JiphyeonjeonMinerBot(config)
     bot.tree.command(name="jiphyeonjeon_mine", description="Collect a link for Jiphyeonjeon-Claw review")(
         _mine_command
     )
+    bot.tree.command(
+        name="jiphyeonjeon_mine_yt_channel",
+        description="Collect recent YouTube channel videos for Jiphyeonjeon-Claw review",
+    )(_mine_youtube_channel_command)
     return bot
 
 

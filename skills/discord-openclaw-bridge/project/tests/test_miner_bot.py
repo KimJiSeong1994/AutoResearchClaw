@@ -32,7 +32,10 @@ def test_standalone_miner_bot_registers_only_miner_command(tmp_path: Path) -> No
 
     bot = build_miner_bot(config)
 
-    assert [command.name for command in bot.tree.get_commands()] == ["jiphyeonjeon_mine"]
+    assert [command.name for command in bot.tree.get_commands()] == [
+        "jiphyeonjeon_mine",
+        "jiphyeonjeon_mine_yt_channel",
+    ]
     assert not bot.intents.message_content
 
 

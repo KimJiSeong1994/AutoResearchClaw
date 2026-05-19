@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
 
 from .miner import AGENT_ID, PENDING_STATUS, REVIEWER_ID, clean_text, locked_jsonl_paths, read_jsonl, sanitize_url
+from .youtube_video import is_youtube_url, sanitize_content_analysis, sanitize_media
 
 Decision = Literal["approve", "reject", "hold"]
 _APPROVED_STATUS = "approved_for_manual_links"
@@ -150,7 +151,7 @@ def _manual_link_row(item: ReviewQueueItem) -> dict[str, Any] | None:
     tags = [str(tag) for tag in record.get("tags", []) if str(tag)]
     tags = [tag for tag in tags if tag != PENDING_STATUS]
     tags.extend(["manual-link", AGENT_ID, _APPROVED_STATUS, _APPROVED_BY_TAG])
-    return {
+    row = {
         "title": title,
         "url": url,
         "summary": clean_text(record.get("summary"), limit=700),
@@ -167,6 +168,13 @@ def _manual_link_row(item: ReviewQueueItem) -> dict[str, Any] | None:
             "audit_source": clean_text(decision.get("audit_source"), limit=120),
         },
     }
+    media = sanitize_media(record.get("media"))
+    if media:
+        row["media"] = media
+    content_analysis = sanitize_content_analysis(record.get("content_analysis"))
+    if content_analysis:
+        row["content_analysis"] = content_analysis
+    return row
 
 
 def _write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -197,6 +205,9 @@ def _enrich_manual_link_rows(
     enriched: list[dict[str, Any]] = []
     for row in rows:
         url = str(row.get("url") or "")
+        if is_youtube_url(url):
+            enriched.append(row)
+            continue
         try:
             metadata = fetcher(url) if url else None
         except Exception:

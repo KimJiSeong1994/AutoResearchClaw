@@ -1111,3 +1111,193 @@ def test_apps_script_relay_ingest_never_publishes_private_snippet_fallback(tmp_p
     assert "token=abc123" not in text
     assert "PRIVATE mailbox snippet" not in briefing
     assert "token=abc123" not in briefing
+
+
+def test_item_for_publish_preserves_compact_video_media() -> None:
+    item = {
+        "title": "LLM agent benchmark lecture",
+        "kind": "video",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "article_description": "retrieval benchmark and agent evaluation",
+        "media": {
+            "type": "video",
+            "platform": "youtube",
+            "video_id": "abc123XYZ09",
+            "analysis_status": "metadata_ready",
+            "analysis_provenance": "metadata_only",
+            "raw_provider_payload": {"secret": "x"},
+            "transcript": "do not persist",
+        },
+        "raw_provider_payload": {"secret": "x"},
+        "transcript": "do not persist",
+    }
+
+    published = newsletter_ingest._item_for_publish(item)  # noqa: SLF001
+
+    assert published["media"]["video_id"] == "abc123XYZ09"
+    dumped = json.dumps(published, ensure_ascii=False)
+    assert "raw_provider_payload" not in dumped
+    assert "do not persist" not in dumped
+
+
+def test_topic_briefing_labels_youtube_model_derived_no_transcript() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-19",
+        source_name="집현전-광부 승인 큐",
+        items=[
+            {
+                "title": "LLM agent benchmark lecture",
+                "kind": "video",
+                "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+                "article_description": "retrieval benchmark and agent evaluation",
+                "summary_lines": ["Agent benchmark", "Retrieval evaluation", "Metadata and model-derived report"],
+                "media": {
+                    "type": "video",
+                    "platform": "youtube",
+                    "video_id": "abc123XYZ09",
+                    "analysis_status": "analysis_ready",
+                    "analysis_provenance": "gemini_youtube_uri_no_transcript",
+                },
+            }
+        ],
+    )
+
+    assert "모델 기반 YouTube URI 분석" in briefing
+    assert "자막/transcript 근거 아님" in briefing
+    assert "타임스탬프 근거" not in briefing
+
+
+def test_item_for_publish_drops_unsanitized_media_original_url() -> None:
+    item = {
+        "title": "LLM benchmark",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "kind": "video",
+        "article_description": "agent benchmark",
+        "media": {
+            "type": "video",
+            "platform": "youtube",
+            "video_id": "abc123XYZ09",
+            "canonical_url": "https://www.youtube.com/watch?v=abc123XYZ09",
+            "original_url": "https://www.youtube.com/watch?v=abc123XYZ09&token=SECRET&utm_source=x",
+        },
+    }
+
+    published = newsletter_ingest._item_for_publish(item)  # noqa: SLF001
+
+    assert "original_url" not in published["media"]
+    dumped = json.dumps(published, ensure_ascii=False)
+    assert "SECRET" not in dumped
+    assert "utm_source" not in dumped
+
+
+def test_item_for_publish_sanitizes_content_analysis_and_blocks_sensitive_values() -> None:
+    item = {
+        "title": "LLM agent benchmark lecture",
+        "kind": "video",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "article_description": "retrieval benchmark and agent evaluation",
+        "media": {"type": "video", "platform": "youtube", "video_id": "abc123XYZ09"},
+        "content_analysis": {
+            "analysis_status": "ready",
+            "evidence_tier": "model_youtube_uri_no_transcript",
+            "analysis_provenance": "model_youtube_uri_no_transcript",
+            "summary_lines": [
+                "Model-derived report; 자막/transcript 근거 아님",
+                "영상에서 말했다: forbidden direct speech",
+            ],
+            "fallback_reason": "https://example.com/callback?token=SECRET",
+            "claims": [{"text": "retrieval benchmark overview", "basis": "provider_model"}],
+            "caption_text": "must not persist",
+        },
+    }
+
+    published = newsletter_ingest._item_for_publish(item)  # noqa: SLF001
+
+    analysis = published["content_analysis"]
+    assert analysis["evidence_tier"] == "model_public_youtube_av_no_raw"
+    assert analysis["analysis_provenance"] == "model_public_youtube_av_no_raw"
+    dumped = json.dumps(published, ensure_ascii=False)
+    assert "must not persist" not in dumped
+    assert "token=SECRET" not in dumped
+    assert "영상에서 말했다" not in dumped
+    assert "자막/transcript 근거 아님" in dumped
+
+
+def test_topic_briefing_uses_content_analysis_evidence_tier_and_safe_language() -> None:
+    briefing = newsletter_ingest.render_topic_briefing(
+        run_date="2026-05-19",
+        source_name="집현전-광부 승인 큐",
+        items=[
+            {
+                "title": "LLM agent benchmark lecture",
+                "kind": "video",
+                "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+                "article_description": "retrieval benchmark and agent evaluation",
+                "summary_lines": ["Agent benchmark", "Retrieval evaluation", "Metadata report"],
+                "media": {"type": "video", "platform": "youtube", "video_id": "abc123XYZ09"},
+                "content_analysis": {
+                    "analysis_status": "ready",
+                    "evidence_tier": "operator_note",
+                    "analysis_provenance": "operator_note",
+                    "summary_lines": ["운영자 메모 기준"],
+                },
+            }
+        ],
+    )
+
+    assert "운영자 메모 기준" in briefing
+    assert "tier=`operator_note`" in briefing
+    assert "영상에서 말했다" not in briefing
+    assert "transcript 분석 결과" not in briefing
+
+
+def test_item_for_publish_drops_content_analysis_forbidden_marker_strings_but_keeps_honesty_labels() -> None:
+    item = {
+        "title": "LLM agent benchmark lecture",
+        "kind": "video",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "article_description": "retrieval benchmark and agent evaluation",
+        "media": {"type": "video", "platform": "youtube", "video_id": "abc123XYZ09"},
+        "content_analysis": {
+            "analysis_status": "ready",
+            "evidence_tier": "metadata_only",
+            "summary_lines": ["safe summary", "raw_provider_payload: private"],
+            "claims": [
+                {"text": "caption_text: private caption", "basis": "metadata.description"},
+                {"text": "safe claim", "basis": "raw_transcript: hidden"},
+            ],
+            "limitations": ["자막/transcript 근거 아님", "audio_bytes: hidden"],
+            "fallback_reason": "private_body: leaked",
+        },
+    }
+
+    published = newsletter_ingest._item_for_publish(item)  # noqa: SLF001
+
+    dumped = json.dumps(published, ensure_ascii=False)
+    assert "raw_provider_payload:" not in dumped
+    assert "caption_text:" not in dumped
+    assert "raw_transcript:" not in dumped
+    assert "audio_bytes:" not in dumped
+    assert "private_body:" not in dumped
+    assert "자막/transcript 근거 아님" in dumped
+    assert published["content_analysis"]["claims"] == [{"text": "safe claim"}]
+
+
+def test_item_for_publish_rebuilds_media_canonical_url_with_sensitive_query() -> None:
+    item = {
+        "title": "LLM benchmark",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "kind": "video",
+        "article_description": "agent benchmark",
+        "media": {
+            "type": "video",
+            "platform": "youtube",
+            "video_id": "abc123XYZ09",
+            "canonical_url": "https://www.youtube.com/watch?v=abc123XYZ09&key=SECRET&auth=x",
+        },
+    }
+
+    published = newsletter_ingest._item_for_publish(item)  # noqa: SLF001
+
+    assert published["media"]["canonical_url"] == "https://www.youtube.com/watch?v=abc123XYZ09"
+    assert "SECRET" not in json.dumps(published)

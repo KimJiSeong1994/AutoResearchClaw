@@ -53,6 +53,7 @@ class CandidateItem:
     arxiv_id: str | None = None
     doi: str | None = None
     tags: tuple[str, ...] = ()
+    metadata: tuple[tuple[str, str], ...] = ()
     score: float | None = None
     fetched_at: datetime = field(default_factory=_now_utc)
 

@@ -96,8 +96,8 @@ read-only artifacts; they do not mutate queues, approve content, or publish. Set
 
 Flow:
 
-1. A user runs the Miner app's `/jiphyeonjeon_mine` in `DISCORD_MINER_CHANNEL_ID`, or the dedicated intake channel is enabled with `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION=1`.
-2. The Miner bot extracts and sanitizes HTTP(S) links, stripping secret/tracking query keys such as tokens and `utm_*`.
+1. A user runs the Miner app's `/jiphyeonjeon_mine` for a single link, `/jiphyeonjeon_mine_yt_channel` for a YouTube channel, or the dedicated intake channel is enabled with `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION=1`.
+2. The Miner bot extracts and sanitizes HTTP(S) links, stripping secret/tracking query keys such as tokens and `utm_*`. YouTube channel URLs are expanded through the official YouTube Data API into recent video URLs before pending review records are written.
 3. Pending records are appended to both:
    - `JIPHYEONJEON_MINER_INTAKE_PATH`
    - `JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH`
@@ -118,6 +118,7 @@ Operator CLI:
 ```bash
 cd skills/discord-openclaw-bridge/project
 uv run discord-jiphyeonjeon-miner-review list
+# Discord slash commands: /jiphyeonjeon_mine url:<link> and /jiphyeonjeon_mine_yt_channel channel_url:<youtube-channel> max_videos:<1-25>
 uv run discord-jiphyeonjeon-miner-review show miner_<id>
 uv run discord-jiphyeonjeon-miner-review approve miner_<id> --reason "source checked"
 uv run discord-jiphyeonjeon-miner-review reject miner_<id> --reason "off-topic or unsafe"
@@ -137,6 +138,8 @@ Operational controls:
 
 - `DISCORD_MINER_CHANNEL_ID` defaults to `DISCORD_ALLOWED_CHANNEL_ID` when unset.
 - `DISCORD_MINER_ENABLE_CHANNEL_COLLECTION` defaults to disabled. Enable it only for a dedicated intake channel because it requires the Miner bot's Discord `MESSAGE_CONTENT` intent.
+- `YOUTUBE_DATA_API_KEY` enables official YouTube channel expansion and video metadata analysis.
+- `JIPHYEONJEON_MINER_YOUTUBE_CHANNEL_MAX_VIDEOS` sets the default channel expansion size; slash command `max_videos` can override it per request, and both paths clamp to 1–25.
 - `JIPHYEONJEON_MINER_DECISIONS_PATH` and `JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH` control the review audit log and approved-only `manual_links` export path.
 - For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
 - For an individual Traveler bot, set `DISCORD_TRAVELER_BOT_TOKEN` and `DISCORD_TRAVELER_CLIENT_ID`, invite it with `project/scripts/invite-traveler-url.sh`, then install/start `discord-jiphyeonjeon-traveler.service`.

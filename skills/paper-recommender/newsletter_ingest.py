@@ -181,6 +181,158 @@ _OUT_OF_SCOPE_HINTS = (
 
 _DEFAULT_MAX_MESSAGES = 500
 
+_CONTENT_ANALYSIS_ALLOWED_KEYS = {
+    "version",
+    "analysis_status",
+    "evidence_tier",
+    "analysis_provenance",
+    "provider",
+    "summary_lines",
+    "claims",
+    "limitations",
+    "quota_units",
+    "confidence",
+    "operator_note_used",
+    "source_separation",
+    "fetched_at",
+    "expires_at",
+    "fallback_reason",
+    "policy_flags",
+}
+_CONTENT_ANALYSIS_FORBIDDEN_KEYS = {
+    "raw_provider_payload",
+    "raw_transcript",
+    "caption_text",
+    "raw_caption",
+    "audio_bytes",
+    "audio_path",
+    "video_bytes",
+    "credential",
+    "credentials",
+    "access_token",
+    "refresh_token",
+    "private_body",
+}
+_CONTENT_ANALYSIS_SENSITIVE_VALUE_MARKERS = (
+    "token=",
+    "access_token=",
+    "refresh_token=",
+    "secret=",
+    "credential=",
+)
+_LEGACY_EVIDENCE_TIERS = {
+    "gemini_youtube_uri_no_transcript": "model_public_youtube_av_no_raw",
+    "model_youtube_uri_no_transcript": "model_public_youtube_av_no_raw",
+}
+_CONTENT_ANALYSIS_DIRECT_CLAIM_RE = re.compile(
+    r"(영상에서\s*말했|영상에서\s*언급|transcript\s*분석\s*결과|자막\s*분석\s*결과|\b\d{1,2}:\d{2}\b\s*[\"'‘’“”])",
+    re.IGNORECASE,
+)
+_CONTENT_ANALYSIS_FORBIDDEN_MARKER_RE = re.compile(
+    r"(?:raw_provider_payload|raw_transcript|caption_text|raw_caption|audio_bytes|audio_path|video_bytes|access_token|refresh_token|private_body)\s*[:=]",
+    re.IGNORECASE,
+)
+
+
+def _normalize_evidence_tier(value: object) -> str:
+    tier = _clean_text(str(value or ""))
+    return _LEGACY_EVIDENCE_TIERS.get(tier, tier)
+
+
+def _has_sensitive_content_analysis_value(value: object) -> bool:
+    if isinstance(value, str):
+        lower = value.lower()
+        return any(marker in lower for marker in _CONTENT_ANALYSIS_SENSITIVE_VALUE_MARKERS) or _CONTENT_ANALYSIS_FORBIDDEN_MARKER_RE.search(value) is not None
+    if isinstance(value, Mapping):
+        return any(_has_sensitive_content_analysis_value(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_sensitive_content_analysis_value(v) for v in value)
+    return False
+
+
+def _content_text_allowed(text: str, evidence_tier: str) -> bool:
+    if evidence_tier == "official_caption_ephemeral":
+        return True
+    # Keep honesty labels such as "자막/transcript 근거 아님" while dropping
+    # renderer-visible direct speech/transcript claims for metadata/operator/model tiers.
+    return _CONTENT_ANALYSIS_DIRECT_CLAIM_RE.search(text) is None
+
+
+def _sanitize_content_text(value: object, *, evidence_tier: str, limit: int = 500) -> str:
+    text = _clean_text(str(value or ""))[:limit]
+    if not text or _has_sensitive_content_analysis_value(text):
+        return ""
+    if not _content_text_allowed(text, evidence_tier):
+        return ""
+    return text
+
+
+def _sanitize_content_analysis(value: object) -> dict[str, object]:
+    """Return derived-only YouTube content analysis safe for archive/newsletter output."""
+    if not isinstance(value, Mapping):
+        return {}
+    raw_tier = value.get("evidence_tier") or value.get("analysis_provenance")
+    evidence_tier = _normalize_evidence_tier(raw_tier) or "metadata_only"
+    out: dict[str, object] = {"evidence_tier": evidence_tier}
+
+    for key in _CONTENT_ANALYSIS_ALLOWED_KEYS:
+        if key == "evidence_tier" or key not in value:
+            continue
+        raw = value.get(key)
+        if raw in (None, "", [], {}):
+            continue
+        if key not in {"claims", "summary_lines", "limitations", "policy_flags"} and _contains_content_analysis_forbidden(raw):
+            continue
+        if key == "analysis_provenance":
+            text = _clean_text(str(raw))
+            out[key] = _LEGACY_EVIDENCE_TIERS.get(text, text)[:180]
+        elif key in {"summary_lines", "limitations", "policy_flags"} and isinstance(raw, list):
+            limit = 240 if key != "policy_flags" else 120
+            lines = [_sanitize_content_text(line, evidence_tier=evidence_tier, limit=limit) for line in raw[:8]]
+            clean = [line for line in lines if line]
+            if clean:
+                out[key] = clean
+        elif key == "claims" and isinstance(raw, list):
+            claims: list[dict[str, object]] = []
+            for claim in raw[:8]:
+                if not isinstance(claim, Mapping):
+                    continue
+                text = _sanitize_content_text(claim.get("text"), evidence_tier=evidence_tier, limit=300)
+                if not text:
+                    continue
+                clean_claim: dict[str, object] = {"text": text}
+                basis = _sanitize_content_text(claim.get("basis"), evidence_tier=evidence_tier, limit=120)
+                if basis:
+                    clean_claim["basis"] = basis
+                confidence = claim.get("confidence")
+                if isinstance(confidence, (int, float, bool)):
+                    clean_claim["confidence"] = confidence
+                claims.append(clean_claim)
+            if claims:
+                out[key] = claims
+        elif isinstance(raw, (int, float, bool)):
+            out[key] = raw
+        elif isinstance(raw, str):
+            text = _sanitize_content_text(raw, evidence_tier=evidence_tier, limit=500)
+            if text:
+                out[key] = text
+    if out.get("analysis_status") == "status":
+        out.pop("analysis_status", None)
+    return out if len(out) > 1 else {}
+
+
+def _contains_content_analysis_forbidden(value: object) -> bool:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key) in _CONTENT_ANALYSIS_FORBIDDEN_KEYS:
+                return True
+            if _contains_content_analysis_forbidden(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_content_analysis_forbidden(child) for child in value)
+    return _has_sensitive_content_analysis_value(value)
+
 @dataclass(frozen=True)
 class TopicRule:
     primary: str
@@ -670,6 +822,16 @@ def academic_technical_eligibility(item: Mapping[str, object]) -> EligibilityDec
             "primary_topic_display",
         )
     )
+    media = item.get("media")
+    if isinstance(media, Mapping):
+        public_text = " ".join(
+            [
+                public_text,
+                _clean_text(str(media.get("channel_title") or "")),
+                _clean_text(str(media.get("analysis_status") or "")),
+                _clean_text(str(media.get("analysis_provenance") or "")),
+            ]
+        )
     summary_lines = item.get("summary_lines") or item.get("summaryLines") or []
     if isinstance(summary_lines, list):
         public_text = " ".join([public_text, *(_clean_text(str(line)) for line in summary_lines)])
@@ -763,7 +925,7 @@ def render_page(*, run_date: str, items: list[dict[str, str]], source_name: str)
         f"# Newsletter intake — {run_date}",
         "",
         "> [!info] Privacy boundary",
-        "> Generated from a user-provided local export. Full email bodies and credentials are not stored in this page.",
+        "> Generated from a user-provided local export. Full email bodies and secret values are not stored in this page.",
         "",
         f"- Source export: `{source_name}`",
         f"- Extracted items: {len(items)}",
@@ -1055,8 +1217,23 @@ def _item_for_publish(item: dict[str, str]) -> dict[str, object]:
         "secondary_topics",
         "topic_confidence",
         "topic_reasons",
+        "media",
+        "content_analysis",
     }
-    out: dict[str, object] = {key: value for key, value in item.items() if key in allowed}
+    out: dict[str, object] = {}
+    for key, value in item.items():
+        if key not in allowed:
+            continue
+        if key == "media":
+            sanitized_media = _sanitize_media(value)
+            if sanitized_media:
+                out[key] = sanitized_media
+        elif key == "content_analysis":
+            sanitized_analysis = _sanitize_content_analysis(value)
+            if sanitized_analysis:
+                out[key] = sanitized_analysis
+        else:
+            out[key] = value
     classification = classify_topic_result(item)
     out.setdefault("primary_topic", classification.primary)
     out.setdefault("primary_topic_display", classification.primary_display)
@@ -1096,6 +1273,90 @@ def item_summary_lines(item: Mapping[str, object]) -> list[str]:
     while len(lines) < 3:
         lines.append("공개 원문 근거가 부족해 다음 수집에서 상세 내용을 재확인합니다.")
     return lines[:3]
+
+
+def _sanitize_media(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    allowed = {
+        "type", "platform", "video_id", "canonical_url", "original_url", "start_seconds",
+        "playlist_id", "channel_title", "duration", "published_at", "provider", "parts",
+        "etag", "metadata_provenance", "analysis_provenance", "analysis_status",
+        "confidence", "fetched_at", "expires_at", "quota_units",
+    }
+    out: dict[str, object] = {}
+    for key in allowed:
+        raw = value.get(key)
+        if raw in (None, "", [], {}):
+            continue
+        if key == "parts" and isinstance(raw, list):
+            out[key] = [_clean_text(str(part))[:60] for part in raw[:8] if _clean_text(str(part))]
+        elif isinstance(raw, (int, float, bool)):
+            out[key] = raw
+        else:
+            text = _clean_text(str(raw))
+            if key in {"analysis_provenance", "metadata_provenance"}:
+                text = _LEGACY_EVIDENCE_TIERS.get(text, text)
+            if any(secret in text.lower() for secret in ("raw_provider_payload", "private_body", "credential", "access_token", "refresh_token", "token=", "secret=", "credential=")):
+                continue
+            if key == "original_url":
+                # The archive layer cannot trust arbitrary media rows from JSONL;
+                # preserve canonical_url and drop original_url unless it was already
+                # sanitized upstream with no query secret/tracking values.
+                continue
+            if key == "canonical_url":
+                canonical = _safe_youtube_canonical_url(text, str(value.get("video_id") or ""))
+                if not canonical:
+                    continue
+                out[key] = canonical
+                continue
+            out[key] = text[:500 if key.endswith("url") else 180]
+    if out.get("type") != "video" or out.get("platform") != "youtube" or not out.get("video_id"):
+        return {}
+    return out
+
+
+def _safe_youtube_canonical_url(url: str, video_id_hint: str = "") -> str:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        parsed = None
+    video_id = ""
+    if parsed is not None:
+        host = (parsed.hostname or "").lower()
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        parts = [part for part in parsed.path.split("/") if part]
+        if host.endswith("youtu.be") and parts:
+            video_id = parts[0]
+        elif parsed.path == "/watch":
+            video_id = query.get("v", "")
+        elif len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+            video_id = parts[1]
+    video_id = _clean_text(video_id or video_id_hint)[:40]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+        return ""
+    return f"https://www.youtube.com/watch?{urlencode({'v': video_id})}"
+
+
+def _video_provenance_line(item: Mapping[str, object]) -> str:
+    media = _sanitize_media(item.get("media"))
+    content_analysis = _sanitize_content_analysis(item.get("content_analysis"))
+    if not media and not content_analysis:
+        return ""
+    tier = str(content_analysis.get("evidence_tier") or media.get("analysis_provenance") or media.get("metadata_provenance") or "metadata_only")
+    tier = _normalize_evidence_tier(tier)
+    status = str(content_analysis.get("analysis_status") or media.get("analysis_status") or "unknown")
+    channel = str(media.get("channel_title") or "unknown")
+    labels = {
+        "metadata_only": "YouTube Data API 메타데이터 기반 · 공개 메타데이터 기준",
+        "operator_note": "운영자 메모 기준",
+        "model_public_youtube_av_no_raw": "모델 기반 YouTube URI 분석 · 모델 기반 공개 YouTube AV 분석 · 공식 caption/transcript 근거 아님 · 자막/transcript 근거 아님",
+        "official_caption_ephemeral": "공식 caption 기반 요약",
+        "official_caption_unavailable": "공식 caption 분석 불가",
+    }
+    label = labels.get(tier, f"video provenance `{tier}`")
+    provenance = content_analysis.get("analysis_provenance") or media.get("analysis_provenance") or media.get("metadata_provenance") or tier
+    return f"  - 영상 근거: {label} · tier=`{tier}` · provenance=`{_safe_title(str(provenance))}` · status=`{status}` · channel=`{_safe_title(channel)}`"
 
 
 def _topic_overview(items: list[dict[str, str]], *, limit: int = 8) -> str:
@@ -1418,6 +1679,9 @@ def render_topic_briefing(
                 _source_link_line(title, url),
                 f"  - 수집 메타: {_compact_source_label(item)}",
             ]
+            video_note = _video_provenance_line(item)
+            if video_note:
+                lines.append(video_note)
         remaining = len(topic_items) - max_items_per_topic
         if remaining > 0:
             lines.append(f"- raw archive 추가 보존: {remaining}개")

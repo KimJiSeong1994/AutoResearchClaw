@@ -243,3 +243,24 @@ The deep-design review (architect / critic / security-reviewer / code-reviewer) 
 - Monthly scratch-rebuild reconciliation against the evolved SOUL — `## Changelog` is the audit trail for now; reconcile manually if drift suspected
 - Multi-tenant 집현전 scope — single user per token; admin endpoints to enumerate other users' bookmarks not yet wired
 - Read-only-scoped JWT — current token is admin-scoped (security finding #5); rotate to a read-only token before exposing this beyond a personal pipeline
+
+## Approved Miner YouTube archive ingest
+
+Approved 집현전-광부 rows can be published into the newsletter raw archive/cardnews path without using the Apps Script Gmail relay:
+
+```bash
+python3 skills/paper-recommender/miner_approved_archive_ingest.py \
+  --manual-links-path "$HOME/.openclaw/workspace/review/jiphyeonjeon-claw/approved-manual-links.jsonl" \
+  --wiki-root "$HOME/Desktop/paper-wiki" \
+  --date "$(date +%F)" \
+  --briefing-path "$HOME/.openclaw/workspace/reports/miner-approved-briefing.md" \
+  --source-label "집현전-광부 승인 큐"
+```
+
+Operational boundaries:
+
+- Input must be the review-approved JSONL exported by the Discord bridge review workflow.
+- Pending/rejected Miner rows are ignored.
+- Apps Script relay remains exclusion-only for Miner manual links; this script is the direct approved Miner → raw archive/page/briefing bridge.
+- YouTube video rows preserve only the compact `media` object (`platform`, `video_id`, provenance, TTL, status, quota fields). Raw provider payloads, transcripts, private bodies, credentials, and audiovisual content are not persisted.
+- YouTube Data API metadata is treated as expiring provider data: non-authorized metadata cache entries must be refreshed or deleted within 30 days.

@@ -139,3 +139,115 @@ def test_manual_links_rejects_pending_traveler_source_candidate(tmp_path: Path) 
     items = asyncio.run(adapter.fetch([], SourceLimits(max_per_source=10)))
 
     assert [item.title for item in items] == ["Approved Traveler Source"]
+
+
+def test_manual_links_adapter_preserves_video_media_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "approved-youtube.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "title": "LLM agent benchmark lecture",
+                "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+                "summary": "retrieval benchmark and agent evaluation",
+                "source": "discord_miner",
+                "tags": ["manual-link", "approved-by-jiphyeonjeon-claw"],
+                "review": {"decision": "approved", "source_decision": "approve"},
+                "media": {
+                    "type": "video",
+                    "platform": "youtube",
+                    "video_id": "abc123XYZ09",
+                    "analysis_status": "metadata_ready",
+                    "analysis_provenance": "metadata_only",
+                    "raw_provider_payload": {"secret": "x"},
+                },
+                "transcript": "must not persist",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = ManualLinksAdapter(ManualLinkSettings(paths=[str(path)]))
+    items = asyncio.run(adapter.fetch(["agent"], SourceLimits(max_per_source=10)))
+
+    assert len(items) == 1
+    assert ("media.video_id", "abc123XYZ09") in items[0].metadata
+    dumped = json.dumps(items[0].metadata, ensure_ascii=False)
+    assert "raw_provider_payload" not in dumped
+    assert "must not persist" not in dumped
+
+
+def test_manual_links_adapter_flattens_sanitized_content_analysis_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "approved-youtube-content-analysis.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "title": "LLM agent benchmark lecture",
+                "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+                "summary": "retrieval benchmark and agent evaluation",
+                "source": "discord_miner",
+                "tags": ["manual-link", "approved-by-jiphyeonjeon-claw"],
+                "review": {"decision": "approved", "source_decision": "approve"},
+                "media": {"type": "video", "platform": "youtube", "video_id": "abc123XYZ09"},
+                "content_analysis": {
+                    "analysis_status": "ready",
+                    "evidence_tier": "gemini_youtube_uri_no_transcript",
+                    "analysis_provenance": "gemini_youtube_uri_no_transcript",
+                    "provider": "gemini",
+                    "summary_lines": ["provider-derived audiovisual inference", "자막/transcript 근거 아님"],
+                    "claims": [{"text": "retrieval benchmark overview", "basis": "provider_model"}],
+                    "raw_caption": "must not persist",
+                    "fallback_reason": "https://example.com/?credential=SECRET",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = ManualLinksAdapter(ManualLinkSettings(paths=[str(path)]))
+    items = asyncio.run(adapter.fetch(["agent"], SourceLimits(max_per_source=10)))
+
+    assert len(items) == 1
+    assert ("content_analysis.evidence_tier", "model_public_youtube_av_no_raw") in items[0].metadata
+    assert ("content_analysis.analysis_provenance", "model_public_youtube_av_no_raw") in items[0].metadata
+    dumped = json.dumps(items[0].metadata, ensure_ascii=False)
+    assert "raw_caption" not in dumped
+    assert "credential=SECRET" not in dumped
+    assert "자막/transcript 근거 아님" in dumped
+
+
+def test_manual_links_adapter_rebuilds_sensitive_media_canonical_url(tmp_path: Path) -> None:
+    path = tmp_path / "approved-youtube-sensitive.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "title": "Technical YouTube Agent Benchmark",
+                "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+                "summary": "LLM agent benchmark and retrieval evaluation.",
+                "source": "discord_miner",
+                "tags": ["manual-link", "approved-by-jiphyeonjeon-claw"],
+                "review": {"decision": "approved", "source_decision": "approve"},
+                "media": {
+                    "type": "video",
+                    "platform": "youtube",
+                    "video_id": "abc123XYZ09",
+                    "canonical_url": "https://www.youtube.com/watch?v=abc123XYZ09&key=AIzaSyFake&auth=x&code=y&sig=z",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = ManualLinksAdapter(ManualLinkSettings(paths=[str(path)]))
+    items = asyncio.run(adapter.fetch(["agent"], SourceLimits(max_per_source=5)))
+
+    assert items
+    metadata = dict(items[0].metadata)
+    assert metadata["media.canonical_url"] == "https://www.youtube.com/watch?v=abc123XYZ09"
+    dumped = json.dumps(metadata, ensure_ascii=False)
+    assert "AIzaSyFake" not in dumped
+    assert "auth=" not in dumped
+    assert "code=" not in dumped
+    assert "sig=" not in dumped

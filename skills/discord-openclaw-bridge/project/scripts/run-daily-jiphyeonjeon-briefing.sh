@@ -31,6 +31,18 @@ if [[ -f "$WORKSPACE/.env" ]]; then
   . "$WORKSPACE/.env"
   set +a
 fi
+if [[ -f "$BRIDGE_PROJECT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$BRIDGE_PROJECT/.env"
+  set +a
+fi
+if [[ -f "$PAPER_PROJECT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$PAPER_PROJECT/.env"
+  set +a
+fi
 
 if [[ ! -x "$PAPER_PROJECT/.venv/bin/python" ]]; then
   echo "ERROR: missing paper-recommender venv python" >&2
@@ -50,6 +62,15 @@ fi
 
 cd "$PAPER_PROJECT"
 .venv/bin/python -m paper_recommender --config config.yaml weekly-report --force
+LATEST_WEEKLY_REPORT="$(find "$PAPER_PROJECT/artifacts/weekly" -maxdepth 2 -type f -name research-trends.md -print | sort | tail -1)"
+if [[ -z "$LATEST_WEEKLY_REPORT" || ! -s "$LATEST_WEEKLY_REPORT" ]]; then
+  echo "ERROR: weekly report artifact was not created" >&2
+  exit 2
+fi
+export DISCORD_BRIEFING_SOURCE="${DISCORD_BRIEFING_SOURCE:-$WORKSPACE/reports/daily-trends-latest.md}"
+mkdir -p "$(dirname "$DISCORD_BRIEFING_SOURCE")"
+cp "$LATEST_WEEKLY_REPORT" "$DISCORD_BRIEFING_SOURCE"
+echo "daily briefing source refreshed: $DISCORD_BRIEFING_SOURCE"
 
 cd "$BRIDGE_PROJECT"
 .venv/bin/discord-openclaw-post-briefing

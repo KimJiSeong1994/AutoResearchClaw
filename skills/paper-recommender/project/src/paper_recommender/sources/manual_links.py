@@ -11,10 +11,11 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from paper_recommender.sources import CandidateItem, SourceLimits
 from paper_recommender.sources._util import (
@@ -28,6 +29,44 @@ log = logging.getLogger(__name__)
 
 PENDING_REVIEW_STATUSES = {"pending_claw_review", "pending_source_review", "pending"}
 REVIEW_GATED_SOURCES = {"discord_miner", "discord_traveler"}
+
+CONTENT_ANALYSIS_ALLOWED_KEYS = {
+    "version",
+    "analysis_status",
+    "evidence_tier",
+    "analysis_provenance",
+    "provider",
+    "summary_lines",
+    "claims",
+    "limitations",
+    "quota_units",
+    "confidence",
+    "operator_note_used",
+    "source_separation",
+    "fetched_at",
+    "expires_at",
+    "fallback_reason",
+    "policy_flags",
+}
+CONTENT_ANALYSIS_FORBIDDEN_KEYS = {
+    "raw_provider_payload",
+    "raw_transcript",
+    "caption_text",
+    "raw_caption",
+    "audio_bytes",
+    "audio_path",
+    "video_bytes",
+    "credential",
+    "credentials",
+    "access_token",
+    "refresh_token",
+    "private_body",
+}
+SENSITIVE_VALUE_MARKERS = ("token=", "access_token=", "refresh_token=", "secret=", "credential=")
+LEGACY_EVIDENCE_TIERS = {
+    "gemini_youtube_uri_no_transcript": "model_public_youtube_av_no_raw",
+    "model_youtube_uri_no_transcript": "model_public_youtube_av_no_raw",
+}
 
 
 @dataclass(frozen=True)
@@ -137,6 +176,7 @@ def _to_item(raw: object, max_summary_chars: int) -> CandidateItem | None:
         year=_year_from_date(published),
         venue=_venue(source, url),
         tags=tags,
+        metadata=(_media_metadata(raw) + _content_analysis_metadata(raw)),
         score=1.0,
     )
 
@@ -227,6 +267,118 @@ def _year_from_date(value: str) -> int | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).year
     except ValueError:
         return None
+
+
+def _media_metadata(raw: dict) -> tuple[tuple[str, str], ...]:
+    media = raw.get("media")
+    if not isinstance(media, dict):
+        return ()
+    if media.get("type") != "video" or media.get("platform") != "youtube" or not media.get("video_id"):
+        return ()
+    allowed = {
+        "type", "platform", "video_id", "canonical_url", "original_url", "start_seconds",
+        "playlist_id", "channel_title", "duration", "published_at", "provider", "parts",
+        "etag", "metadata_provenance", "analysis_provenance", "analysis_status",
+        "confidence", "fetched_at", "expires_at", "quota_units",
+    }
+    pairs: list[tuple[str, str]] = []
+    for key in sorted(allowed):
+        if key == "original_url":
+            continue
+        value = media.get(key)
+        if key == "canonical_url":
+            text = _safe_youtube_canonical_url(value, media.get("video_id"))
+            if text:
+                pairs.append(("media.canonical_url", text))
+            continue
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            text = ",".join(_clean_metadata_value(item) for item in value)
+        else:
+            if key in {"analysis_provenance", "metadata_provenance"}:
+                value = LEGACY_EVIDENCE_TIERS.get(clean_text(value), value)
+            text = _clean_metadata_value(value)
+        if text:
+            pairs.append((f"media.{key}", text))
+    return tuple(pairs)
+
+
+def _contains_forbidden_content_analysis(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key) in CONTENT_ANALYSIS_FORBIDDEN_KEYS or _contains_forbidden_content_analysis(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_forbidden_content_analysis(child) for child in value)
+    if isinstance(value, str):
+        lower = value.lower()
+        return any(marker in lower for marker in SENSITIVE_VALUE_MARKERS)
+    return False
+
+
+def _content_analysis_metadata(raw: dict) -> tuple[tuple[str, str], ...]:
+    analysis = raw.get("content_analysis")
+    if not isinstance(analysis, dict):
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for key in sorted(CONTENT_ANALYSIS_ALLOWED_KEYS):
+        if key == "status" or key not in analysis:
+            continue
+        value = analysis.get(key)
+        if value in (None, "", [], {}) or _contains_forbidden_content_analysis(value):
+            continue
+        if key == "evidence_tier":
+            value = LEGACY_EVIDENCE_TIERS.get(clean_text(value), value)
+        if key == "analysis_provenance":
+            value = LEGACY_EVIDENCE_TIERS.get(clean_text(value), value)
+        if isinstance(value, list):
+            compact: list[str] = []
+            for item in value[:4]:
+                if isinstance(item, dict):
+                    text = _clean_metadata_value(item.get("text") or item.get("basis") or "")
+                else:
+                    text = _clean_metadata_value(item)
+                if text and text != "[redacted]":
+                    compact.append(text[:180])
+            text = " | ".join(compact)
+        elif isinstance(value, (int, float, bool)):
+            text = str(value)
+        else:
+            text = _clean_metadata_value(value)
+        if text and text != "[redacted]":
+            pairs.append((f"content_analysis.{key}", text[:500]))
+    return tuple(pairs)
+
+
+def _safe_youtube_canonical_url(value: object, video_id_hint: object = "") -> str:
+    raw = clean_text(value)
+    parsed = urlparse(raw)
+    video_id = ""
+    host = (parsed.hostname or "").lower()
+    parts = [part for part in parsed.path.split("/") if part]
+    if host.endswith("youtu.be") and parts:
+        video_id = parts[0]
+    elif parsed.path == "/watch":
+        query = dict(part.split("=", 1) for part in parsed.query.split("&") if "=" in part)
+        video_id = query.get("v", "")
+    elif len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+        video_id = parts[1]
+    video_id = clean_text(video_id or video_id_hint)[:40]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+        return ""
+    return f"https://www.youtube.com/watch?{urlencode({'v': video_id})}"
+
+
+def _clean_metadata_value(value: object) -> str:
+    text = clean_text(value)[:500]
+    lower = text.lower()
+    if any(marker in lower for marker in SENSITIVE_VALUE_MARKERS):
+        return "[redacted]"
+    if re.search(r"(?i)(secret|credential|private_body|raw_provider_payload|raw_transcript|caption_text|raw_caption|audio_bytes|audio_path|video_bytes|access_token|refresh_token)", text):
+        return "[redacted]"
+    return text
 
 
 __all__ = ["ManualLinksAdapter", "ManualLinkSettings"]

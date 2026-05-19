@@ -242,3 +242,124 @@ def test_export_enrichment_failure_keeps_approved_export(tmp_path: Path) -> None
     assert len(rows) == 1
     assert rows[0]["url"] == "https://example.com/rag-fallback-title"
     assert "enrichment" not in rows[0]
+
+
+def test_export_approved_manual_links_preserves_sanitized_youtube_media(tmp_path: Path) -> None:
+    queue_path = tmp_path / "queue.jsonl"
+    decisions_path = tmp_path / "decisions.jsonl"
+    export_path = tmp_path / "approved.jsonl"
+    record = {
+        "intake_id": "miner_youtube",
+        "title": "LLM agent benchmark lecture",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "summary": "retrieval benchmark and agent evaluation",
+        "published_at": "2026-05-19",
+        "source": "discord_miner",
+        "status": "pending_claw_review",
+        "tags": ["pending_claw_review", "youtube-video"],
+        "media": {
+            "type": "video",
+            "platform": "youtube",
+            "video_id": "abc123XYZ09",
+            "canonical_url": "https://www.youtube.com/watch?v=abc123XYZ09",
+            "analysis_provenance": "metadata_only",
+            "analysis_status": "metadata_ready",
+            "raw_provider_payload": {"secret": "x"},
+            "transcript": "do not export",
+        },
+        "content_analysis": {
+            "analysis_status": "ready",
+            "evidence_tier": "gemini_youtube_uri_no_transcript",
+            "analysis_provenance": "gemini_youtube_uri_no_transcript",
+            "provider": "gemini",
+            "summary_lines": ["provider-derived audiovisual inference", "자막/transcript 근거 아님"],
+            "claims": [
+                {"text": "agent benchmark overview", "basis": "provider_model", "confidence": 0.4},
+                {"text": "bad token=SECRET", "basis": "raw_transcript", "raw_transcript": "secret"},
+            ],
+            "raw_provider_payload": {"secret": "x"},
+        },
+    }
+    queue_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id="miner_youtube", decision="approve")
+
+    rows = export_approved_manual_links(queue_path=queue_path, decisions_path=decisions_path, output_path=export_path)
+
+    assert rows[0]["media"]["video_id"] == "abc123XYZ09"
+    assert rows[0]["content_analysis"]["evidence_tier"] == "model_public_youtube_av_no_raw"
+    assert rows[0]["content_analysis"]["analysis_provenance"] == "gemini_public_youtube_av_no_raw"
+    assert rows[0]["content_analysis"]["summary_lines"] == [
+        "provider-derived audiovisual inference",
+        "자막/transcript 근거 아님",
+    ]
+    dumped = json.dumps(rows, ensure_ascii=False)
+    assert "raw_provider_payload" not in dumped
+    assert "do not export" not in dumped
+    assert "token=SECRET" not in dumped
+
+
+def test_export_enrich_skips_generic_html_for_youtube(tmp_path: Path) -> None:
+    queue_path = tmp_path / "queue.jsonl"
+    decisions_path = tmp_path / "decisions.jsonl"
+    export_path = tmp_path / "approved.jsonl"
+    record = {
+        "intake_id": "miner_youtube",
+        "title": "LLM benchmark",
+        "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+        "summary": "agent evaluation",
+        "published_at": "2026-05-19",
+        "source": "discord_miner",
+        "status": "pending_claw_review",
+        "tags": ["pending_claw_review", "youtube-video"],
+    }
+    queue_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id="miner_youtube", decision="approve")
+
+    def fail_fetch(_: str) -> PageMetadata:
+        raise AssertionError("generic HTML fetch must not run for YouTube")
+
+    rows = export_approved_manual_links(
+        queue_path=queue_path,
+        decisions_path=decisions_path,
+        output_path=export_path,
+        enrich=True,
+        metadata_fetcher=fail_fetch,
+    )
+
+    assert rows[0]["url"] == "https://www.youtube.com/watch?v=abc123XYZ09"
+
+
+def test_export_approved_manual_links_sanitizes_media_original_url(tmp_path: Path) -> None:
+    queue_path = tmp_path / "queue.jsonl"
+    decisions_path = tmp_path / "decisions.jsonl"
+    export_path = tmp_path / "approved.jsonl"
+    queue_path.write_text(
+        json.dumps(
+            {
+                "intake_id": "miner_youtube_secret",
+                "title": "LLM benchmark",
+                "url": "https://www.youtube.com/watch?v=abc123XYZ09",
+                "summary": "agent benchmark",
+                "published_at": "2026-05-19",
+                "source": "discord_miner",
+                "status": "pending_claw_review",
+                "tags": ["pending_claw_review", "youtube-video"],
+                "media": {
+                    "type": "video",
+                    "platform": "youtube",
+                    "video_id": "abc123XYZ09",
+                    "original_url": "https://www.youtube.com/watch?v=abc123XYZ09&t=90&token=SECRET&utm_source=x",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    record_decision(queue_path=queue_path, decisions_path=decisions_path, intake_id="miner_youtube_secret", decision="approve")
+
+    rows = export_approved_manual_links(queue_path=queue_path, decisions_path=decisions_path, output_path=export_path)
+
+    assert rows[0]["media"]["original_url"] == "https://www.youtube.com/watch?v=abc123XYZ09&t=90"
+    dumped = json.dumps(rows, ensure_ascii=False)
+    assert "SECRET" not in dumped
+    assert "utm_source" not in dumped
