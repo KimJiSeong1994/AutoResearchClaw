@@ -59,7 +59,8 @@ class JiphyeonjeonMinerBot(discord.Client):
         if message.author.bot and not traveler_relay:
             return
         try:
-            results = record_message_links(
+            results = await asyncio.to_thread(
+                record_message_links,
                 message_text=message.content,
                 intake_path=self.config.miner_intake_path,
                 review_queue_path=self.config.miner_review_queue_path,
@@ -101,8 +102,10 @@ async def _mine_command(
     if not bot.channel_allowed(interaction):
         await interaction.response.send_message("집현전-광부 링크 수집은 지정된 채널에서만 사용할 수 있습니다.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True, thinking=True)
     try:
-        results = record_requested_links(
+        results = await asyncio.to_thread(
+            record_requested_links,
             url=url,
             title=title,
             note=note,
@@ -115,13 +118,13 @@ async def _mine_command(
             ),
         )
     except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
+        await interaction.followup.send(str(exc), ephemeral=True)
         return
     except Exception:
         LOG.exception("miner slash request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
-        await interaction.response.send_message("집현전-광부 링크 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
+        await interaction.followup.send("집현전-광부 링크 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
         return
-    await interaction.response.send_message(render_ack(results), ephemeral=True)
+    await interaction.followup.send(render_ack(results), ephemeral=True)
 
 
 
@@ -137,8 +140,10 @@ async def _mine_youtube_channel_command(
         await interaction.response.send_message("집현전-광부 YouTube 채널 수집은 지정된 채널에서만 사용할 수 있습니다.", ephemeral=True)
         return
     safe_max_videos = max(1, min(25, int(max_videos or 5)))
+    await interaction.response.defer(ephemeral=True, thinking=True)
     try:
-        results = record_requested_links(
+        results = await asyncio.to_thread(
+            record_requested_links,
             url=channel_url,
             note=note,
             intake_path=bot.config.miner_intake_path,
@@ -151,13 +156,13 @@ async def _mine_youtube_channel_command(
             channel_max_videos=safe_max_videos,
         )
     except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
+        await interaction.followup.send(str(exc), ephemeral=True)
         return
     except Exception:
         LOG.exception("miner YouTube channel request failed guild=%s channel=%s", interaction.guild_id, interaction.channel_id)
-        await interaction.response.send_message("집현전-광부 YouTube 채널 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
+        await interaction.followup.send("집현전-광부 YouTube 채널 수집에 실패했습니다. 운영 로그를 확인해 주세요.", ephemeral=True)
         return
-    await interaction.response.send_message(render_ack(results), ephemeral=True)
+    await interaction.followup.send(render_ack(results), ephemeral=True)
 
 def build_miner_bot(config: MinerBotConfig) -> JiphyeonjeonMinerBot:
     bot = JiphyeonjeonMinerBot(config)
