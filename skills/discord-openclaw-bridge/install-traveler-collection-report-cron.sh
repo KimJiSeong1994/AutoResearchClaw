@@ -36,18 +36,24 @@ _SCHED_QUOTED=$(printf '%q' "$TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOCAL_RUNNER="$SCRIPT_DIR/project/scripts/run-traveler-collection-report.sh"
+LOCAL_WRAPPER="$REPO_DIR/scripts/traveler-collection-report.sh"
 LOCAL_SCOUT_TOPICS="$REPO_DIR/runtime/traveler-scout-topics.json"
 if [ ! -f "$LOCAL_RUNNER" ]; then
   echo "ERROR: cannot find committed runner at $LOCAL_RUNNER" >&2
   exit 2
 fi
+if [ ! -f "$LOCAL_WRAPPER" ]; then
+  echo "ERROR: cannot find stable wrapper at $LOCAL_WRAPPER" >&2
+  exit 2
+fi
 ssh -i "$KEY_FILE" "$REMOTE_HOST" "REMOTE_WORKSPACE=$_RW_QUOTED bash -s" <<'REMOTE_PREP'
 set -euo pipefail
 WORKSPACE="${REMOTE_WORKSPACE/#\~/$HOME}"
-mkdir -p "$WORKSPACE/scripts" "$WORKSPACE/logs"
+mkdir -p "$WORKSPACE/scripts" "$WORKSPACE/logs" "$WORKSPACE/skills/discord-openclaw-bridge/project/scripts"
 REMOTE_PREP
 
-rsync -az -e "ssh -i $KEY_FILE" "$LOCAL_RUNNER" "$REMOTE_HOST:$REMOTE_WORKSPACE/scripts/traveler-collection-report.sh"
+rsync -az -e "ssh -i $KEY_FILE" "$LOCAL_WRAPPER" "$REMOTE_HOST:$REMOTE_WORKSPACE/scripts/traveler-collection-report.sh"
+rsync -az -e "ssh -i $KEY_FILE" "$LOCAL_RUNNER" "$REMOTE_HOST:$REMOTE_WORKSPACE/skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh"
 if [ -f "$LOCAL_SCOUT_TOPICS" ]; then
   ssh -i "$KEY_FILE" "$REMOTE_HOST" "REMOTE_WORKSPACE=$_RW_QUOTED bash -s" <<'REMOTE_TOPICS_PREP'
 set -euo pipefail
@@ -61,9 +67,12 @@ ssh -i "$KEY_FILE" "$REMOTE_HOST" \
   "REMOTE_WORKSPACE=$_RW_QUOTED TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE=$_SCHED_QUOTED bash -s" <<'REMOTE'
 set -euo pipefail
 WORKSPACE="${REMOTE_WORKSPACE/#\~/$HOME}"
-RUNNER="$WORKSPACE/scripts/traveler-collection-report.sh"
-mkdir -p "$WORKSPACE/scripts" "$WORKSPACE/logs"
-chmod +x "$RUNNER"
+WRAPPER="$WORKSPACE/scripts/traveler-collection-report.sh"
+RUNNER="$WORKSPACE/skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh"
+mkdir -p "$WORKSPACE/scripts" "$WORKSPACE/logs" "$(dirname "$RUNNER")"
+chmod +x "$WRAPPER" "$RUNNER"
+bash -n "$WRAPPER"
+bash -n "$RUNNER"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 crontab -l 2>/dev/null | awk '
@@ -74,10 +83,12 @@ crontab -l 2>/dev/null | awk '
 cat >> "$TMP" <<EOF_CRON
 # BEGIN JIPHYEONJEON TRAVELER COLLECTION REPORT
 # EC2 cron runs in UTC. 13:00 UTC = 22:00 Asia/Seoul (KST).
-$TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE $RUNNER
+$TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE $WRAPPER
 # END JIPHYEONJEON TRAVELER COLLECTION REPORT
 EOF_CRON
 crontab "$TMP"
+echo "verified traveler wrapper and runner:"
+ls -l "$WRAPPER" "$RUNNER"
 echo "installed traveler-collection-report cron:"
 crontab -l | grep -A3 -B1 "JIPHYEONJEON TRAVELER COLLECTION REPORT"
 REMOTE

@@ -77,9 +77,16 @@ class RuntimeManifestTest(unittest.TestCase):
     def test_traveler_runner_uses_runtime_scout_topics(self) -> None:
         runner = ROOT / "skills" / "discord-openclaw-bridge" / "project" / "scripts" / "run-traveler-collection-report.sh"
         installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"
+        stable_entrypoint = ROOT / "scripts" / "traveler-collection-report.sh"
 
         self.assertIn("runtime/traveler-scout-topics.json", runner.read_text(encoding="utf-8"))
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
+        self.assertTrue(stable_entrypoint.exists())
+        self.assertIn("run-traveler-collection-report.sh", stable_entrypoint.read_text(encoding="utf-8"))
+        installer_text = installer.read_text(encoding="utf-8")
+        self.assertIn("scripts/traveler-collection-report.sh", installer_text)
+        self.assertIn("bash -n \"$WRAPPER\"", installer_text)
+        self.assertIn("bash -n \"$RUNNER\"", installer_text)
 
     def test_newsletter_cron_uses_committed_runners(self) -> None:
         skill_root = ROOT / "skills" / "discord-openclaw-bridge"
