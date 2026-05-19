@@ -26,7 +26,7 @@ responds in `DISCORD_MINER_CHANNEL_ID`.
 ## Discord agent registry and cowork process
 
 The main OpenClaw bridge registers `/jiphyeonjeon_agents` as a safe, channel-visible
-read-only roster with the Editor/Advisor badge images attached. The command documents how the Jiphyeonjeon agents cooperate;
+read-only roster with the Editor/Advisor badge images attached. When the allowlisted channel is a Discord forum, commands are accepted from threads under that forum parent. The command documents how the Jiphyeonjeon agents cooperate;
 it does not run trust scripts, approve links, promote candidates, or publish to
 Discord. It is synchronized with the guild when the main bridge starts and
 `setup_hook()` calls `CommandTree.sync()`.
@@ -40,7 +40,7 @@ Registered workflow roles:
    and appends pending review records.
 3. **집현전-클로** — content review owner. It records append-only approve, reject,
    or hold decisions and produces approved-only exports.
-4. **집현정-편집자** — advisory-only canonical identity editor. It compares
+4. **집현전-편집자** — advisory-only canonical identity editor. It compares
    JSON/JSONL artifacts across newsletter, manual links, research, card-news,
    and wiki-adjacent surfaces to report duplicate content identities. Badge asset:
    `project/assets/jiphyeonjeon-editor-agent.png`.
@@ -61,7 +61,7 @@ Traveler source discovery
 → Miner collection-only intake
 → Claw append-only content review
 → Newsletter candidate artifact / daily research artifacts
-→ 집현정-편집자 duplicate/canonical identity advisory report
+→ 집현전-편집자 duplicate/canonical identity advisory report
 → 집현전-지도교수 evidence/citation advisory verdict
 → human editorial review (promotion coordinator pending_future_phase)
 → card-news/newsletter/blog/wiki publication surfaces
@@ -72,6 +72,23 @@ The pending human review/promotion coordinator is intentionally not registered
 as an active Discord command, runtime agent, or job. Until a later approval
 phase defines that state machine, Editor/Advisor verdicts remain advisory and
 must not be interpreted as automatic promotion approval.
+
+
+## Pre-publication Editor/Advisor trust gate
+
+Before daily newsletter or card-news posting, the bridge now runs two read-only
+checks and aborts before any Discord side effect if either gate blocks:
+
+1. **집현전-편집자** builds a canonical identity report for the source artifact
+   and optional `JIPHYEONJEON_EDITOR_IDENTITY_INPUTS`. Duplicate groups block by
+   default (`JIPHYEONJEON_EDITOR_BLOCK_DUPLICATES=1`).
+2. **집현전-지도교수** checks evidence URL count, source-domain diversity,
+   row-level citation coverage, and overclaim language. Non-`pass` verdicts
+   block by default (`JIPHYEONJEON_ADVISOR_BLOCK_NON_PASS=1`).
+
+Reports are written under `JIPHYEONJEON_TRUST_GATE_REPORT_DIR` and are advisory,
+read-only artifacts; they do not mutate queues, approve content, or publish. Set
+`JIPHYEONJEON_PUBLICATION_TRUST_GATE=0` only for an explicit operator override.
 
 ## 집현전-광부 link-intake path
 
@@ -243,6 +260,12 @@ guard agent).
 To publish briefings immediately after the token is configured:
 
 ```bash
+# Full daily newsletter archive + card-news runner used by EC2 cron.
+bash project/scripts/run-newsletter-archive-and-cardnews.sh
+
+# Daily Jiphyeonjeon briefing runner used by EC2 cron.
+bash project/scripts/run-daily-jiphyeonjeon-briefing.sh
+
 # Markdown briefing from DISCORD_BRIEFING_SOURCE.
 bash project/scripts/post-briefing.sh
 
@@ -258,12 +281,13 @@ newsletter archive publisher (23:00 UTC = 08:00 KST), install the idempotent
 cron runner from the repository root:
 
 ```bash
-bash skills/discord-openclaw-bridge/install-card-news-cron.sh
+bash skills/discord-openclaw-bridge/install-newsletter-archive-cron.sh
 ```
 
-The scheduled runner starts on the same cron minute and waits briefly before
-posting, so the newsletter archive job can finish writing the fresh
-`raw/newsletters/YYYY-MM-DD/items.json` first.
+The installer rsyncs committed runner files to
+`~/.openclaw/workspace/scripts/` and syntax-checks them before replacing cron.
+This prevents crontab from pointing at a deleted heredoc-generated script after
+workspace cleanup or deploy.
 
 ## Card-news publishing path
 

@@ -57,7 +57,7 @@ Do not commit private keys, `.env` files, Discord tokens, OpenClaw gateway token
 - CI never stores secrets in the repository.
 - `.env`, `.env.local`, `.env.production`, `.venv`, `__pycache__`, and `*.pyc` are excluded from rsync.
 - `skills/`, `runtime/`, and `scripts/` are synchronized with `rsync --delete`; remote-only files under those directories can be removed. Keep operational secrets outside these synchronized paths or use the excluded filenames above.
-- `집현정-편집자` and `집현전-지도교수` remain advisory-only; CI deployment does not create automatic content promotion.
+- `집현전-편집자` and `집현전-지도교수` remain advisory-only; CI deployment does not create automatic content promotion.
 - Production deployment is attached to the `production` environment so GitHub environment protection rules can require approval before deploy.
 
 ## Rollback and post-deploy checks

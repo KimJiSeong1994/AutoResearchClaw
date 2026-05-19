@@ -85,12 +85,18 @@ class OpenClawDiscordBot(discord.Client):
         await message.reply(_trim(answer, self.config.max_response_chars), mention_author=False)
 
     def channel_allowed(self, interaction: discord.Interaction) -> bool:
-        return bool(
-            interaction.guild is not None
-            and interaction.guild.id == self.config.guild_id
-            and interaction.channel is not None
-            and interaction.channel.id == self.config.allowed_channel_id
-        )
+        if interaction.guild is None or interaction.guild.id != self.config.guild_id:
+            return False
+        channel = interaction.channel
+        if channel is None:
+            return False
+        if channel.id == self.config.allowed_channel_id:
+            return True
+        parent = getattr(channel, "parent", None)
+        if parent is not None and getattr(parent, "id", None) == self.config.allowed_channel_id:
+            return True
+        parent_id = getattr(channel, "parent_id", None)
+        return parent_id == self.config.allowed_channel_id
 
 def jiphyeonjeon_agent_image_paths() -> list[Path]:
     """Return available visual identity assets for the Jiphyeonjeon registry."""
@@ -110,7 +116,7 @@ def render_jiphyeonjeon_agent_registry() -> str:
         "- 집현전-여행자: 공개 출처 후보를 찾는 research-only agent. 광부 seed/클로 review로 넘기지만 직접 승인하지 않습니다.\n"
         "- 집현전-광부: Discord/seed 링크를 수집해 pending review queue에 넣는 collection-only agent.\n"
         "- 집현전-클로: Miner pending link를 approve/reject/hold로 판단하는 content review owner.\n"
-        "- 집현정-편집자: 여러 표면의 JSON/JSONL artifact를 canonical identity로 묶고 중복 그룹을 보고하는 advisory-only agent. 이미지: jiphyeonjeon-editor-agent.png\n"
+        "- 집현전-편집자: 여러 표면의 JSON/JSONL artifact를 canonical identity로 묶고 중복 그룹을 보고하는 advisory-only agent. 이미지: jiphyeonjeon-editor-agent.png\n"
         "- 집현전-지도교수: 연구/게시 artifact의 evidence URL, source diversity, citation coverage, overclaim risk를 검토하는 advisory-only agent. 이미지: jiphyeonjeon-advisor-agent.png\n"
         "- 집현전-경비원: stale run, backlog, handoff 실패를 관측하는 ops guard.\n"
         "- Card-news publisher: sanitized archive를 Discord card-news로 렌더링하되 quality gate 실패 시 게시 전 중단합니다.\n\n"
@@ -118,7 +124,7 @@ def render_jiphyeonjeon_agent_registry() -> str:
         "1. 여행자 → 후보 출처 발굴 및 evidence-backed source candidate 기록.\n"
         "2. 광부 → 링크 수집, sanitize, pending_claw_review queue 기록.\n"
         "3. 클로 → approve/reject/hold append-only decision 및 approved-only export.\n"
-        "4. 집현정-편집자 → newsletter/manual/card/wiki/research artifact 간 중복·동일성 advisory report.\n"
+        "4. 집현전-편집자 → newsletter/manual/card/wiki/research artifact 간 중복·동일성 advisory report.\n"
         "5. 집현전-지도교수 → 공개 근거·인용 품질 advisory verdict.\n"
         "6. 사람 편집 검토 → promotion coordinator는 아직 pending_future_phase. 자동 승격 없음.\n"
         "7. Publisher → 승인된 sanitized artifact만 게시. 게시/삭제 전 quality gate와 운영 설정 확인.\n\n"

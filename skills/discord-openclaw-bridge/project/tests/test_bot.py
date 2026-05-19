@@ -70,7 +70,7 @@ def test_main_bridge_ignores_messages_in_miner_channel(tmp_path: Path) -> None:
 def test_agent_registry_mentions_new_agents_and_pending_promotion() -> None:
     rendered = render_jiphyeonjeon_agent_registry()
 
-    assert "집현정-편집자" in rendered
+    assert "집현전-편집자" in rendered
     assert "집현전-지도교수" in rendered
     assert "pending_future_phase" in rendered
     assert "queue 수정" in rendered
@@ -84,3 +84,13 @@ def test_agent_registry_image_assets_are_packaged() -> None:
     assert "jiphyeonjeon-editor-agent.png" in names
     assert "jiphyeonjeon-advisor-agent.png" in names
     assert all(path.stat().st_size > 0 for path in paths)
+
+
+def test_main_bridge_allows_threads_under_allowed_forum(tmp_path: Path) -> None:
+    bot = build_bot(_bridge_config(tmp_path))
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=1),
+        channel=SimpleNamespace(id=99, parent_id=20),
+    )
+
+    assert bot.channel_allowed(interaction)

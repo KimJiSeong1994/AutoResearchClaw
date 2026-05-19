@@ -3,13 +3,13 @@
 ## Decision
 Add two read-only advisory runtime control-plane agents for Auto Research trust hardening:
 
-1. `jiphyeonjeon-editor` / **집현정-편집자** — cross-surface canonical identity and dedupe reporting.
+1. `jiphyeonjeon-editor` / **집현전-편집자** — cross-surface canonical identity and dedupe reporting.
 2. `jiphyeonjeon-advisor` / **집현전-지도교수** — evidence coverage, source diversity, citation-quality, and overclaim gate.
 
 Keep the Human Review / Promotion Coordinator explicitly **pending**. It must not become an active runtime agent or job in this phase.
 
 ## Naming note
-`집현정-편집자` preserves the user-provided Korean display name exactly, even though other project agents use the `집현전-*` prefix. The stable runtime ID remains ASCII/lowercase as `jiphyeonjeon-editor`.
+`집현전-편집자` is the Korean display name; the stable runtime ID remains ASCII/lowercase as `jiphyeonjeon-editor`.
 
 ## Drivers
 1. Auto Research needs a cross-pipeline trust layer before adding more collection volume.
@@ -18,7 +18,7 @@ Keep the Human Review / Promotion Coordinator explicitly **pending**. It must no
 4. The first implementation must be local, read-only, testable, and safe before any production/Discord side effects.
 
 ## Scope
-### 1. 집현정-편집자 / Canonical Identity
+### 1. 집현전-편집자 / Canonical Identity
 - Read one or more JSON/JSONL artifacts.
 - Produce canonical keys from DOI, arXiv, OpenReview, sanitized URL, or normalized title fallback.
 - Report duplicate groups across inputs.
@@ -42,7 +42,7 @@ Keep the Human Review / Promotion Coordinator explicitly **pending**. It must no
 - Keep command refs pointing to existing local scripts only.
 
 ## Acceptance criteria
-- `집현정-편집자` script reports duplicate groups without mutating input files.
+- `집현전-편집자` script reports duplicate groups without mutating input files.
 - `집현전-지도교수` script distinguishes pass/fail/needs_review based on evidence coverage and source diversity.
 - Runtime manifests validate and contain both new agents/jobs.
 - Promotion coordinator remains absent from active runtime manifests.

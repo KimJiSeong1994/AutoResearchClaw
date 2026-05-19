@@ -7,6 +7,8 @@ from pathlib import Path
 
 import httpx
 
+from .publication_trust_gate import PublicationTrustGateError, run_publication_trust_gate
+
 DISCORD_SUPPRESS_EMBEDS_FLAG = 1 << 2
 NEWSLETTER_TITLE = "집현전-Claw 뉴스레터 수집 브리핑"
 
@@ -206,6 +208,7 @@ async def run() -> None:
         "on",
     }
     body = _load_message(source, max_chars=max_chars * 20)
+    trust_summary = run_publication_trust_gate(source, surface="newsletter-briefing")
     messages = _split_newsletter_messages(body, max_chars=max_chars)
 
     url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
@@ -223,13 +226,16 @@ async def run() -> None:
                 suppress_embeds=suppress_embeds,
             )
     suffix = f" purged={purged}" if purge_previous else ""
-    print(f"posted newsletter briefing to channel={channel_id} source={source} messages={len(messages)}{suffix}")
+    print(
+        f"posted newsletter briefing to channel={channel_id} source={source} messages={len(messages)}"
+        f" trust_gate={trust_summary.get('decision')}{suffix}"
+    )
 
 
 def main() -> None:
     try:
         asyncio.run(run())
-    except (NewsletterPostConfigError, httpx.HTTPError) as exc:
+    except (NewsletterPostConfigError, PublicationTrustGateError, httpx.HTTPError) as exc:
         print(f"newsletter post failed: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 

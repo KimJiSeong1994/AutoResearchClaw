@@ -50,7 +50,7 @@ class JiphyeonjeonTrustAgentsTest(unittest.TestCase):
             )
             report = identity.build_report([first, second])
         self.assertEqual("jiphyeonjeon-editor", report["agent_id"])
-        self.assertEqual("집현정-편집자", report["agent_name"])
+        self.assertEqual("집현전-편집자", report["agent_name"])
         self.assertTrue(report["no_mutation"])
         self.assertTrue(report["advisory_only"])
         self.assertTrue(report["requires_human_promotion_review"])

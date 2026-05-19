@@ -50,7 +50,7 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("jiphyeonjeon-advisor", agent_ids)
         self.assertNotIn("editorial-promotion-coordinator", job_ids)
         self.assertNotIn("editorial-promotion-coordinator", agent_ids)
-        self.assertIn("집현정-편집자", agents_text)
+        self.assertIn("집현전-편집자", agents_text)
         self.assertIn("집현전-지도교수", agents_text)
 
     def test_editor_and_advisor_are_advisory_only_without_promotion_activation(self) -> None:
@@ -80,6 +80,30 @@ class RuntimeManifestTest(unittest.TestCase):
 
         self.assertIn("runtime/traveler-scout-topics.json", runner.read_text(encoding="utf-8"))
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
+
+    def test_newsletter_cron_uses_committed_runners(self) -> None:
+        skill_root = ROOT / "skills" / "discord-openclaw-bridge"
+        newsletter_runner = skill_root / "project" / "scripts" / "run-newsletter-archive-and-cardnews.sh"
+        briefing_runner = skill_root / "project" / "scripts" / "run-daily-jiphyeonjeon-briefing.sh"
+        installer = skill_root / "install-newsletter-archive-cron.sh"
+        stable_newsletter_entrypoint = ROOT / "scripts" / "newsletter-archive-and-cardnews.sh"
+        stable_briefing_entrypoint = ROOT / "scripts" / "daily-jiphyeonjeon-briefing.sh"
+
+        self.assertTrue(newsletter_runner.exists())
+        self.assertTrue(briefing_runner.exists())
+        self.assertTrue(stable_newsletter_entrypoint.exists())
+        self.assertTrue(stable_briefing_entrypoint.exists())
+        self.assertIn("run-newsletter-archive-and-cardnews.sh", stable_newsletter_entrypoint.read_text(encoding="utf-8"))
+        self.assertIn("run-daily-jiphyeonjeon-briefing.sh", stable_briefing_entrypoint.read_text(encoding="utf-8"))
+        installer_text = installer.read_text(encoding="utf-8")
+        self.assertIn("run-newsletter-archive-and-cardnews.sh", installer_text)
+        self.assertIn("run-daily-jiphyeonjeon-briefing.sh", installer_text)
+        self.assertIn("rsync -az", installer_text)
+        self.assertIn("bash -n \"$NEWSLETTER_RUNNER\"", installer_text)
+
+        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        self.assertIn("install-newsletter-archive-cron.sh", jobs_text)
+        self.assertIn("run-newsletter-archive-and-cardnews.sh", jobs_text)
 
     def test_malformed_yaml_is_rejected_when_yaml_parser_available(self) -> None:
         if shutil.which("ruby") is None:

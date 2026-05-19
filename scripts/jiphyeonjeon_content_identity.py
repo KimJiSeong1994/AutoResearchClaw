@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-surface content identity report for 집현정-편집자.
+"""Cross-surface content identity report for 집현전-편집자.
 
 This script is intentionally read-only. It accepts JSON or JSONL artifacts from
 Miner, newsletter, recommendation, card-news, or wiki-adjacent surfaces and
@@ -167,7 +167,7 @@ def build_report(paths: list[Path]) -> dict[str, Any]:
     ]
     return {
         "agent_id": "jiphyeonjeon-editor",
-        "agent_name": "집현정-편집자",
+        "agent_name": "집현전-편집자",
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "input_counts": input_counts,
         "item_count": sum(input_counts.values()),

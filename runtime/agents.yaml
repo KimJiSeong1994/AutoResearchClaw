@@ -262,7 +262,7 @@ agents:
       - candidate artifacts are not publish-ready and must pass separate editorial review
 
   - id: jiphyeonjeon-editor
-    name: 집현정-편집자 canonical identity editor
+    name: 집현전-편집자 canonical identity editor
     kind: trust-agent
     source_refs:
       - scripts/jiphyeonjeon_content_identity.py

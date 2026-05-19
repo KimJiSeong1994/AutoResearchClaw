@@ -253,6 +253,9 @@ jobs:
     type: cron-and-manual
     owner_agent: card-news-publisher
     command_refs:
+      - bash skills/discord-openclaw-bridge/install-newsletter-archive-cron.sh
+      - skills/discord-openclaw-bridge/project/scripts/run-newsletter-archive-and-cardnews.sh
+      - skills/discord-openclaw-bridge/project/scripts/run-daily-jiphyeonjeon-briefing.sh
       - bash skills/discord-openclaw-bridge/install-card-news-cron.sh
       - skills/discord-openclaw-bridge/project/scripts/post-card-news.sh
       - skills/discord-openclaw-bridge/project/scripts/post-newsletter-briefing.sh
@@ -265,12 +268,16 @@ jobs:
       - raw/newsletters/YYYY-MM-DD/items.json
       - DISCORD_BRIEFING_SOURCE
       - DISCORD_NEWSLETTER_BRIEFING_SOURCE
+    pre_publish_checks:
+      - jiphyeonjeon-editor-canonical-identity-report
+      - jiphyeonjeon-advisor-evidence-quality-gate
     outputs:
       - Discord card-news thread or channel post
       - card-news-publication-audit.jsonl
+      - jiphyeonjeon-trust-gates/*.json
     safety:
-      side_effects: public Discord posting and optional previous-post purge
-      secrets: audit records must contain sanitized public metadata only
+      side_effects: public Discord posting and optional previous-post purge after Editor/Advisor gates pass
+      secrets: audit records and trust-gate reports must contain sanitized public metadata only
 
   - id: jiphyeonjeon-traveler-source-discovery
     name: Discover durable high-trust collection sources
@@ -411,6 +418,7 @@ jobs:
     command_refs:
       - python3 scripts/jiphyeonjeon_content_identity.py <artifact.json> [artifact.jsonl ...]
     triggers:
+      - automatic before daily newsletter/card-news publication
       - before large Claw review sessions
       - before newsletter/card-news/blog/wiki editorial planning
       - after daily research or newsletter archive artifact generation
@@ -434,6 +442,7 @@ jobs:
       - python3 scripts/jiphyeonjeon_research_quality_gate.py <artifact.md|artifact.json|artifact.jsonl>
       - python3 scripts/jiphyeonjeon_research_quality_gate.py --min-evidence 2 --min-domains 1 <artifact>
     triggers:
+      - automatic before daily newsletter/card-news publication
       - manual advisory check before public card-news/blog/wiki publication
       - manual advisory check before promoting daily research or trend reports to publishable artifacts
       - manual advisory check after deep research synthesis artifact generation

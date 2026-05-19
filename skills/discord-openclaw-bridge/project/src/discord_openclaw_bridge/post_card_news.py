@@ -29,6 +29,7 @@ from .post_newsletter import (
     _post_message_with_rate_limit,
     _required_snowflake,
 )
+from .publication_trust_gate import PublicationTrustGateError, run_publication_trust_gate
 
 DEFAULT_CARD_NEWS_CHANNEL_ID = ""
 DEFAULT_OPS_REPORT_CHANNEL_ID = "1502980129343672504"  # 운영리포팅 forum
@@ -2409,6 +2410,7 @@ async def run() -> None:
         "off",
     }
     payload = _load_archive(source)
+    trust_summary = run_publication_trust_gate(source, surface="card-news")
     enrich_public_urls = os.environ.get("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "1").strip().lower() not in {
         "0",
         "false",
@@ -2567,13 +2569,16 @@ async def run() -> None:
         except OSError as exc:
             print(f"card news publish audit write failed: {exc}", file=sys.stderr)
     thread_note = f" thread={thread_id}" if thread_id else ""
-    print(f"posted card news to channel={channel_id}{thread_note} source={source} messages={len(messages)} purged={purged}")
+    print(
+        f"posted card news to channel={channel_id}{thread_note} source={source} "
+        f"messages={len(messages)} purged={purged} trust_gate={trust_summary.get('decision')}"
+    )
 
 
 def main() -> None:
     try:
         asyncio.run(run())
-    except (NewsletterPostConfigError, httpx.HTTPError) as exc:
+    except (NewsletterPostConfigError, PublicationTrustGateError, httpx.HTTPError) as exc:
         print(f"card news post failed: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
