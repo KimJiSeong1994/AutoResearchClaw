@@ -6,20 +6,47 @@ import shutil
 import sys
 import tempfile
 import unittest
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_PATH = ROOT / "scripts" / "check-runtime-manifests.py"
 DEPLOY_PATH = ROOT / "scripts" / "deploy-openclaw-workspace.sh"
+AUDIT_JOB_ID = "jiphyeonjeon-audit-team-digest"
+AUDIT_AGENT_ID = "jiphyeonjeon-audit-team"
+FORBIDDEN_AUDIT_COMMAND_SUBSTRINGS = (
+    "systemctl start",
+    "systemctl restart",
+    "crontab",
+    "install-cron",
+    "install-newsletter",
+    "install-card-news",
+    "deploy",
+    "post-card-news",
+    "post-newsletter",
+    "approve",
+    "reject",
+    " hold",
+)
+REQUIRED_AUDIT_BOUNDARY_PHRASES = (
+    "does not approve",
+    "does not mutate cron",
+    "append-only",
+    "never prints",
+)
 
 
-def load_checker():
+def load_checker() -> Any:
     spec = importlib.util.spec_from_file_location("check_runtime_manifests", CHECK_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def entries_by_id(checker: Any, manifest_text: str) -> dict[str, Any]:
+    return {entry.id: entry for entry in checker._entries(manifest_text)}
 
 
 class RuntimeManifestTest(unittest.TestCase):
@@ -38,8 +65,8 @@ class RuntimeManifestTest(unittest.TestCase):
 
     def test_required_phase_one_jobs_and_agents_are_declared(self) -> None:
         checker = load_checker()
-        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text()
-        agents_text = (ROOT / "runtime" / "agents.yaml").read_text()
+        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        agents_text = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
         job_ids = {entry.id for entry in checker._entries(jobs_text)}
         agent_ids = {entry.id for entry in checker._entries(agents_text)}
         self.assertTrue(checker.REQUIRED_JOB_IDS.issubset(job_ids))
@@ -52,6 +79,49 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertNotIn("editorial-promotion-coordinator", agent_ids)
         self.assertIn("집현전-편집자", agents_text)
         self.assertIn("집현전-지도교수", agents_text)
+
+    def test_audit_team_is_read_only_and_scoped(self) -> None:
+        checker = load_checker()
+        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text()
+        agents_text = (ROOT / "runtime" / "agents.yaml").read_text()
+        jobs = entries_by_id(checker, jobs_text)
+        agents = entries_by_id(checker, agents_text)
+        job = jobs[AUDIT_JOB_ID]
+        agent = agents[AUDIT_AGENT_ID]
+        self.assertEqual(AUDIT_AGENT_ID, job.fields["owner_agent"])
+        self.assertIn("health-check", job.fields["type"])
+        command_refs = " ".join(job.lists["command_refs"]).lower()
+        self.assertIn("discord-openclaw-audit-team", command_refs)
+        for forbidden in FORBIDDEN_AUDIT_COMMAND_SUBSTRINGS:
+            self.assertNotIn(forbidden, command_refs)
+        boundaries = " ".join(agent.lists["boundaries"]).lower()
+        for required in REQUIRED_AUDIT_BOUNDARY_PHRASES:
+            self.assertIn(required, boundaries)
+        # The negative command gate is intentionally scoped to the audit job;
+        # existing non-audit runtime jobs may legitimately install cron or post.
+        all_non_audit_commands = " ".join(
+            " ".join(entry.lists.get("command_refs", []))
+            for entry in jobs.values()
+            if entry.id != AUDIT_JOB_ID
+        ).lower()
+        self.assertIn("install-newsletter-archive-cron.sh", all_non_audit_commands)
+        self.assertIn("post-card-news.sh", all_non_audit_commands)
+
+    def test_runtime_checker_rejects_forbidden_audit_command_refs(self) -> None:
+        checker = load_checker()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            shutil.copytree(ROOT / "runtime", tmp_root / "runtime")
+            jobs_path = tmp_root / "runtime" / "jobs.yaml"
+            jobs_path.write_text(
+                jobs_path.read_text(encoding="utf-8").replace(
+                    "uv run discord-openclaw-audit-team\n",
+                    "uv run discord-openclaw-audit-team\n      - systemctl restart discord-openclaw-bridge.service\n",
+                ),
+                encoding="utf-8",
+            )
+            errors = checker.validate_runtime_manifests(tmp_root)
+        self.assertTrue(any("audit command_refs" in error for error in errors), errors)
 
     def test_editor_and_advisor_are_advisory_only_without_promotion_activation(self) -> None:
         checker = load_checker()

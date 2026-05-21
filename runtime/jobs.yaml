@@ -390,6 +390,40 @@ jobs:
       side_effects: read-only digest, optional append-only Guard issue queue write, and optional Discord report posting
       secrets: never print Discord bot token values
 
+  - id: jiphyeonjeon-audit-team-digest
+    name: Jiphyeonjeon Audit Team integrated operations digest
+    type: health-check
+    owner_agent: jiphyeonjeon-audit-team
+    command_refs:
+      - uv run discord-openclaw-audit-team
+      - uv run discord-openclaw-audit-team --write-issue-queue --write-audit-log
+    triggers:
+      - manual operations review
+      - after Guard ops digest when broader audit coverage is needed
+      - before changing publication or collection schedules
+    inputs:
+      - runtime/jobs.yaml
+      - runtime/agents.yaml
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.openclaw/workspace/review/newsletter-candidates/candidate-review.jsonl
+      - ~/.openclaw/workspace/logs/discord-card-news/card-news-publication-audit.jsonl
+      - ~/.openclaw/workspace/reports/jiphyeonjeon-trust-gates/*.json
+    outputs:
+      - stdout Audit Team digest JSON by default
+      - optional append-only ~/.openclaw/workspace/review/jiphyeonjeon-audit/issues.jsonl
+      - optional append-only ~/.openclaw/workspace/logs/jiphyeonjeon-audit/audit-log.jsonl
+    checks:
+      - schedule cron drift from captured snapshots and committed wrappers
+      - Discord service liveness freshness from captured log/status metadata
+      - scheduled review backlog count and age SLA
+      - protected trust-gate block incidents and repeated block windows
+      - provenance and schema integrity across intake, review, candidate, wiki, and runtime manifests
+      - API/provider rate-limit degraded and failure status artifacts
+    safety:
+      side_effects: read-only digest by default; optional append-only audit issue/log writes only
+      secrets: never print Discord bot tokens, webhooks, API keys, relay tokens, or private bodies
+
   - id: jiphyeonjeon-review-queue-optimizer-report
     name: Jiphyeonjeon review queue optimizer report
     type: report

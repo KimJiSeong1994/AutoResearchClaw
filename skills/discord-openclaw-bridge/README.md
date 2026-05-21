@@ -392,3 +392,30 @@ Install the app with scopes `bot applications.commands`, then restrict the app/b
 - Discord and OpenClaw tokens are read from local secret files/env only.
 - Card-news output is generated from already-sanitized newsletter archive fields; do not add raw email bodies or secret env values to card text.
 - Full prompts are not logged by default.
+
+## 집현전-감사팀 integrated audit path
+
+`discord-openclaw-audit-team` is the read-only fan-in audit surface for broader Jiphyeonjeon operations. It complements, but does not replace, 집현전-경비원, 집현전-클로, 집현전-편집자, 집현전-지도교수, candidate orchestration, or publishers.
+
+Phase 1 audit suites:
+
+- `schedule_cron_drift` — committed runner and captured cron/status drift.
+- `discord_liveness_log_lag` — sanitized log/status freshness inference only; true event-loop lag instrumentation is a later phase.
+- `scheduled_backlog_sla` — Claw review pending count and age SLA.
+- `trust_gate_incidents` — protected publication trust-gate blocks and repeated block windows.
+- `provenance_schema` — intake/review/candidate/wiki/runtime schema and provenance markers.
+- `api_rate_budget` — provider 429/degraded/failure status artifacts.
+
+Default execution prints a JSON digest to stdout and creates no files:
+
+```bash
+uv run discord-openclaw-audit-team
+```
+
+Optional writes are append-only and separate from content review state:
+
+```bash
+uv run discord-openclaw-audit-team --write-issue-queue --write-audit-log
+```
+
+Safety boundary: the audit team never approves, rejects, holds, promotes, publishes, edits cron, restarts services, deploys code, rewrites artifacts, or prints token/webhook/API-key/private-body values.

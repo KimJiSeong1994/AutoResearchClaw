@@ -40,6 +40,7 @@ REQUIRED_JOB_IDS = {
     "discord-jiphyeonjeon-miner-service",
     "jiphyeonjeon-miner-review",
     "jiphyeonjeon-guard-ops-digest",
+    "jiphyeonjeon-audit-team-digest",
     "jiphyeonjeon-review-queue-optimizer-report",
     "jiphyeonjeon-newsletter-candidate-orchestrator",
     "jiphyeonjeon-editor-canonical-identity-report",
@@ -56,6 +57,7 @@ REQUIRED_AGENT_IDS = {
     "discord-openclaw-bridge",
     "jiphyeonjeon-miner",
     "jiphyeonjeon-guard",
+    "jiphyeonjeon-audit-team",
     "review-queue-optimizer",
     "newsletter-candidate-orchestrator",
     "jiphyeonjeon-editor",
@@ -72,6 +74,53 @@ class Entry:
     fields: dict[str, str]
     lists: dict[str, list[str]]
 
+
+AUDIT_JOB_ID = "jiphyeonjeon-audit-team-digest"
+AUDIT_AGENT_ID = "jiphyeonjeon-audit-team"
+AUDIT_REQUIRED_BOUNDARY_PHRASES = (
+    "does not approve",
+    "does not mutate cron",
+    "append-only",
+    "never prints",
+)
+AUDIT_FORBIDDEN_COMMAND_RE = re.compile(
+    r"(?i)(systemctl\s+(?:start|restart)|\bcrontab\b|install-[^\s]*cron|deploy|post-card-news|post-newsletter|\bapprove\b|\breject\b|\shold\b)"
+)
+
+
+def _entry_by_id(entries: list[Entry], entry_id: str) -> Entry | None:
+    return next((entry for entry in entries if entry.id == entry_id), None)
+
+
+def _validate_audit_team_boundaries(jobs: list[Entry], agents: list[Entry], errors: list[str]) -> None:
+    job = _entry_by_id(jobs, AUDIT_JOB_ID)
+    agent = _entry_by_id(agents, AUDIT_AGENT_ID)
+    if job is not None:
+        command_refs = " ".join(job.lists.get("command_refs", []))
+        if AUDIT_FORBIDDEN_COMMAND_RE.search(command_refs):
+            errors.append(
+                f"job {AUDIT_JOB_ID}: audit command_refs must not contain remediation, cron, publish, or review-decision commands"
+            )
+
+        job_safety_text = " ".join(
+            [
+                *job.fields.values(),
+                *job.lists.get("outputs", []),
+                *job.lists.get("checks", []),
+            ]
+        ).lower()
+        if (
+            "append-only" not in command_refs.lower()
+            and "append-only" not in job_safety_text
+            and "read-only" not in job_safety_text
+        ):
+            errors.append(f"job {AUDIT_JOB_ID}: safety must state read-only/append-only audit boundary")
+
+    if agent is not None:
+        boundaries = " ".join(agent.lists.get("boundaries", [])).lower()
+        for required in AUDIT_REQUIRED_BOUNDARY_PHRASES:
+            if required not in boundaries:
+                errors.append(f"agent {AUDIT_AGENT_ID}: missing audit boundary phrase: {required}")
 
 
 def _validate_yaml_syntax(path: Path, errors: list[str]) -> None:
@@ -236,6 +285,7 @@ def validate_runtime_manifests(root: Path) -> list[str]:
     if orphan_jobs:
         errors.append(f"jobs not referenced by any agent owns_jobs: {', '.join(orphan_jobs)}")
 
+    _validate_audit_team_boundaries(job_entries, agent_entries, errors)
     _validate_source_refs(root, agent_entries, errors)
     return errors
 

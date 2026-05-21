@@ -219,6 +219,34 @@ agents:
       - guard issue queue writes must be append-only and separate from Jiphyeonjeon-Claw content review
       - Discord posting remains observability only and must not hide collection failures
 
+  - id: jiphyeonjeon-audit-team
+    name: 집현전-감사팀 integrated operations auditor
+    kind: audit-agent
+    source_refs:
+      - .omx/plans/prd-jiphyeonjeon-audit-team.md
+      - .omx/plans/test-spec-jiphyeonjeon-audit-team.md
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/audit_ops.py
+    owns_jobs:
+      - jiphyeonjeon-audit-team-digest
+    runtime:
+      issue_queue_path: JIPHYEONJEON_AUDIT_ISSUE_QUEUE_PATH
+      audit_log_path: JIPHYEONJEON_AUDIT_LOG_PATH
+      review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
+      decisions_path: JIPHYEONJEON_MINER_DECISIONS_PATH
+      candidate_path: JIPHYEONJEON_NEWSLETTER_CANDIDATE_PATH
+      trust_gate_report_dir: JIPHYEONJEON_TRUST_GATE_REPORT_DIR
+    responsibilities:
+      - fan in scheduler drift, liveness freshness, backlog SLA, trust gate, provenance schema, and provider rate-limit signals
+      - emit read-only stdout digests by default without creating files
+      - optionally append sanitized issue and audit rows only when explicitly requested
+      - preserve owner boundaries for Guard, Claw, Editor, Advisor, candidate orchestration, and publishers
+    boundaries:
+      - does not approve, reject, hold, promote, or publish content
+      - does not mutate cron, restart services, deploy code, or remediate production state
+      - does not rewrite Miner, Claw, newsletter, card-news, wiki, or publication artifacts
+      - audit issue and audit log writes must be append-only and separate from Jiphyeonjeon-Claw content review
+      - never prints Discord bot tokens, webhooks, API keys, relay tokens, or private message/newsletter bodies
+
   - id: review-queue-optimizer
     name: 집현전 review queue optimizer
     kind: report-agent
