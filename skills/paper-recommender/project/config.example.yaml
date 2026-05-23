@@ -16,7 +16,7 @@ profile:
   # A future management page will overwrite this list.
   seed_topics:
     - dynamic word embedding
-    - dynamic graph embedding
+    - graph representation learning benchmarks
     - diachronic semantic change
   max_bookmarks_for_profile: 40
   # Also build a narrative Markdown profile for the A/B experiment.

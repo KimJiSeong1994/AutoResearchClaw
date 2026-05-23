@@ -35,6 +35,12 @@ DEFAULT_NEWSLETTER_ARCHIVE_CHANNEL_ID = "1501073491921993758"
 NEWSLETTER_ARCHIVE_TITLE = "집현전-Claw 뉴스레타 아카이브"
 NEWSLETTER_ARCHIVE_THREAD_NAME_MARKERS = ("뉴스레타 아카이브",)
 DISCORD_MESSAGE_LIMIT = 1900
+_GRAPH_EMBEDDING_FAMILY_RE = re.compile(
+    r"\b(?:dynamic|temporal|heterogeneous|multiplex|evolving)\s+(?:graph|network)\s+"
+    r"(?:embedding|representation(?:\s+learning)?)\b"
+    r"|\b(?:graph|network)\s+representation\s+learning\b",
+    re.IGNORECASE,
+)
 
 
 def _topic_label(item: dict[str, Any]) -> str:
@@ -87,6 +93,16 @@ def _canonical_dedupe_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
 
 
+def _semantic_family_key(item: dict[str, Any]) -> str:
+    text = " ".join(
+        _clean(item.get(key), limit=240)
+        for key in ("article_title", "title", "public_excerpt", "article_description", "summary", "description")
+    )
+    if _GRAPH_EMBEDDING_FAMILY_RE.search(text):
+        return "graph_representation_learning"
+    return ""
+
+
 def _canonical_content_key(item: dict[str, Any]) -> str:
     title = _title(item).lower()
     description = _description(item, limit=240).lower()
@@ -100,18 +116,26 @@ def _dedupe_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
     deduped: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     seen_content: set[str] = set()
+    seen_semantic: set[str] = set()
     duplicate_count = 0
     for item in items:
         url_key = _canonical_dedupe_url(_clean(item.get("url")))
         if not url_key:
             continue
         content_key = _canonical_content_key(item)
-        if url_key in seen_urls or (content_key and content_key in seen_content):
+        semantic_key = _semantic_family_key(item)
+        if (
+            url_key in seen_urls
+            or (content_key and content_key in seen_content)
+            or (semantic_key and semantic_key in seen_semantic)
+        ):
             duplicate_count += 1
             continue
         seen_urls.add(url_key)
         if content_key:
             seen_content.add(content_key)
+        if semantic_key:
+            seen_semantic.add(semantic_key)
         deduped.append(item)
     return deduped, duplicate_count
 

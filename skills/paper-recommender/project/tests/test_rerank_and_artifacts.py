@@ -344,6 +344,40 @@ def test_weekly_query_validation_caps_and_defangs(tmp_path: Path) -> None:
     assert 1 <= len(fallback) <= 2
 
 
+def test_weekly_query_generation_collapses_graph_embedding_variants(tmp_path: Path) -> None:
+    from paper_recommender.trend_queries import _dedupe_queries, fallback_trend_queries
+
+    settings = _settings(tmp_path)
+    settings.weekly_report.max_queries = 5
+    queries = _dedupe_queries(
+        [
+            {"query": "dynamic graph embedding", "axis": "dynamic graph embedding", "rationale": "seed"},
+            {"query": "graph representation learning benchmarks", "axis": "graph representation learning", "rationale": "canonical"},
+            {"query": "heterogeneous graph embedding", "axis": "heterogeneous graph embedding", "rationale": "seed"},
+            {"query": "diachronic semantic change", "axis": "diachronic semantic change", "rationale": "seed"},
+        ],
+        settings.weekly_report.max_queries,
+    )
+
+    assert [q["query"] for q in queries] == [
+        "graph representation learning recent benchmarks",
+        "diachronic semantic change",
+    ]
+    assert queries[0]["axis"] == "graph representation learning"
+    rendered = " ".join(q["query"] + " " + q["axis"] for q in queries).lower()
+    assert "dynamic graph embedding" not in rendered
+    assert "heterogeneous graph embedding" not in rendered
+
+    fallback = fallback_trend_queries(
+        settings,
+        None,
+        {"keywords": ["dynamic graph embedding", "graph representation learning benchmarks", "heterogeneous graph embedding", "diachronic semantic change"]},
+    )
+    rendered_fallback = " ".join(q["query"] + " " + q["axis"] for q in fallback).lower()
+    assert rendered_fallback.count("graph representation learning") == 2
+    assert "dynamic graph embedding" not in rendered_fallback
+    assert "heterogeneous graph embedding" not in rendered_fallback
+
 def test_trend_report_validation_drops_unknown_paper_ids() -> None:
     from paper_recommender.trend_report import validate_trend_report
 

@@ -740,6 +740,36 @@ def test_card_news_renderer_deduplicates_titles_and_prioritizes_topic_spread() -
     assert "**제목**" not in joined
 
 
+
+def test_select_cards_collapses_repeated_graph_embedding_family() -> None:
+    items = [
+        {
+            "article_title": "Dynamic graph embedding for anomaly detection",
+            "url": "https://example.com/dynamic-graph",
+            "primary_topic_display": "검색/RAG/지식그래프",
+            "public_excerpt": "Dynamic graph embedding benchmark.",
+        },
+        {
+            "article_title": "Heterogeneous graph embedding for recommendation",
+            "url": "https://example.com/heterogeneous-graph",
+            "primary_topic_display": "검색/RAG/지식그래프",
+            "public_excerpt": "Heterogeneous graph embedding benchmark.",
+        },
+        {
+            "article_title": "Vision-language evaluation",
+            "url": "https://example.com/vision",
+            "primary_topic_display": "멀티모달/비전",
+            "public_excerpt": "Distinct vision-language benchmark.",
+        },
+    ]
+
+    selected = _select_cards(items, max_cards=3)
+    titles = [item["article_title"] for item in selected]
+
+    assert len(selected) == 2
+    assert any("graph embedding" in title.lower() for title in titles)
+    assert "Vision-language evaluation" in titles
+
 def test_card_news_bot_message_matcher_targets_only_card_news_bot_messages() -> None:
     assert _is_card_news_bot_message({"content": f"**{CARD_NEWS_TITLE}**", "author": {"bot": True}})
     assert not _is_card_news_bot_message({"content": f"**{CARD_NEWS_TITLE}**", "author": {"bot": False}})

@@ -142,6 +142,40 @@ def test_newsletter_archive_deduplicates_same_content_across_different_urls() ->
     assert "Different RAG benchmark" in rendered
 
 
+
+def test_newsletter_archive_collapses_repeated_graph_embedding_family() -> None:
+    payload = {
+        "date": "2026-05-23",
+        "items": [
+            {
+                "article_title": "Dynamic graph embedding for anomaly detection",
+                "url": "https://example.com/dynamic-graph",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "public_excerpt": "Dynamic graph embedding benchmark.",
+            },
+            {
+                "article_title": "Heterogeneous graph embedding for recommendation",
+                "url": "https://example.com/heterogeneous-graph",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "public_excerpt": "Heterogeneous graph embedding benchmark.",
+            },
+            {
+                "article_title": "RAG evaluation benchmark",
+                "url": "https://example.com/rag-eval",
+                "primary_topic_display": "검색/RAG/지식그래프",
+                "public_excerpt": "Distinct retrieval benchmark.",
+            },
+        ],
+    }
+
+    rendered = "\n".join(render_newsletter_archive_messages(payload, max_items_per_topic=12))
+
+    assert "공개 원본 링크: 2개" in rendered
+    assert "중복 제거: 1개" in rendered
+    lower = rendered.lower()
+    assert lower.count("dynamic graph embedding") + lower.count("heterogeneous graph embedding") <= 2
+    assert "RAG evaluation benchmark" in rendered
+
 def test_newsletter_archive_bot_message_matcher_targets_only_archive_bot_messages() -> None:
     assert _is_newsletter_archive_bot_message(
         {"content": f"**{NEWSLETTER_ARCHIVE_TITLE} — 2026-05-05**", "author": {"bot": True}}

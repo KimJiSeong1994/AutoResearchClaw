@@ -42,6 +42,13 @@ CARD_NEWS_THREAD_NAME_MARKERS = (
 
 CARD_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━"
 GENERIC_TOPIC = "기타 테크 리포트"
+
+_GRAPH_EMBEDDING_FAMILY_RE = re.compile(
+    r"\b(?:dynamic|temporal|heterogeneous|multiplex|evolving)\s+(?:graph|network)\s+"
+    r"(?:embedding|representation(?:\s+learning)?)\b"
+    r"|\b(?:graph|network)\s+representation\s+learning\b",
+    re.IGNORECASE,
+)
 LEAN_DISCLAIMER_WITH_EXCERPT = "확인 한계: 위 문장은 공개 페이지 요약/초록 기준입니다. 세부 실험 조건은 원문에서 확인해야 합니다."
 LEAN_DISCLAIMER_WITHOUT_EXCERPT = "확인 한계: 공개 요약/초록을 확보하지 못했습니다. 제목만으로 결론을 내리지 않습니다."
 CONNECTIVES = ("따라서", "다만", "구체적으로", "한편")
@@ -1396,6 +1403,16 @@ def _append_card_news_audit(audit_path: Path, record: dict[str, Any]) -> None:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _semantic_family_key(item: dict[str, Any]) -> str:
+    text = " ".join(
+        _clean(item.get(key), limit=240)
+        for key in ("article_title", "title", "public_excerpt", "article_description", "summary", "description")
+    )
+    if _GRAPH_EMBEDDING_FAMILY_RE.search(text):
+        return "graph_representation_learning"
+    return ""
+
+
 def _sort_by_quality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (_item_quality_score(item), _url_quality(_clean(item.get("url")))), reverse=True)
 
@@ -1414,16 +1431,26 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
     selected: list[dict[str, Any]] = []
     seen_titles: set[str] = set()
     seen_stories: set[str] = set()
+    seen_semantic: set[str] = set()
     for item in _sort_by_quality([item for item in items if _publishable_card(item)]):
         title_key = _canonical_title_key(item)
         story_key = _story_key(item)
         url = _clean(item.get("url"))
         key = title_key or url
-        if not url or not key or key in seen_titles or story_key in seen_stories:
+        semantic_key = _semantic_family_key(item)
+        if (
+            not url
+            or not key
+            or key in seen_titles
+            or story_key in seen_stories
+            or (semantic_key and semantic_key in seen_semantic)
+        ):
             continue
         seen_titles.add(key)
         if story_key:
             seen_stories.add(story_key)
+        if semantic_key:
+            seen_semantic.add(semantic_key)
         selected.append(item)
         if len(selected) >= max_cards:
             break
@@ -1437,9 +1464,12 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
                 title_key = _canonical_title_key(item)
                 url = _clean(item.get("url"))
                 key = title_key or url
-                if not url or not key or key in seen_titles:
+                semantic_key = _semantic_family_key(item)
+                if not url or not key or key in seen_titles or (semantic_key and semantic_key in seen_semantic):
                     continue
                 seen_titles.add(key)
+                if semantic_key:
+                    seen_semantic.add(semantic_key)
                 selected.append(item)
                 break
             if len(selected) >= max_cards:

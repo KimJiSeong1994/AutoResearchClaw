@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -186,7 +188,10 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("오늘의 핵심 항목", briefing_text)
         self.assertIn("canonical_url", briefing_text)
         self.assertIn("normalized_title", briefing_text)
-        self.assertIn("제목 기준 핵심 묶음", briefing_text)
+        self.assertIn("semantic_family", briefing_text)
+        self.assertIn("GRAPH_EMBEDDING_FAMILY_RE", briefing_text)
+        self.assertIn("display_title", briefing_text)
+        self.assertIn("주제 기준 핵심 묶음", briefing_text)
         self.assertIn("daily-trends-latest.md", briefing_text)
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("run-newsletter-archive-and-cardnews.sh", installer_text)
@@ -197,6 +202,45 @@ class RuntimeManifestTest(unittest.TestCase):
         jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
         self.assertIn("install-newsletter-archive-cron.sh", jobs_text)
         self.assertIn("run-newsletter-archive-and-cardnews.sh", jobs_text)
+
+
+    def test_daily_briefing_runner_collapses_graph_embedding_family(self) -> None:
+        runner = ROOT / "skills" / "discord-openclaw-bridge" / "project" / "scripts" / "run-daily-jiphyeonjeon-briefing.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            builder = workspace / "skills" / "paper-recommender" / "scripts" / "newsletter-archive-briefing.sh"
+            publisher = workspace / "skills" / "discord-openclaw-bridge" / "project" / ".venv" / "bin" / "discord-openclaw-post-briefing"
+            builder.parent.mkdir(parents=True)
+            publisher.parent.mkdir(parents=True)
+            builder.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$(dirname "$NEWSLETTER_REPORT_PATH")" "$(dirname "$NEWSLETTER_ARCHIVE_SOURCE")"
+cat > "$NEWSLETTER_ARCHIVE_SOURCE" <<JSON
+{"date":"$NEWSLETTER_DATE","items":[{"title":"Dynamic graph embedding survey","public_excerpt":"Dynamic graph embedding methods","url":"https://example.com/dyn","source":"A"},{"title":"Graph representation learning benchmarks","public_excerpt":"Graph representation learning benchmark set","url":"https://example.com/canonical","source":"B"},{"title":"Heterogeneous graph embedding benchmark","public_excerpt":"Heterogeneous graph embedding methods","url":"https://example.com/het","source":"C"},{"title":"RAG evaluation benchmark","public_excerpt":"Distinct retrieval benchmark","url":"https://example.com/rag","source":"D"}]}
+JSON
+printf '**집현전-Claw 기술 블로그 브리핑**\n작성일: `%s`\n' "$NEWSLETTER_DATE" > "$NEWSLETTER_REPORT_PATH"
+""",
+                encoding="utf-8",
+            )
+            publisher.write_text("#!/usr/bin/env bash\nset -euo pipefail\ncat \"$DISCORD_BRIEFING_SOURCE\" >/dev/null\n", encoding="utf-8")
+            builder.chmod(0o755)
+            publisher.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update({"OPENCLAW_WORKSPACE": str(workspace), "NEWSLETTER_DATE": "2026-05-23", "DAILY_BRIEFING_WAIT_SECONDS": "0"})
+            subprocess.run(["bash", str(runner)], env=env, check=True, cwd=ROOT)
+
+            rendered = (workspace / "reports" / "daily-trends-latest.md").read_text(encoding="utf-8")
+            lower = rendered.lower()
+            self.assertIn("주제 기준 핵심 묶음 2개", rendered)
+            self.assertIn("그래프 표현학습 최신 벤치마크 묶음", rendered)
+            self.assertIn("관련 링크: 같은 제목으로 수집된 추가 공개 링크 2개", rendered)
+            self.assertIn("RAG evaluation benchmark", rendered)
+            self.assertEqual(2, rendered.count("### "))
+            self.assertNotIn("dynamic graph embedding", lower)
+            self.assertNotIn("heterogeneous graph embedding", lower)
+            self.assertNotIn("graph representation learning benchmarks", lower)
 
     def test_malformed_yaml_is_rejected_when_yaml_parser_available(self) -> None:
         if shutil.which("ruby") is None:

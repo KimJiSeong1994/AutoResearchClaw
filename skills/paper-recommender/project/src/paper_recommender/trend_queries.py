@@ -9,6 +9,14 @@ from paper_recommender.config import Settings
 from paper_recommender.llm import OpenClawLLM
 
 _MAX_QUERY_CHARS = 160
+_GRAPH_EMBEDDING_FAMILY_RE = re.compile(
+    r"\b(?:dynamic|temporal|heterogeneous|multiplex|evolving)\s+(?:graph|network)\s+"
+    r"(?:embedding|representation(?:\s+learning)?)\b"
+    r"|\b(?:graph|network)\s+representation\s+learning\b",
+    re.IGNORECASE,
+)
+_GRAPH_EMBEDDING_CANONICAL_QUERY = "graph representation learning recent benchmarks"
+_GRAPH_EMBEDDING_CANONICAL_AXIS = "graph representation learning"
 _SOUL_QUERY_SKIP_MARKERS = (
     "changelog",
     "change log",
@@ -37,6 +45,24 @@ def _safe_text(value: Any, *, limit: int = 6000) -> str:
     return text[:limit]
 
 
+def _semantic_query_family(value: str) -> str | None:
+    if _GRAPH_EMBEDDING_FAMILY_RE.search(value):
+        return "graph_representation_learning"
+    return None
+
+
+def _canonicalize_query_for_family(query: str, family: str | None) -> str:
+    if family == "graph_representation_learning":
+        return _GRAPH_EMBEDDING_CANONICAL_QUERY
+    return query
+
+
+def _canonicalize_axis_for_family(axis: str, family: str | None) -> str:
+    if family == "graph_representation_learning":
+        return _GRAPH_EMBEDDING_CANONICAL_AXIS
+    return axis
+
+
 def _clean_query(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -55,13 +81,17 @@ def _dedupe_queries(items: list[dict[str, str]], cap: int) -> list[dict[str, str
         q = _clean_query(item.get("query"))
         if not q:
             continue
-        key = q.lower()
+        family = _semantic_query_family(q)
+        q = _canonicalize_query_for_family(q, family)
+        raw_axis = _safe_text(item.get("axis") or "trend", limit=80).strip() or "trend"
+        axis = _canonicalize_axis_for_family(raw_axis, family)
+        key = (family or q).lower()
         if key in seen:
             continue
         seen.add(key)
         out.append({
             "query": q,
-            "axis": _safe_text(item.get("axis") or "trend", limit=80).strip() or "trend",
+            "axis": axis,
             "rationale": _safe_text(item.get("rationale") or "SOUL/profile-derived query", limit=240).strip(),
         })
         if len(out) >= cap:

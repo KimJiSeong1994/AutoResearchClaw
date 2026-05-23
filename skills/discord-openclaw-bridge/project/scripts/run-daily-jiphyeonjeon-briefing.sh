@@ -142,6 +142,12 @@ from urllib.parse import urlsplit, urlunsplit
 run_date = os.environ["NEWSLETTER_DATE"]
 archive_path = Path(os.environ["NEWSLETTER_ARCHIVE_SOURCE"]).expanduser()
 output_path = Path(os.environ["DISCORD_BRIEFING_SOURCE"]).expanduser()
+GRAPH_EMBEDDING_FAMILY_RE = re.compile(
+    r"\b(?:dynamic|temporal|heterogeneous|multiplex|evolving)\s+(?:graph|network)\s+"
+    r"(?:embedding|representation(?:\s+learning)?)\b"
+    r"|\b(?:graph|network)\s+representation\s+learning\b",
+    re.IGNORECASE,
+)
 
 
 def clean(value: object, *, limit: int = 240) -> str:
@@ -182,6 +188,28 @@ def normalized_title(value: object) -> str:
     return re.sub(r"\W+", " ", clean(value, limit=180).lower()).strip()
 
 
+def semantic_family(item: dict[str, object]) -> str:
+    text = " ".join(
+        clean(item.get(key), limit=240)
+        for key in ("article_title", "title", "public_excerpt", "article_description", "summary", "description")
+    )
+    if GRAPH_EMBEDDING_FAMILY_RE.search(text):
+        return "graph_representation_learning"
+    return ""
+
+
+def display_title(item: dict[str, object]) -> str:
+    if item.get("_semantic_key") == "graph_representation_learning" or semantic_family(item) == "graph_representation_learning":
+        return "그래프 표현학습 최신 벤치마크 묶음"
+    return item_title(item)
+
+
+def display_summary(item: dict[str, object]) -> str:
+    if item.get("_semantic_key") == "graph_representation_learning" or semantic_family(item) == "graph_representation_learning":
+        return "동적·이종 그래프 표현학습 계열 공개 링크를 하나의 후속 읽기 후보로 묶었습니다."
+    return item_summary(item)
+
+
 def source_label(item: dict[str, object]) -> str:
     for key in ("source", "sender", "newsletter", "source_name", "venue"):
         value = clean(item.get(key), limit=70)
@@ -197,26 +225,32 @@ if not isinstance(items, list):
 
 unique: list[dict[str, object]] = []
 seen: set[str] = set()
+seen_semantic: set[str] = set()
 for raw in items:
     if not isinstance(raw, dict):
         continue
     title = item_title(raw)
     url = canonical_url(raw.get("url"))
     title_key = normalized_title(title)
+    semantic_key = semantic_family(raw)
     key = title_key or url
     if not key:
         continue
-    if key in seen:
+    if key in seen or (semantic_key and semantic_key in seen_semantic):
+        match_key = key if key in seen else semantic_key
         for existing in unique:
-            if existing.get("_dedupe_key") == key:
+            if existing.get("_dedupe_key") == key or existing.get("_semantic_key") == match_key:
                 related_urls = existing.setdefault("_related_urls", [])
                 if isinstance(related_urls, list) and url and url not in related_urls:
                     related_urls.append(url)
                 break
         continue
     seen.add(key)
+    if semantic_key:
+        seen_semantic.add(semantic_key)
     item = dict(raw)
     item["_dedupe_key"] = key
+    item["_semantic_key"] = semantic_key
     item["_related_urls"] = [url] if url else []
     unique.append(item)
 
@@ -225,14 +259,14 @@ lead = selected[:3]
 lines = [
     "**집현전 데일리 뉴스레터**",
     f"작성일: `{run_date}`",
-    f"기반 아카이브: `{archive_path.name}` · 수집 {len(items)}개 / 제목 기준 핵심 묶음 {len(unique)}개",
+    f"기반 아카이브: `{archive_path.name}` · 수집 {len(items)}개 / 주제 기준 핵심 묶음 {len(unique)}개",
     "개인정보 경계: 메일 본문/비밀값 없이 데일리 아카이브의 공개 제목·요약·출처 링크만 사용",
     "",
     "> 오늘의 3줄 요약",
 ]
 if lead:
     for idx, item in enumerate(lead, start=1):
-        lines.append(f"> {idx}. {item_title(item)} — {item_summary(item)}")
+        lines.append(f"> {idx}. {display_title(item)} — {display_summary(item)}")
 else:
     lines += [
         "> 1. 오늘 데일리 아카이브에 게시할 공개 후보가 없습니다.",
@@ -243,8 +277,8 @@ lines += ["", "## 오늘의 핵심 항목"]
 if not selected:
     lines.append("- 공개 링크 후보 없음")
 for idx, item in enumerate(selected, start=1):
-    title = item_title(item)
-    summary = item_summary(item)
+    title = display_title(item)
+    summary = display_summary(item)
     url = canonical_url(item.get("url"))
     source = source_label(item)
     related_urls = item.get("_related_urls")
@@ -261,7 +295,7 @@ lines += [
     "",
     "## 운영 메모",
     "- 이 브리핑은 주간 research-trends가 아니라 당일 raw newsletter archive에서 직접 생성됩니다.",
-    "- 같은 제목은 핵심 묶음으로 합쳐 반복 게시 체감을 줄입니다.",
+    "- 같은 제목·반복 주제군은 핵심 묶음으로 합쳐 반복 게시 체감을 줄입니다.",
 ]
 output_path.parent.mkdir(parents=True, exist_ok=True)
 output_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
