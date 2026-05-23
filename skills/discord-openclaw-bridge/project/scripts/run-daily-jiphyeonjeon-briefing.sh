@@ -131,8 +131,116 @@ if ! report_matches_run_date; then
 fi
 
 mkdir -p "$(dirname "$DISCORD_BRIEFING_SOURCE")"
-cp "$NEWSLETTER_REPORT_PATH" "$DISCORD_BRIEFING_SOURCE"
-echo "daily briefing source refreshed from newsletter briefing: $DISCORD_BRIEFING_SOURCE"
+python3 - <<'PY_DAILY_BRIEFING'
+import json
+import os
+import re
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+run_date = os.environ["NEWSLETTER_DATE"]
+archive_path = Path(os.environ["NEWSLETTER_ARCHIVE_SOURCE"]).expanduser()
+output_path = Path(os.environ["DISCORD_BRIEFING_SOURCE"]).expanduser()
+
+
+def clean(value: object, *, limit: int = 240) -> str:
+    text = " ".join(str(value or "").replace("​", " ").split())
+    text = re.sub(r"[*_`]+", "", text).strip()
+    if len(text) > limit:
+        return text[: max(0, limit - 1)].rstrip(" ,.;") + "…"
+    return text
+
+
+def canonical_url(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    parsed = urlsplit(raw)
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
+
+
+def item_title(item: dict[str, object]) -> str:
+    return clean(item.get("article_title") or item.get("title") or item.get("subject") or "제목 없음", limit=110)
+
+
+def item_summary(item: dict[str, object]) -> str:
+    for key in ("summary", "description", "content_summary", "excerpt", "note"):
+        value = clean(item.get(key), limit=190)
+        if value:
+            return value
+    title = item_title(item)
+    return f"공개 아카이브에 수집된 `{title}` 항목을 원문 기준으로 확인할 필요가 있습니다."
+
+
+def source_label(item: dict[str, object]) -> str:
+    for key in ("source", "sender", "newsletter", "source_name", "venue"):
+        value = clean(item.get(key), limit=70)
+        if value:
+            return value
+    url = canonical_url(item.get("url"))
+    return urlsplit(url).netloc if url else "unknown-source"
+
+payload = json.loads(archive_path.read_text(encoding="utf-8"))
+items = payload.get("items") if isinstance(payload, dict) else []
+if not isinstance(items, list):
+    items = []
+
+unique: list[dict[str, object]] = []
+seen: set[str] = set()
+for raw in items:
+    if not isinstance(raw, dict):
+        continue
+    title = item_title(raw)
+    url = canonical_url(raw.get("url"))
+    key = url or title.lower()
+    if not key or key in seen:
+        continue
+    seen.add(key)
+    unique.append(raw)
+
+selected = unique[:7]
+lead = selected[:3]
+lines = [
+    "**집현전 데일리 뉴스레터**",
+    f"작성일: `{run_date}`",
+    f"기반 아카이브: `{archive_path.name}` · 수집 {len(items)}개 / 중복 제거 {len(unique)}개",
+    "개인정보 경계: 메일 본문/비밀값 없이 데일리 아카이브의 공개 제목·요약·출처 링크만 사용",
+    "",
+    "> 오늘의 3줄 요약",
+]
+if lead:
+    for idx, item in enumerate(lead, start=1):
+        lines.append(f"> {idx}. {item_title(item)} — {item_summary(item)}")
+else:
+    lines += [
+        "> 1. 오늘 데일리 아카이브에 게시할 공개 후보가 없습니다.",
+        "> 2. 수집 경로와 relay 상태를 확인해야 합니다.",
+        "> 3. 다음 실행에서 신규 공개 링크 여부를 다시 점검합니다.",
+    ]
+lines += ["", "## 오늘의 핵심 항목"]
+if not selected:
+    lines.append("- 공개 링크 후보 없음")
+for idx, item in enumerate(selected, start=1):
+    title = item_title(item)
+    summary = item_summary(item)
+    url = canonical_url(item.get("url"))
+    source = source_label(item)
+    lines += [
+        f"### {idx}. {title}",
+        f"- 핵심 내용: {summary}",
+        f"- 왜 중요한가: 오늘 아카이브에서 확인된 `{source}` 기반 변화 신호입니다.",
+        f"- 확인 링크: {url or '공개 링크 없음'}",
+    ]
+lines += [
+    "",
+    "## 운영 메모",
+    "- 이 브리핑은 주간 research-trends가 아니라 당일 raw newsletter archive에서 직접 생성됩니다.",
+    "- 같은 제목/URL은 한 번만 노출해 반복 게시 체감을 줄입니다.",
+]
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+PY_DAILY_BRIEFING
+echo "daily briefing source rendered from daily archive: $DISCORD_BRIEFING_SOURCE"
 
 cd "$BRIDGE_PROJECT"
 .venv/bin/discord-openclaw-post-briefing
