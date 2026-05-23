@@ -135,6 +135,7 @@ python3 - <<'PY_DAILY_BRIEFING'
 import json
 import os
 import re
+from html import unescape
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -152,7 +153,7 @@ def clean(value: object, *, limit: int = 240) -> str:
 
 
 def canonical_url(value: object) -> str:
-    raw = str(value or "").strip()
+    raw = unescape(str(value or "")).strip()
     if not raw.startswith(("http://", "https://")):
         return ""
     parsed = urlsplit(raw)
@@ -164,12 +165,21 @@ def item_title(item: dict[str, object]) -> str:
 
 
 def item_summary(item: dict[str, object]) -> str:
-    for key in ("summary", "description", "content_summary", "excerpt", "note"):
+    summary_lines = item.get("summary_lines")
+    if isinstance(summary_lines, list):
+        joined = clean(" / ".join(str(line) for line in summary_lines if line), limit=190)
+        if joined:
+            return joined
+    for key in ("summary", "article_description", "description", "content_summary", "public_excerpt", "excerpt", "note"):
         value = clean(item.get(key), limit=190)
         if value:
             return value
     title = item_title(item)
     return f"공개 아카이브에 수집된 `{title}` 항목을 원문 기준으로 확인할 필요가 있습니다."
+
+
+def normalized_title(value: object) -> str:
+    return re.sub(r"\W+", " ", clean(value, limit=180).lower()).strip()
 
 
 def source_label(item: dict[str, object]) -> str:
@@ -192,18 +202,30 @@ for raw in items:
         continue
     title = item_title(raw)
     url = canonical_url(raw.get("url"))
-    key = url or title.lower()
-    if not key or key in seen:
+    title_key = normalized_title(title)
+    key = title_key or url
+    if not key:
+        continue
+    if key in seen:
+        for existing in unique:
+            if existing.get("_dedupe_key") == key:
+                related_urls = existing.setdefault("_related_urls", [])
+                if isinstance(related_urls, list) and url and url not in related_urls:
+                    related_urls.append(url)
+                break
         continue
     seen.add(key)
-    unique.append(raw)
+    item = dict(raw)
+    item["_dedupe_key"] = key
+    item["_related_urls"] = [url] if url else []
+    unique.append(item)
 
 selected = unique[:7]
 lead = selected[:3]
 lines = [
     "**집현전 데일리 뉴스레터**",
     f"작성일: `{run_date}`",
-    f"기반 아카이브: `{archive_path.name}` · 수집 {len(items)}개 / 중복 제거 {len(unique)}개",
+    f"기반 아카이브: `{archive_path.name}` · 수집 {len(items)}개 / 제목 기준 핵심 묶음 {len(unique)}개",
     "개인정보 경계: 메일 본문/비밀값 없이 데일리 아카이브의 공개 제목·요약·출처 링크만 사용",
     "",
     "> 오늘의 3줄 요약",
@@ -225,17 +247,21 @@ for idx, item in enumerate(selected, start=1):
     summary = item_summary(item)
     url = canonical_url(item.get("url"))
     source = source_label(item)
+    related_urls = item.get("_related_urls")
+    extra_count = max(0, len(related_urls) - 1) if isinstance(related_urls, list) else 0
     lines += [
         f"### {idx}. {title}",
         f"- 핵심 내용: {summary}",
         f"- 왜 중요한가: 오늘 아카이브에서 확인된 `{source}` 기반 변화 신호입니다.",
         f"- 확인 링크: {url or '공개 링크 없음'}",
     ]
+    if extra_count:
+        lines.append(f"- 관련 링크: 같은 제목으로 수집된 추가 공개 링크 {extra_count}개")
 lines += [
     "",
     "## 운영 메모",
     "- 이 브리핑은 주간 research-trends가 아니라 당일 raw newsletter archive에서 직접 생성됩니다.",
-    "- 같은 제목/URL은 한 번만 노출해 반복 게시 체감을 줄입니다.",
+    "- 같은 제목은 핵심 묶음으로 합쳐 반복 게시 체감을 줄입니다.",
 ]
 output_path.parent.mkdir(parents=True, exist_ok=True)
 output_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

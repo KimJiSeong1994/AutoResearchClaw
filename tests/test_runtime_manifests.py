@@ -185,6 +185,8 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("집현전 데일리 뉴스레터", briefing_text)
         self.assertIn("오늘의 핵심 항목", briefing_text)
         self.assertIn("canonical_url", briefing_text)
+        self.assertIn("normalized_title", briefing_text)
+        self.assertIn("제목 기준 핵심 묶음", briefing_text)
         self.assertIn("daily-trends-latest.md", briefing_text)
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("run-newsletter-archive-and-cardnews.sh", installer_text)
