@@ -112,6 +112,45 @@ class BriefingRenderTests(unittest.TestCase):
         self.assertIn("fallback evidence caveat", briefing.body)
         self.assertIn("https://arxiv.org/abs/2604.00001", briefing.body)
 
+    def test_daily_trends_ignores_stale_adjacent_weekly_raw_json(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            note = base / "daily-trends-latest.md"
+            note.write_text(
+                "**집현전 데일리 뉴스레터**\n"
+                "작성일: `2026-05-23`\n\n"
+                "> 오늘의 3줄 요약\n"
+                "> 1. GitHub Copilot CLI — fresh daily item\n",
+                encoding="utf-8",
+            )
+            (base / "raw.json").write_text(
+                json.dumps(
+                    {
+                        "run_at": "2026-05-17T00:00:00+00:00",
+                        "soul_source": "profile_narrative_fallback",
+                        "report": {
+                            "at_a_glance": "OpenClaw synthesis was unavailable",
+                            "clusters": [
+                                {"title": "dynamic graph embedding"},
+                                {"title": "heterogeneous graph embedding"},
+                            ],
+                        },
+                        "candidates": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            briefing = render_briefing(note)
+
+        self.assertIn("집현전 데일리 뉴스레터", briefing.body)
+        self.assertIn("GitHub Copilot CLI", briefing.body)
+        self.assertNotIn("최신 연구 동향 — 2026-05-17", briefing.body)
+        self.assertNotIn("dynamic graph embedding", briefing.body)
+        self.assertNotIn("heterogeneous graph embedding", briefing.body)
+        self.assertNotIn("+ raw.json", briefing.body)
+
     def test_invalid_adjacent_raw_json_preserves_markdown_fallback(self) -> None:
         with TemporaryDirectory() as tmp:
             base = Path(tmp)

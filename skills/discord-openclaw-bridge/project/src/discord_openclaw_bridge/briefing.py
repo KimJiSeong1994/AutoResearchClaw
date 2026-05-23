@@ -190,7 +190,22 @@ def _adjacent_raw_path(source_path: Path) -> Path:
     return source_path.expanduser().parent / "raw.json"
 
 
+def _is_weekly_report_source(source_path: Path) -> bool:
+    name = source_path.name.lower()
+    if name in {"research-trends.md", "weekly-research-trends.md"}:
+        return True
+    try:
+        raw = source_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return False
+    text = _strip_frontmatter(raw)
+    report_type = _frontmatter_value(raw, "report_type") or ""
+    return report_type in {"weekly-soul-trends", "weekly-profile-trends"} or "# Weekly research trends" in text
+
+
 def _load_adjacent_weekly_raw(source_path: Path) -> dict[str, object] | None:
+    if not _is_weekly_report_source(source_path):
+        return None
     raw_path = _adjacent_raw_path(source_path)
     if not raw_path.exists():
         return None
@@ -298,6 +313,15 @@ def render_briefing(source_path: Path, *, max_chars: int = 1800) -> Briefing:
 
     raw = source_path.expanduser().read_text(encoding="utf-8")
     text = _strip_frontmatter(raw)
+    if "집현전 데일리 뉴스레터" in text:
+        date_match = re.search(r"작성일:\s*`?([0-9]{4}-[0-9]{2}-[0-9]{2})`?", text)
+        title = "집현전 데일리 뉴스레터"
+        if date_match:
+            title = f"{title} — {date_match.group(1)}"
+        body = text.strip()
+        if len(body) > max_chars:
+            body = body[: max(0, max_chars - 24)].rstrip() + "\n…(briefing truncated)"
+        return Briefing(title=title, body=body, source_path=source_path)
     title_match = re.search(r"^#\s+(.+)$", text, flags=re.MULTILINE)
     title = _plain_line(title_match.group(1)) if title_match else "집현전-Claw AI 브리핑"
 
