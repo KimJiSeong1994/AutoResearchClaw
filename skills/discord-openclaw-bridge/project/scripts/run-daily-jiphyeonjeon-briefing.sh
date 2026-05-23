@@ -219,9 +219,22 @@ def source_label(item: dict[str, object]) -> str:
     return urlsplit(url).netloc if url else "unknown-source"
 
 payload = json.loads(archive_path.read_text(encoding="utf-8"))
-items = payload.get("items") if isinstance(payload, dict) else []
-if not isinstance(items, list):
-    items = []
+all_items = payload.get("items") if isinstance(payload, dict) else []
+if not isinstance(all_items, list):
+    all_items = []
+
+
+def item_date(item: dict[str, object]) -> str:
+    for key in ("received_at", "published_at", "date", "created_at"):
+        value = clean(item.get(key), limit=40)
+        if re.match(r"^\d{4}-\d{2}-\d{2}", value):
+            return value[:10]
+    return ""
+
+dated_items = [item for item in all_items if isinstance(item, dict) and item_date(item) == run_date]
+undated_items = [item for item in all_items if isinstance(item, dict) and not item_date(item)]
+items = dated_items if dated_items else undated_items
+stale_count = len([item for item in all_items if isinstance(item, dict) and item_date(item) and item_date(item) != run_date])
 
 unique: list[dict[str, object]] = []
 seen: set[str] = set()
@@ -259,7 +272,7 @@ lead = selected[:3]
 lines = [
     "**집현전 데일리 뉴스레터**",
     f"작성일: `{run_date}`",
-    f"기반 아카이브: `{archive_path.name}` · 수집 {len(items)}개 / 주제 기준 핵심 묶음 {len(unique)}개",
+    f"기반 아카이브: `{archive_path.name}` · 전체 {len(all_items)}개 / 당일 {len(items)}개 / 이전 날짜 제외 {stale_count}개 / 주제 기준 핵심 묶음 {len(unique)}개",
     "개인정보 경계: 메일 본문/비밀값 없이 데일리 아카이브의 공개 제목·요약·출처 링크만 사용",
     "",
     "> 오늘의 3줄 요약",
@@ -269,9 +282,9 @@ if lead:
         lines.append(f"> {idx}. {display_title(item)} — {display_summary(item)}")
 else:
     lines += [
-        "> 1. 오늘 데일리 아카이브에 게시할 공개 후보가 없습니다.",
-        "> 2. 수집 경로와 relay 상태를 확인해야 합니다.",
-        "> 3. 다음 실행에서 신규 공개 링크 여부를 다시 점검합니다.",
+        "> 1. 오늘 날짜에 해당하는 신규 공개 후보가 없습니다.",
+        "> 2. 이전 날짜 누적 항목은 반복 방지를 위해 제외했습니다.",
+        "> 3. 다음 실행에서 신규 수집분을 다시 점검합니다.",
     ]
 lines += ["", "## 오늘의 핵심 항목"]
 if not selected:
@@ -295,6 +308,7 @@ lines += [
     "",
     "## 운영 메모",
     "- 이 브리핑은 주간 research-trends가 아니라 당일 raw newsletter archive에서 직접 생성됩니다.",
+    "- received_at/published_at이 작성일과 다른 누적 항목은 제외합니다.",
     "- 같은 제목·반복 주제군은 핵심 묶음으로 합쳐 반복 게시 체감을 줄입니다.",
 ]
 output_path.parent.mkdir(parents=True, exist_ok=True)

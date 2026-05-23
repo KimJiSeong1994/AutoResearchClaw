@@ -191,6 +191,9 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("semantic_family", briefing_text)
         self.assertIn("GRAPH_EMBEDDING_FAMILY_RE", briefing_text)
         self.assertIn("display_title", briefing_text)
+        self.assertIn("dated_items", briefing_text)
+        self.assertIn("이전 날짜 제외", briefing_text)
+        self.assertIn("received_at/published_at", briefing_text)
         self.assertIn("주제 기준 핵심 묶음", briefing_text)
         self.assertIn("daily-trends-latest.md", briefing_text)
         installer_text = installer.read_text(encoding="utf-8")
@@ -217,7 +220,7 @@ class RuntimeManifestTest(unittest.TestCase):
 set -euo pipefail
 mkdir -p "$(dirname "$NEWSLETTER_REPORT_PATH")" "$(dirname "$NEWSLETTER_ARCHIVE_SOURCE")"
 cat > "$NEWSLETTER_ARCHIVE_SOURCE" <<JSON
-{"date":"$NEWSLETTER_DATE","items":[{"title":"Dynamic graph embedding survey","public_excerpt":"Dynamic graph embedding methods","url":"https://example.com/dyn","source":"A"},{"title":"Graph representation learning benchmarks","public_excerpt":"Graph representation learning benchmark set","url":"https://example.com/canonical","source":"B"},{"title":"Heterogeneous graph embedding benchmark","public_excerpt":"Heterogeneous graph embedding methods","url":"https://example.com/het","source":"C"},{"title":"RAG evaluation benchmark","public_excerpt":"Distinct retrieval benchmark","url":"https://example.com/rag","source":"D"}]}
+{"date":"$NEWSLETTER_DATE","items":[{"title":"Dynamic graph embedding survey","public_excerpt":"Dynamic graph embedding methods","url":"https://example.com/dyn","source":"A","received_at":"2026-05-23 01:00"},{"title":"Graph representation learning benchmarks","public_excerpt":"Graph representation learning benchmark set","url":"https://example.com/canonical","source":"B","received_at":"2026-05-23 02:00"},{"title":"Heterogeneous graph embedding benchmark","public_excerpt":"Heterogeneous graph embedding methods","url":"https://example.com/het","source":"C","received_at":"2026-05-23 03:00"},{"title":"RAG evaluation benchmark","public_excerpt":"Distinct retrieval benchmark","url":"https://example.com/rag","source":"D","received_at":"2026-05-23 04:00"},{"title":"Old repeated Anthropic item","public_excerpt":"Old item must not appear","url":"https://example.com/old","source":"E","received_at":"2026-05-21 04:22"}]}
 JSON
 printf '**집현전-Claw 기술 블로그 브리핑**\n작성일: `%s`\n' "$NEWSLETTER_DATE" > "$NEWSLETTER_REPORT_PATH"
 """,
@@ -233,10 +236,12 @@ printf '**집현전-Claw 기술 블로그 브리핑**\n작성일: `%s`\n' "$NEWS
 
             rendered = (workspace / "reports" / "daily-trends-latest.md").read_text(encoding="utf-8")
             lower = rendered.lower()
-            self.assertIn("주제 기준 핵심 묶음 2개", rendered)
+            self.assertIn("전체 5개 / 당일 4개 / 이전 날짜 제외 1개 / 주제 기준 핵심 묶음 2개", rendered)
             self.assertIn("그래프 표현학습 최신 벤치마크 묶음", rendered)
             self.assertIn("관련 링크: 같은 제목으로 수집된 추가 공개 링크 2개", rendered)
             self.assertIn("RAG evaluation benchmark", rendered)
+            self.assertNotIn("Old repeated Anthropic item", rendered)
+            self.assertNotIn("Old item must not appear", rendered)
             self.assertEqual(2, rendered.count("### "))
             self.assertNotIn("dynamic graph embedding", lower)
             self.assertNotIn("heterogeneous graph embedding", lower)
