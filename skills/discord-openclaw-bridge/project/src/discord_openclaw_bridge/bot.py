@@ -120,6 +120,7 @@ def render_jiphyeonjeon_agent_registry() -> str:
         "- 집현전-지도교수: 연구/게시 artifact의 evidence URL, source diversity, citation coverage, overclaim risk를 검토하는 advisory-only agent. 이미지: jiphyeonjeon-advisor-agent.png\n"
         "- 집현전-경비원: stale run, backlog, handoff 실패를 관측하는 ops guard.\n"
         "- Card-news publisher: sanitized archive를 Discord card-news로 렌더링하되 quality gate 실패 시 게시 전 중단합니다.\n\n"
+        "- 집현전-기자: 수집 아티클/동향 리포트를 근거 추적 가능한 한국어 블로그 초안과 내부 evidence appendix로 재구성하고, 블로그 API 쓰기는 별도 dry-run/승인 경로로만 넘기는 publisher-adjacent agent.\n\n"
         "**권장 워크프로세스**\n"
         "1. 여행자 → 후보 출처 발굴 및 evidence-backed source candidate 기록.\n"
         "2. 광부 → 링크 수집, sanitize, pending_claw_review queue 기록.\n"
@@ -127,7 +128,8 @@ def render_jiphyeonjeon_agent_registry() -> str:
         "4. 집현전-편집자 → newsletter/manual/card/wiki/research artifact 간 중복·동일성 advisory report.\n"
         "5. 집현전-지도교수 → 공개 근거·인용 품질 advisory verdict.\n"
         "6. 사람 편집 검토 → promotion coordinator는 아직 pending_future_phase. 자동 승격 없음.\n"
-        "7. Publisher → 승인된 sanitized artifact만 게시. 게시/삭제 전 quality gate와 운영 설정 확인.\n\n"
+        "7. 집현전-기자 → 승인된 수집 리포트를 공개 초안과 내부 근거 appendix로 분리 작성. live blog write는 하지 않음.\n"
+        "8. Publisher → 승인된 sanitized artifact만 게시. 게시/삭제 전 quality gate와 운영 설정 확인.\n\n"
         "**안전 경계**: 이 명령은 등록/안내 전용입니다. queue 수정, 승인, promotion, Discord 게시를 실행하지 않습니다."
     )
 

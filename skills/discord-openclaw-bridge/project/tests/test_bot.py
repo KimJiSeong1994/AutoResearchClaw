@@ -72,6 +72,8 @@ def test_agent_registry_mentions_new_agents_and_pending_promotion() -> None:
 
     assert "집현전-편집자" in rendered
     assert "집현전-지도교수" in rendered
+    assert "집현전-기자" in rendered
+    assert "evidence appendix" in rendered
     assert "pending_future_phase" in rendered
     assert "queue 수정" in rendered
     assert "자동 승격 없음" in rendered
