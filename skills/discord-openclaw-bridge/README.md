@@ -419,3 +419,29 @@ uv run discord-openclaw-audit-team --write-issue-queue --write-audit-log
 ```
 
 Safety boundary: the audit team never approves, rejects, holds, promotes, publishes, edits cron, restarts services, deploys code, rewrites artifacts, or prints token/webhook/API-key/private-body values.
+
+## 집현전-기자 blog publishing path
+
+집현전-기자 (`jiphyeonjeon-blog-publisher`) is the newsroom blog publisher for `https://jiphyeonjeon.kr/blog`.
+It turns an approved Korean Markdown/JSON blog draft into a Blog API-compatible payload and writes a sanitized audit record.
+
+Safety contract:
+
+- Dry-run is the default. `discord-openclaw-post-blog --source <draft>` prints a payload and does not call the blog API.
+- Live `POST /api/blog/posts` or `PUT /api/blog/posts/{id}` requires all of: `--publish`, `JIPHYEONJEON_BLOG_TOKEN`, passing Editor/Advisor advisory prerequisites, and `--approval-id` or an approved approval artifact.
+- 집현전-편집자 and 집현전-지도교수 are advisory prerequisites/verdicts only; they do not approve promotion.
+- No DELETE, takedown, purge, or destructive blog API path is exposed in this phase.
+- Audit records must not contain Jiphyeonjeon tokens, webhook URLs, raw private newsletter bodies, or local secret paths.
+
+Manual dry-run:
+
+```bash
+bash project/scripts/post-blog.sh --source approved-blog-draft.md --print-payload
+```
+
+Credentialed live publish, outside CI and only after operator approval:
+
+```bash
+JIPHYEONJEON_BLOG_TOKEN=<redacted> \
+  bash project/scripts/post-blog.sh --source approved-blog-draft.md --publish --approval-id <operator-approval-id>
+```

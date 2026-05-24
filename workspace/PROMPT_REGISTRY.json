@@ -472,6 +472,46 @@
         "health_status"
       ],
       "rollback": "Revert post_card_news.py or disable scheduled card-news posting."
+    },
+    {
+      "prompt_id": "jiphyeonjeon_blog_publisher",
+      "owner": "Jiphyeonjeon-Claw",
+      "purpose": "Render approved research/newsletter/card-news artifacts into Jiphyeonjeon newsroom blog payloads with dry-run-first publication safety.",
+      "source": {
+        "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/blog_publisher.py",
+        "anchors": [
+          "build_payload",
+          "run_publication_trust_gate",
+          "operator approval"
+        ]
+      },
+      "service_surface": "jiphyeonjeon_blog",
+      "input_classes": [
+        "approved_blog_draft",
+        "public_source_url",
+        "operator_approval_artifact"
+      ],
+      "forbidden_data": [
+        "raw_gmail_body",
+        "jiphyeonjeon_blog_token",
+        "webhook_url",
+        "local_secret_path",
+        "unapproved_publication"
+      ],
+      "output_contract": "Blog API-compatible Markdown payload plus sanitized audit; dry-run by default, live POST/PUT only with explicit credentialed approval.",
+      "validation": [
+        "skills/discord-openclaw-bridge/project/tests/test_blog_publisher.py",
+        "tests/test_runtime_manifests.py",
+        "secret_scan",
+        "no_delete_surface_check"
+      ],
+      "metrics": [
+        "prompt_output_valid_json",
+        "secret_scan_pass",
+        "delivery_target",
+        "health_status"
+      ],
+      "rollback": "Disable jiphyeonjeon-blog-publish job, keep dry-run artifacts, and manually correct or unpublish through the Jiphyeonjeon admin surface."
     }
   ]
 }

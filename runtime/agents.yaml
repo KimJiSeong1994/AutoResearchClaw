@@ -362,3 +362,29 @@ agents:
       - do not read or post raw Gmail bodies or secret configuration values
       - skip before Discord side effects when quality gate fails
       - purge behavior must be reviewed before production posting
+
+  - id: jiphyeonjeon-blog-publisher
+    name: 집현전-기자 newsroom blog publisher
+    kind: publisher-agent
+    source_refs:
+      - skills/discord-openclaw-bridge/README.md#집현전-기자-blog-publishing-path
+      - .codex/agents/blog-research-writer.toml
+      - .codex/skills/blog-research-post/SKILL.md
+      - .codex/skills/jiphyeonjeon-reporter-article-post/SKILL.md
+    owns_jobs:
+      - jiphyeonjeon-blog-publish
+    runtime:
+      entrypoint: discord-openclaw-post-blog
+      blog_base_url: https://jiphyeonjeon.kr
+      audit_path_env: JIPHYEONJEON_BLOG_AUDIT_PATH
+    responsibilities:
+      - convert approved research/newsletter/card-news artifacts into Jiphyeonjeon blog API draft payloads
+      - run dry-run previews and sanitized audit records before any public blog write
+      - execute POST or PUT blog API writes only after explicit credentialed operator approval
+      - preserve Korean newsroom style, source links, tags, excerpt, and reading-time metadata
+    boundaries:
+      - dry-run is the default; no production posting without --publish, valid token, advisory prerequisites, and approval id/artifact
+      - Editor and Advisor outputs are advisory prerequisites/verdicts only and never promotion approvals
+      - no DELETE, takedown, purge, or destructive blog API path is exposed in this phase
+      - never prints Jiphyeonjeon tokens, webhook URLs, raw private newsletter bodies, or local secret paths
+      - Human Review / Promotion Coordinator remains pending and is not active in this phase

@@ -279,6 +279,37 @@ jobs:
       side_effects: public Discord posting and optional previous-post purge after Editor/Advisor gates pass
       secrets: audit records and trust-gate reports must contain sanitized public metadata only
 
+
+  - id: jiphyeonjeon-blog-publish
+    name: Jiphyeonjeon Reporter newsroom blog publisher
+    type: manual-publication
+    owner_agent: jiphyeonjeon-blog-publisher
+    command_refs:
+      - skills/discord-openclaw-bridge/project/scripts/post-blog.sh --source <approved-blog-draft.md> --dry-run
+      - uv run discord-openclaw-post-blog --source <approved-blog-draft.md> --dry-run
+      - uv run discord-openclaw-post-blog --source <approved-blog-draft.md> --publish --approval-id <operator-approval-id>
+    triggers:
+      - manual after blog draft generation and editorial review
+      - manual after Claw-approved or newsletter/card-news artifacts are promoted to a blog draft
+    inputs:
+      - approved blog draft markdown/json with public source URLs
+      - jiphyeonjeon-editor advisory identity report
+      - jiphyeonjeon-advisor advisory evidence verdict
+      - explicit operator approval id or approval artifact for live publish
+    pre_publish_checks:
+      - jiphyeonjeon-editor-canonical-identity-report
+      - jiphyeonjeon-advisor-evidence-quality-gate
+      - explicit credentialed operator approval for live POST/PUT only
+    outputs:
+      - Blog API-compatible dry-run payload
+      - sanitized blog-publication-audit.jsonl
+      - optional public blog post id/slug after approved POST/PUT
+    safety:
+      side_effects: dry-run by default; live public blog POST/PUT only after --publish, valid token, advisory prerequisites, and approval id/artifact
+      secrets: never print Jiphyeonjeon tokens, webhook URLs, raw private newsletter bodies, or local secret paths
+      destructive_actions: no DELETE, takedown, purge, or destructive blog API command is exposed
+      advisory_boundary: Editor and Advisor are advisory prerequisites/verdicts only and do not approve promotion
+
   - id: jiphyeonjeon-traveler-source-discovery
     name: Discover durable high-trust collection sources
     type: research-and-review

@@ -31,6 +31,7 @@ discord-openclaw-guard-ops-digest = "discord_openclaw_bridge.guard_ops:main"
 discord-openclaw-review-queue-optimizer = "discord_openclaw_bridge.review_queue_optimizer:main"
 discord-openclaw-newsletter-candidate-orchestrator = "discord_openclaw_bridge.newsletter_candidate_orchestrator:main"
 discord-openclaw-audit-team = "discord_openclaw_bridge.audit_ops:main"
+discord-openclaw-post-blog = "discord_openclaw_bridge.blog_publisher:main"
 
 [build-system]
 requires = ["setuptools>=68"]

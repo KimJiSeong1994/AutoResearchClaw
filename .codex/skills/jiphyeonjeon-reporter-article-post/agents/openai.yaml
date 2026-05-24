@@ -1,0 +1,5 @@
+version: 1
+name: jiphyeonjeon-reporter-article-post
+display_name: 집현전-기자 Article Post
+short_description: 수집 아티클 기반 한국어 기술 블로그를 근거 추적 가능하게 작성·검증합니다.
+default_prompt: Use this skill to turn collected trend/article reports into a sourced Korean technical blog post with a public draft and internal evidence appendix.

@@ -81,6 +81,9 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertNotIn("editorial-promotion-coordinator", agent_ids)
         self.assertIn("집현전-편집자", agents_text)
         self.assertIn("집현전-지도교수", agents_text)
+        self.assertIn("jiphyeonjeon-blog-publish", job_ids)
+        self.assertIn("jiphyeonjeon-blog-publisher", agent_ids)
+        self.assertIn("집현전-기자", agents_text)
 
     def test_audit_team_is_read_only_and_scoped(self) -> None:
         checker = load_checker()
@@ -145,6 +148,31 @@ class RuntimeManifestTest(unittest.TestCase):
             self.assertNotIn("editorial-promotion-coordinator", " ".join(job.lists.get("command_refs", [])))
         for agent in agents.values():
             self.assertNotIn("editorial-promotion-coordinator", agent.lists.get("owns_jobs", []))
+
+
+    def test_blog_publisher_is_dry_run_guarded_and_non_destructive(self) -> None:
+        checker = load_checker()
+        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        agents_text = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
+        jobs = entries_by_id(checker, jobs_text)
+        agents = entries_by_id(checker, agents_text)
+        job = jobs["jiphyeonjeon-blog-publish"]
+        agent = agents["jiphyeonjeon-blog-publisher"]
+        command_refs = " ".join(job.lists.get("command_refs", [])).lower()
+        safety = " ".join([*job.fields.values(), *job.lists.get("pre_publish_checks", []), *job.lists.get("outputs", [])]).lower()
+        boundaries = " ".join(agent.lists.get("boundaries", [])).lower()
+        self.assertIn("post-blog.sh", command_refs)
+        self.assertIn("discord-openclaw-post-blog", command_refs)
+        self.assertIn("--dry-run", command_refs)
+        self.assertIn("--publish", command_refs)
+        self.assertIn(".codex/skills/jiphyeonjeon-reporter-article-post/SKILL.md", agent.lists.get("source_refs", []))
+        self.assertIn("approval", safety + boundaries)
+        self.assertIn("advisory", safety + boundaries)
+        self.assertIn("dry-run", safety + boundaries)
+        self.assertIn("no delete", safety + boundaries)
+        self.assertNotIn("editorial-promotion-coordinator", command_refs)
+        self.assertNotIn(" delete", command_refs)
+        self.assertNotIn("/delete", command_refs)
 
     def test_traveler_runner_uses_runtime_scout_topics(self) -> None:
         runner = ROOT / "skills" / "discord-openclaw-bridge" / "project" / "scripts" / "run-traveler-collection-report.sh"

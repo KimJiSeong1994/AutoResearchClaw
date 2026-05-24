@@ -47,6 +47,7 @@ REQUIRED_JOB_IDS = {
     "jiphyeonjeon-advisor-evidence-quality-gate",
     "jiphyeonjeon-traveler-source-discovery",
     "discord-card-news-publish",
+    "jiphyeonjeon-blog-publish",
 }
 
 REQUIRED_AGENT_IDS = {
@@ -65,6 +66,7 @@ REQUIRED_AGENT_IDS = {
     "jiphyeonjeon-traveler",
     "jiphyeonjeon-claw",
     "card-news-publisher",
+    "jiphyeonjeon-blog-publisher",
 }
 
 
