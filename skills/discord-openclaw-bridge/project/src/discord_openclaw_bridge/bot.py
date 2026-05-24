@@ -90,13 +90,16 @@ class OpenClawDiscordBot(discord.Client):
         channel = interaction.channel
         if channel is None:
             return False
-        if channel.id == self.config.allowed_channel_id:
+        allowed_channel_ids = {self.config.allowed_channel_id}
+        if self.config.reporter_channel_id is not None:
+            allowed_channel_ids.add(self.config.reporter_channel_id)
+        if channel.id in allowed_channel_ids:
             return True
         parent = getattr(channel, "parent", None)
-        if parent is not None and getattr(parent, "id", None) == self.config.allowed_channel_id:
+        if parent is not None and getattr(parent, "id", None) in allowed_channel_ids:
             return True
         parent_id = getattr(channel, "parent_id", None)
-        return parent_id == self.config.allowed_channel_id
+        return parent_id in allowed_channel_ids
 
 def jiphyeonjeon_agent_image_paths() -> list[Path]:
     """Return available visual identity assets for the Jiphyeonjeon registry."""

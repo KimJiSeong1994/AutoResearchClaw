@@ -23,6 +23,7 @@ def _bridge_config(tmp_path: Path, *, enable_mention_responses: bool = False) ->
         max_response_chars=1800,
         briefing_source_path=tmp_path / "briefing.md",
         miner_channel_id=30,
+        reporter_channel_id=None,
         miner_intake_path=tmp_path / "intake.jsonl",
         miner_review_queue_path=tmp_path / "review.jsonl",
         miner_enable_channel_collection=True,
@@ -96,3 +97,14 @@ def test_main_bridge_allows_threads_under_allowed_forum(tmp_path: Path) -> None:
     )
 
     assert bot.channel_allowed(interaction)
+
+
+def test_main_bridge_allows_reporter_forum_and_threads(tmp_path: Path) -> None:
+    config = _bridge_config(tmp_path)
+    config = BridgeConfig(**{**config.__dict__, "reporter_channel_id": 40})
+    bot = build_bot(config)
+    direct = SimpleNamespace(guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=40))
+    thread = SimpleNamespace(guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=41, parent_id=40, parent=None))
+
+    assert bot.channel_allowed(direct)
+    assert bot.channel_allowed(thread)

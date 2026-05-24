@@ -63,6 +63,7 @@ class BridgeConfig:
     max_response_chars: int
     briefing_source_path: Path
     miner_channel_id: int
+    reporter_channel_id: int | None
     miner_intake_path: Path
     miner_review_queue_path: Path
     miner_enable_channel_collection: bool
@@ -205,6 +206,7 @@ def load_config() -> BridgeConfig:
             )
         ).expanduser(),
         miner_channel_id=miner_channel_id,
+        reporter_channel_id=_optional_int("DISCORD_REPORTER_CHANNEL_ID", None),
         miner_intake_path=_miner_intake_path(),
         miner_review_queue_path=_miner_review_queue_path(),
         miner_enable_channel_collection=_bool_env("DISCORD_MINER_ENABLE_CHANNEL_COLLECTION", False),
