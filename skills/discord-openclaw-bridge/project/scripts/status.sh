@@ -5,7 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 echo "== services =="
-for service in discord-openclaw-bridge.service discord-jiphyeonjeon-miner.service discord-jiphyeonjeon-traveler.service; do
+for service in discord-openclaw-bridge.service discord-jiphyeonjeon-miner.service discord-jiphyeonjeon-traveler.service discord-jiphyeonjeon-reporter.service; do
   echo "-- $service --"
   systemctl --user status "$service" --no-pager -l 2>&1 | sed -n '1,80p' || true
 done
@@ -39,7 +39,7 @@ else
 fi
 
 echo "== recent logs =="
-for service in discord-openclaw-bridge.service discord-jiphyeonjeon-miner.service discord-jiphyeonjeon-traveler.service; do
+for service in discord-openclaw-bridge.service discord-jiphyeonjeon-miner.service discord-jiphyeonjeon-traveler.service discord-jiphyeonjeon-reporter.service; do
   echo "-- $service --"
   journalctl --user -u "$service" --no-pager -n 40 2>&1 || true
 done

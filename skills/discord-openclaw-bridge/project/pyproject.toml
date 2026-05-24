@@ -17,6 +17,7 @@ test = [
 discord-openclaw-bridge = "discord_openclaw_bridge.bot:main"
 discord-jiphyeonjeon-miner = "discord_openclaw_bridge.miner_bot:main"
 discord-jiphyeonjeon-traveler = "discord_openclaw_bridge.traveler_bot:main"
+discord-jiphyeonjeon-reporter = "discord_openclaw_bridge.reporter_bot:main"
 discord-jiphyeonjeon-miner-review = "discord_openclaw_bridge.review_cli:main"
 discord-openclaw-post-briefing = "discord_openclaw_bridge.post_briefing:main"
 discord-openclaw-post-newsletter = "discord_openclaw_bridge.post_newsletter:main"

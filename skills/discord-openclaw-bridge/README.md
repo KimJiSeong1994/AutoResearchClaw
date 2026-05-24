@@ -143,6 +143,7 @@ Operational controls:
 - `JIPHYEONJEON_MINER_DECISIONS_PATH` and `JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH` control the review audit log and approved-only `manual_links` export path.
 - For an individual Miner bot, set `DISCORD_MINER_BOT_TOKEN` and `DISCORD_MINER_CLIENT_ID`, invite it with `project/scripts/invite-miner-url.sh`, then install/start `discord-jiphyeonjeon-miner.service`.
 - For an individual Traveler bot, set `DISCORD_TRAVELER_BOT_TOKEN` and `DISCORD_TRAVELER_CLIENT_ID`, invite it with `project/scripts/invite-traveler-url.sh`, then install/start `discord-jiphyeonjeon-traveler.service`.
+- For an individual Reporter bot, set `DISCORD_REPORTER_BOT_TOKEN` and `DISCORD_REPORTER_CLIENT_ID`, invite it with `project/scripts/invite-reporter-url.sh`, then install/start `discord-jiphyeonjeon-reporter.service`.
 - The main OpenClaw bot ignores normal messages in `DISCORD_MINER_CHANNEL_ID` and no longer registers the Miner intake command. If you also need to hide unrelated OpenClaw slash commands from the Miner channel UI, set that in Discord's integration command permissions; Discord rejects that endpoint for bot tokens.
 - The stored Discord metadata is limited to guild/channel/message/user IDs. Full message bodies are not persisted.
 - Do not point the paper-recommender `manual_links` source at the pending intake/review queue. Newsletter archive/card-news jobs count approved Miner links for exclusion evidence but do not merge them into the public newsletter surfaces.
@@ -240,6 +241,23 @@ bash project/scripts/install-traveler.sh
 systemctl --user start discord-jiphyeonjeon-traveler.service
 bash project/scripts/status.sh
 ```
+
+To run 집현전-기자 as a separate Discord application/bot:
+
+```bash
+cd ~/.openclaw/workspace/skills/discord-openclaw-bridge
+$EDITOR project/.env  # set DISCORD_REPORTER_BOT_TOKEN, DISCORD_REPORTER_CLIENT_ID, DISCORD_REPORTER_CHANNEL_ID
+bash project/scripts/invite-reporter-url.sh
+bash project/scripts/install-reporter.sh
+systemctl --user start discord-jiphyeonjeon-reporter.service
+bash project/scripts/status.sh
+```
+
+The Reporter app registers `/jiphyeonjeon_reporter_status` and
+`/jiphyeonjeon_reporter_preview` in the configured newsroom forum and its
+threads. It previews evidence-gated blog drafts only; public blog posting still
+requires `discord-openclaw-post-blog --dry-run`/trust-gate validation and an
+operator approval id for publish mode.
 
 집현전-경비원 (Jiphyeonjeon-Guard) is the post-only agent that publishes the
 miner-seeds daily run summary to the 운영리포팅 forum. It is not a

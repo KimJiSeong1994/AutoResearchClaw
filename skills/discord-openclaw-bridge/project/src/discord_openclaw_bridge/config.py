@@ -97,6 +97,15 @@ class TravelerBotConfig:
     max_response_chars: int = 1800
 
 
+@dataclass(frozen=True)
+class ReporterBotConfig:
+    discord_bot_token: str
+    guild_id: int
+    reporter_channel_id: int
+    reporter_draft_dir: Path
+    max_response_chars: int = 1800
+
+
 def _miner_intake_path() -> Path:
     return Path(
         os.environ.get(
@@ -151,6 +160,19 @@ def _traveler_source_queue_path() -> Path:
         os.environ.get(
             "JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH",
             str(Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"),
+        )
+    ).expanduser()
+
+
+def _reporter_channel_id(default: int | None = None) -> int | None:
+    return _optional_int("DISCORD_REPORTER_CHANNEL_ID", default)
+
+
+def _reporter_draft_dir() -> Path:
+    return Path(
+        os.environ.get(
+            "JIPHYEONJEON_REPORTER_DRAFT_DIR",
+            str(Path.home() / ".openclaw" / "workspace" / "blog-drafts"),
         )
     ).expanduser()
 
@@ -259,3 +281,24 @@ def load_traveler_config() -> TravelerBotConfig:
         timeout_sec=float(os.environ.get("OPENCLAW_TIMEOUT_SEC", "120")),
         max_response_chars=int(os.environ.get("DISCORD_MAX_RESPONSE_CHARS", "1800")),
     )
+
+def load_reporter_config() -> ReporterBotConfig:
+    _load_dotenv(Path.cwd() / ".env")
+
+    discord_bot_token = os.environ.get("DISCORD_REPORTER_BOT_TOKEN", "").strip()
+    if not discord_bot_token:
+        raise ConfigError("missing required env var: DISCORD_REPORTER_BOT_TOKEN")
+
+    default_channel_id = _optional_int("DISCORD_ALLOWED_CHANNEL_ID")
+    reporter_channel_id = _reporter_channel_id(default=default_channel_id)
+    if reporter_channel_id is None:
+        raise ConfigError("missing required env var: DISCORD_REPORTER_CHANNEL_ID")
+
+    return ReporterBotConfig(
+        discord_bot_token=discord_bot_token,
+        guild_id=_required_int("DISCORD_GUILD_ID"),
+        reporter_channel_id=reporter_channel_id,
+        reporter_draft_dir=_reporter_draft_dir(),
+        max_response_chars=int(os.environ.get("DISCORD_MAX_RESPONSE_CHARS", "1800")),
+    )
+
