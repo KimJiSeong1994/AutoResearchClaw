@@ -1,0 +1,4 @@
+---
+title: Duplicate
+---
+# Duplicate A
