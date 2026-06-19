@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -241,6 +242,355 @@ class PaperWikiKGCriticRegressionTest(unittest.TestCase):
         self.assertEqual(query.returncode, 3, query.stdout)
         self.assertFalse(json.loads(query.stdout)["ok"])
 
+
+
+def write_note(vault: Path, rel_path: str, frontmatter: dict, body: str) -> Path:
+    lines = ["---"]
+    for key, value in frontmatter.items():
+        if isinstance(value, list):
+            if not value:
+                lines.append(f"{key}: []")
+            else:
+                inner = ", ".join(str(v) for v in value)
+                lines.append(f"{key}: [{inner}]")
+        else:
+            lines.append(f"{key}: {value}")
+    lines.append("---")
+    text = "\n".join(lines) + "\n" + body
+    target = vault / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return target
+
+
+class PaperWikiInterestQueryTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self.tmp.name)
+        self.vault = self.work / "vault"
+        shutil.copytree(FIXTURE, self.vault)
+        self.db = self.work / "paperwiki_kg.sqlite"
+        write_note(
+            self.vault, "pages/interests/llm-agents.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.8,
+             "related_tags": ["kg"], "seed_keywords": ["agent", "planning"], "source": "user"},
+            "# LLM Agents\n\nInterest in LLM agents and planning.\n\n## Anchors\n- [[Alias Target]]\n",
+        )
+        write_note(
+            self.vault, "pages/interests/muted-topic.md",
+            {"type": "interest", "interest_status": "muted", "interest_weight": 0.7,
+             "related_tags": ["kg"], "seed_keywords": ["graph"], "source": "user"},
+            "# Muted Topic\n\nA muted interest.\n\n## Anchors\n- [[Alias Target]]\n",
+        )
+        write_note(
+            self.vault, "pages/typed-note.md",
+            {"type": "paper", "tags": ["kg"]},
+            "# Typed Note\n\nA non-interest note carrying a type frontmatter.\n",
+        )
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_node_type_prefix_guard(self) -> None:
+        con = sqlite3.connect(self.db)
+        interest_type = con.execute(
+            "SELECT node_type FROM kg_nodes WHERE path='pages/interests/llm-agents.md'"
+        ).fetchone()[0]
+        self.assertEqual(interest_type, "interest")
+        typed_type = con.execute(
+            "SELECT node_type FROM kg_nodes WHERE path='pages/typed-note.md'"
+        ).fetchone()[0]
+        self.assertEqual(typed_type, "note")
+
+    def test_status_strict_clean_with_interests(self) -> None:
+        built = run_cmd("status", "--vault", str(self.vault), "--db", str(self.db), "--json", "--strict", check=False)
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+        run_cmd("sync", "--vault", str(self.vault), "--db", str(self.db), "--json")
+        synced = run_cmd("status", "--vault", str(self.vault), "--db", str(self.db), "--json", "--strict", check=False)
+        self.assertEqual(synced.returncode, 0, synced.stdout + synced.stderr)
+
+    def test_default_query_unaffected_by_interests(self) -> None:
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG", "--format", "json", "--limit", "5",
+        ).stdout)
+        paths = {r["path"] for r in out["results"]}
+        self.assertIn("pages/Trusted.md", paths)
+        self.assertFalse(any(p.startswith("pages/interests/") for p in paths))
+        self.assertNotIn("interest_score", out["results"][0])
+
+    def test_interest_boost_promotes_anchor(self) -> None:
+        without = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG", "--format", "json", "--limit", "5",
+        ).stdout)
+        with_interest = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG",
+            "--use-interests", "--format", "json", "--limit", "5",
+        ).stdout)
+        with_paths = [r["path"] for r in with_interest["results"]]
+        self.assertIn("pages/AliasTarget.md", with_paths)
+        alias_result = next(r for r in with_interest["results"] if r["path"] == "pages/AliasTarget.md")
+        self.assertIn("llm-agents", alias_result["matched_interests"])
+        self.assertGreater(alias_result["interest_score"], 0)
+        without_paths = [r["path"] for r in without["results"]]
+        self.assertIn("pages/AliasTarget.md", without_paths)
+        self.assertLessEqual(with_paths.index("pages/AliasTarget.md"), without_paths.index("pages/AliasTarget.md"))
+
+    def test_muted_interest_excluded(self) -> None:
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG",
+            "--use-interests", "--format", "json", "--limit", "10",
+        ).stdout)
+        for r in out["results"]:
+            self.assertNotIn("muted-topic", r.get("matched_interests", []))
+
+    def test_trust_no_leak_under_interests(self) -> None:
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG",
+            "--use-interests", "--format", "json", "--limit", "10",
+        ).stdout)
+        paths = {r["path"] for r in out["results"]}
+        self.assertFalse(any(p.startswith("pages/generated/") for p in paths))
+
+    def test_bad_weight_does_not_crash(self) -> None:
+        write_note(
+            self.vault, "pages/interests/bad.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": "high",
+             "related_tags": ["kg"], "seed_keywords": ["agent"], "source": "user"},
+            "# Bad\n\nBad weight interest.\n\n## Anchors\n- [[Alias Target]]\n",
+        )
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json")
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG",
+            "--use-interests", "--format", "json", "--limit", "10",
+        ).stdout)
+        self.assertTrue(out["ok"])
+
+    def test_interest_notes_excluded_from_results(self) -> None:
+        # M2: an interest note whose body literally contains its own seed_keywords
+        # would self-match under FTS, but must never appear as a result under
+        # --use-interests.
+        write_note(
+            self.vault, "pages/interests/selfmatch.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.9,
+             "related_tags": ["kg"], "seed_keywords": ["selfmatchterm"], "source": "user"},
+            "# Self Match\n\nThis interest body mentions selfmatchterm directly.\n\n## Anchors\n- [[Alias Target]]\n",
+        )
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json")
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "selfmatchterm",
+            "--use-interests", "--format", "json", "--limit", "10",
+        ).stdout)
+        self.assertTrue(out["ok"])
+        for r in out["results"]:
+            self.assertFalse(
+                r["path"].startswith("pages/interests/"),
+                f"interest note leaked into results: {r['path']}",
+            )
+
+    def test_late_resolving_anchor_resyncs_and_stays_fresh(self) -> None:
+        # Sync-time regression: an interest anchoring an initially-unresolved
+        # [[Missing Note]] becomes resolved after the target is created + synced,
+        # and status --strict stays clean.
+        write_note(
+            self.vault, "pages/interests/late.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.8,
+             "related_tags": ["kg"], "seed_keywords": ["agent"], "source": "user"},
+            "# Late\n\nLate-resolving anchor.\n\n## Anchors\n- [[Missing Note]]\n",
+        )
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json")
+        con = sqlite3.connect(self.db)
+        pre = con.execute(
+            "SELECT resolution_state FROM kg_edges WHERE source_id="
+            "(SELECT source_id FROM kg_sources WHERE path='pages/interests/late.md') "
+            "AND raw_target='Missing Note' AND tombstone=0"
+        ).fetchone()[0]
+        self.assertEqual(pre, "unresolved")
+        con.close()
+        missing = self.vault / "pages" / "Missing Note.md"
+        missing.write_text("---\ntitle: Missing Note\n---\n# Missing Note\n\nNow resolvable.\n", encoding="utf-8")
+        run_cmd("sync", "--vault", str(self.vault), "--db", str(self.db), "--json")
+        status = run_cmd("status", "--vault", str(self.vault), "--db", str(self.db), "--json", "--strict", check=False)
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        con = sqlite3.connect(self.db)
+        post = con.execute(
+            "SELECT resolution_state FROM kg_edges WHERE source_id="
+            "(SELECT source_id FROM kg_sources WHERE path='pages/interests/late.md') "
+            "AND raw_target='Missing Note' AND tombstone=0"
+        ).fetchone()[0]
+        self.assertEqual(post, "resolved")
+
+    def test_modify_then_delete_interest_note_stays_fresh(self) -> None:
+        # Sync-time regression: modifying then deleting an interest note keeps
+        # status --strict clean after each sync.
+        note = self.vault / "pages" / "interests" / "llm-agents.md"
+        note.write_text(note.read_text(encoding="utf-8") + "\nAppended interest text.\n", encoding="utf-8")
+        run_cmd("sync", "--vault", str(self.vault), "--db", str(self.db), "--json")
+        after_modify = run_cmd("status", "--vault", str(self.vault), "--db", str(self.db), "--json", "--strict", check=False)
+        self.assertEqual(after_modify.returncode, 0, after_modify.stdout + after_modify.stderr)
+        note.unlink()
+        run_cmd("sync", "--vault", str(self.vault), "--db", str(self.db), "--json")
+        after_delete = run_cmd("status", "--vault", str(self.vault), "--db", str(self.db), "--json", "--strict", check=False)
+        self.assertEqual(after_delete.returncode, 0, after_delete.stdout + after_delete.stderr)
+
+    def test_direct_anchor_to_untrusted_does_not_leak(self) -> None:
+        # Trust regression: an interest directly anchoring the generated-unreviewed
+        # note must not pull it into results under default trust.
+        write_note(
+            self.vault, "pages/interests/untrusted-anchor.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.9,
+             "related_tags": ["kg"], "seed_keywords": ["agent"], "source": "user"},
+            "# Untrusted Anchor\n\nAnchors a generated note.\n\n## Anchors\n- [[autoresearch-2026]]\n",
+        )
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json")
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG",
+            "--use-interests", "--format", "json", "--limit", "10",
+        ).stdout)
+        paths = {r["path"] for r in out["results"]}
+        self.assertNotIn("pages/generated/autoresearch-2026.md", paths)
+
+    def test_all_muted_interests_fall_through_to_default_path(self) -> None:
+        # Empty/all-muted active set: --use-interests must fall through to the
+        # default path (no interest_score on the first result).
+        for slug in ["llm-agents"]:
+            note = self.vault / "pages" / "interests" / f"{slug}.md"
+            text = note.read_text(encoding="utf-8").replace(
+                "interest_status: active", "interest_status: muted")
+            note.write_text(text, encoding="utf-8")
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json")
+        out = json.loads(run_cmd(
+            "query", "--db", str(self.db), "--query", "Graph RAG persistent KG",
+            "--use-interests", "--format", "json", "--limit", "5",
+        ).stdout)
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["results"])
+        self.assertNotIn("interest_score", out["results"][0])
+
+
+class PaperWikiBootstrapTest(unittest.TestCase):
+    BOOTSTRAP = ROOT / "scripts" / "bootstrap-interest-notes.py"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self.tmp.name)
+        self.vault = self.work / "vault"
+        self.vault.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def run_bootstrap(self, *extra: str) -> subprocess.CompletedProcess[str]:
+        cp = subprocess.run(
+            [sys.executable, str(self.BOOTSTRAP), "--vault", str(self.vault), *extra],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        if cp.returncode != 0:
+            raise AssertionError(f"bootstrap failed {cp.returncode}: {cp.args}\nSTDOUT={cp.stdout}\nSTDERR={cp.stderr}")
+        return cp
+
+    def test_bootstrap_creates_idempotent(self) -> None:
+        self.run_bootstrap("--json")
+        interests = self.vault / "pages" / "interests"
+        for slug in ["llm-agents", "rag-evaluation", "ai-infra", "knowledge-graph"]:
+            self.assertTrue((interests / f"{slug}.md").exists(), slug)
+        before = {p.name: p.read_bytes() for p in interests.glob("*.md")}
+        self.run_bootstrap("--json")
+        after = {p.name: p.read_bytes() for p in interests.glob("*.md")}
+        self.assertEqual(before, after)
+
+    def test_bootstrap_preserves_user_notes(self) -> None:
+        target = write_note(
+            self.vault, "pages/interests/llm-agents.md",
+            {"type": "interest", "source": "user"},
+            "# My Curated LLM Agents\n\nUnique hand-written body.\n",
+        )
+        original = target.read_bytes()
+        out = json.loads(self.run_bootstrap("--json").stdout)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertIn("pages/interests/llm-agents.md", out["skipped"])
+
+    def test_bootstrap_preserves_user_note_with_leading_blank_line(self) -> None:
+        # C1: a user note whose frontmatter is preceded by a blank line must be
+        # recognized as user-owned and preserved byte-for-byte.
+        target = self.vault / "pages" / "interests" / "llm-agents.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "\n---\ntype: interest\nsource: user\n---\n# Curated\n\nLeading blank line body.\n",
+            encoding="utf-8",
+        )
+        original = target.read_bytes()
+        out = json.loads(self.run_bootstrap("--json").stdout)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertIn("pages/interests/llm-agents.md", out["skipped"])
+
+    def test_bootstrap_preserves_note_without_closing_fence(self) -> None:
+        # C1: an unclosed/malformed frontmatter must not be overwritten (sentinel
+        # "unknown" -> preserve).
+        target = self.vault / "pages" / "interests" / "llm-agents.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "---\ntype: interest\nsource: user\n# Curated\n\nNo closing fence body.\n",
+            encoding="utf-8",
+        )
+        original = target.read_bytes()
+        out = json.loads(self.run_bootstrap("--json").stdout)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertIn("pages/interests/llm-agents.md", out["skipped"])
+
+    def test_bootstrap_path_traversal_topic_id_creates_no_outside_file(self) -> None:
+        # M1: a topic id containing ../ must not create any file outside
+        # pages/interests/ and must not crash the run.
+        topics = self.work / "traveler-topics.json"
+        topics.write_text(
+            json.dumps({"topics": [{"id": "../../escape", "query": "x", "priority": "high"}]}),
+            encoding="utf-8",
+        )
+        before = {p for p in self.work.rglob("*") if p.is_file()}
+        cp = self.run_bootstrap("--json", "--traveler-topics", str(topics))
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        after = {p for p in self.work.rglob("*") if p.is_file()}
+        created = after - before
+        interests_root = (self.vault / "pages" / "interests").resolve()
+        for p in created:
+            self.assertTrue(
+                str(p.resolve()).startswith(str(interests_root) + os.sep),
+                f"file escaped interests dir: {p}",
+            )
+
+    def test_bootstrap_missing_topics_returns_error_no_traceback(self) -> None:
+        # M3: a missing topics file returns nonzero exit with a valid JSON error
+        # object and no traceback.
+        cp = subprocess.run(
+            [sys.executable, str(self.BOOTSTRAP), "--vault", str(self.vault),
+             "--json", "--traveler-topics", str(self.work / "nope.json")],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertNotIn("Traceback", cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("error", payload)
+
+    def test_bootstrap_duplicate_slug_processes_first_only(self) -> None:
+        # m3: two topics sanitizing to the same slug -> first wins, rest skipped.
+        topics = self.work / "traveler-topics.json"
+        topics.write_text(
+            json.dumps({"topics": [
+                {"id": "llm_agents", "query": "first", "priority": "high"},
+                {"id": "llm.agents", "query": "second", "priority": "high"},
+            ]}),
+            encoding="utf-8",
+        )
+        out = json.loads(self.run_bootstrap("--json", "--traveler-topics", str(topics)).stdout)
+        self.assertIn("pages/interests/llm-agents.md", out["created"])
+        self.assertTrue(
+            any("duplicate_slug" in s for s in out["skipped"]),
+            out["skipped"],
+        )
+        body = (self.vault / "pages" / "interests" / "llm-agents.md").read_text(encoding="utf-8")
+        self.assertIn("first", body)
+        self.assertNotIn("second", body)
 
 
 if __name__ == "__main__":

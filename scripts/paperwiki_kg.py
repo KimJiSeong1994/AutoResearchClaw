@@ -34,6 +34,7 @@ EXIT_STALE = 2
 EXIT_INVALID = 3
 EXIT_TRUST = 4
 EXIT_MISSING = 5
+EPS = 1e-9
 
 
 @dataclass(frozen=True)
@@ -442,7 +443,8 @@ def upsert_doc(con: sqlite3.Connection, doc: SourceDoc, resolver: dict[str, list
     for old_chunk_id in old_chunk_ids:
         con.execute("DELETE FROM fts_chunks WHERE chunk_id=?", (old_chunk_id,))
     con.execute("DELETE FROM kg_chunks WHERE source_id=?", (source_id,))
-    con.execute("INSERT OR REPLACE INTO kg_nodes VALUES(?,?,?,?,?,?,?)", (node_id, source_id, doc.path, doc.title, "note", doc.trust_tier, 0))
+    node_type = "interest" if doc.path.startswith("pages/interests/") else "note"
+    con.execute("INSERT OR REPLACE INTO kg_nodes VALUES(?,?,?,?,?,?,?)", (node_id, source_id, doc.path, doc.title, node_type, doc.trust_tier, 0))
     con.execute("INSERT OR REPLACE INTO kg_provenance VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
         stable_id("prov", "node", node_id), "node", node_id, doc.path, doc.content_hash, None, None,
         EXTRACTOR_VERSION, TRUST_POLICY_VERSION, event_id, now(),
@@ -674,6 +676,105 @@ def sql_match_query(query: str) -> str:
     return " OR ".join('"' + t.replace('"', '""') + '"' for t in toks) if toks else '"' + query.replace('"', '""') + '"'
 
 
+def load_active_interests(con: sqlite3.Connection, only_slug: str | None = None) -> list[dict[str, Any]]:
+    rows = con.execute("""
+        SELECT s.source_id, s.path, s.frontmatter_json, n.node_id
+        FROM kg_sources s JOIN kg_nodes n ON n.source_id = s.source_id
+        WHERE s.tombstone=0 AND n.tombstone=0 AND s.path LIKE 'pages/interests/%'
+    """).fetchall()
+    interests: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            fm = json.loads(row["frontmatter_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if str(fm.get("type")) != "interest":
+            continue
+        slug = Path(row["path"]).stem
+        if only_slug is not None and slug != only_slug:
+            continue
+        if str(fm.get("interest_status", "active")).lower() == "muted":
+            continue
+        try:
+            weight = float(fm.get("interest_weight", 1.0))
+        except (TypeError, ValueError):
+            weight = 1.0
+        weight = max(0.0, min(1.0, weight))
+        if weight <= 0:
+            continue
+        source_id = row["source_id"]
+        seed_keywords = as_list(fm.get("seed_keywords"))
+        related_tags = as_list(fm.get("related_tags"))
+        anchor_node_ids = {
+            r["target_node_id"] for r in con.execute(
+                "SELECT e.target_node_id FROM kg_edges e "
+                "JOIN kg_nodes tgt ON tgt.node_id = e.target_node_id "
+                "WHERE e.source_id=? AND e.tombstone=0 "
+                "AND e.resolution_state='resolved' AND e.target_node_id IS NOT NULL "
+                "AND tgt.trust_tier='trusted'", (source_id,))
+        }
+        neighbor_node_ids: set[str] = set()
+        for anchor in anchor_node_ids:
+            for r in con.execute("""
+                SELECT e.target_node_id FROM kg_edges e
+                JOIN kg_nodes src ON src.node_id = e.source_node_id
+                JOIN kg_nodes tgt ON tgt.node_id = e.target_node_id
+                WHERE e.source_node_id=? AND e.tombstone=0 AND e.resolution_state='resolved'
+                  AND e.trust_tier='trusted' AND tgt.trust_tier='trusted'
+            """, (anchor,)):
+                neighbor_node_ids.add(r["target_node_id"])
+        neighbor_node_ids -= anchor_node_ids
+        interests.append({
+            "slug": slug, "node_id": row["node_id"], "source_id": source_id, "weight": weight,
+            "seed_keywords": seed_keywords, "related_tags": related_tags,
+            "anchor_node_ids": anchor_node_ids, "neighbor_node_ids": neighbor_node_ids,
+            "kw_token_set": set(tokenize(" ".join(seed_keywords))), "tag_set": set(related_tags),
+        })
+    return sorted(interests, key=lambda i: i["slug"])
+
+
+def interest_fit(con: sqlite3.Connection, chunk_row: sqlite3.Row, interests: list[dict[str, Any]],
+                 node_cache: dict[str, Any]) -> tuple[float, list[dict[str, Any]], list[str]]:
+    source_id = chunk_row["source_id"]
+    if source_id not in node_cache:
+        node = con.execute("SELECT node_id FROM kg_nodes WHERE source_id=? AND tombstone=0", (source_id,)).fetchone()
+        node_id = node["node_id"] if node else None
+        cand_tags: set[str] = set()
+        if node_id is not None:
+            cand_tags = {
+                r["assertion"][len("tag:"):] for r in con.execute(
+                    "SELECT assertion FROM kg_assertions WHERE object_id=? AND assertion LIKE 'tag:%'", (node_id,))
+            }
+        node_cache[source_id] = (node_id, cand_tags)
+    node_id, cand_tags = node_cache[source_id]
+    cand_tokens = set(tokenize(chunk_row["text"]))
+    fit = 0.0
+    matched: list[dict[str, Any]] = []
+    reasons: list[str] = []
+    for interest in interests:
+        s_tag = len(cand_tags & interest["tag_set"]) / max(1, len(interest["tag_set"]))
+        s_graph = 1.0 if node_id in interest["anchor_node_ids"] else (0.6 if node_id in interest["neighbor_node_ids"] else 0.0)
+        s_kw = len(cand_tokens & interest["kw_token_set"]) / max(1, len(interest["kw_token_set"]))
+        contribution = interest["weight"] * (0.45 * s_tag + 0.35 * s_graph + 0.20 * s_kw)
+        if contribution > 0:
+            matched.append({
+                "slug": interest["slug"], "weight": interest["weight"],
+                "signals": {"tag": s_tag, "graph": s_graph, "keyword": s_kw},
+                "contribution": contribution,
+            })
+            for t in sorted(cand_tags & interest["tag_set"]):
+                reasons.append(f"interest:{interest['slug']} tag:{t}")
+            if node_id in interest["anchor_node_ids"]:
+                reasons.append(f"interest:{interest['slug']} anchor")
+            elif node_id in interest["neighbor_node_ids"]:
+                reasons.append(f"interest:{interest['slug']} anchor-1hop")
+            for k in sorted(cand_tokens & interest["kw_token_set"]):
+                reasons.append(f"interest:{interest['slug']} keyword:{k}")
+            fit += contribution
+    matched.sort(key=lambda m: -m["contribution"])
+    return fit, matched, reasons
+
+
 def cmd_query(args: argparse.Namespace) -> int:
     db = Path(args.db).expanduser()
     vault = Path(args.vault).expanduser().resolve() if args.vault else None
@@ -734,6 +835,75 @@ def cmd_query(args: argparse.Namespace) -> int:
         }
         print_json_or_markdown(out, args.format)
         return EXIT_INVALID
+    if args.use_interests:
+        interests = load_active_interests(con, only_slug=args.interest)
+        if interests:
+            cand_seen: set[str] = set()
+            candidates: list[tuple[sqlite3.Row, float]] = []
+            cand_source_ids: list[str] = []
+            seen_source_ids: set[str] = set()
+            for row in rows:
+                if (
+                    not row_allowed(row)
+                    or row["chunk_id"] in cand_seen
+                    or row["path"].startswith("pages/interests/")
+                ):
+                    continue
+                cand_seen.add(row["chunk_id"])
+                if row["source_id"] not in seen_source_ids:
+                    seen_source_ids.add(row["source_id"])
+                    cand_source_ids.append(row["source_id"])
+                candidates.append((row, float(-row["rank"] if row["rank"] is not None else 0.0)))
+            for source_id in cand_source_ids:
+                edge_rows = con.execute("""
+                    SELECT e.target_node_id, e.raw_target
+                    FROM kg_edges e
+                    JOIN kg_nodes src ON src.node_id = e.source_node_id
+                    JOIN kg_nodes tgt ON tgt.node_id = e.target_node_id
+                    WHERE e.source_id=? AND e.tombstone=0 AND e.resolution_state='resolved'
+                      AND (e.trust_tier='trusted' OR ?)
+                      AND (src.trust_tier='trusted' OR ?)
+                      AND (tgt.trust_tier='trusted' OR ?)
+                """, (source_id, int(args.include_untrusted), int(args.include_untrusted), int(args.include_untrusted))).fetchall()
+                for edge in edge_rows:
+                    chunks = con.execute("""
+                        SELECT c.*, 0.0 AS rank
+                        FROM kg_chunks c JOIN kg_nodes n ON n.source_id = c.source_id
+                        WHERE n.node_id=? AND c.tombstone=0
+                        ORDER BY c.line_start LIMIT 1
+                    """, (edge["target_node_id"],)).fetchall()
+                    for chunk in chunks:
+                        if (
+                            chunk["chunk_id"] in cand_seen
+                            or not row_allowed(chunk)
+                            or chunk["path"].startswith("pages/interests/")
+                        ):
+                            continue
+                        cand_seen.add(chunk["chunk_id"])
+                        candidates.append((chunk, 0.05))
+            bases = [b for _, b in candidates]
+            lo, hi = (min(bases), max(bases)) if bases else (0.0, 0.0)
+            weight_sum = sum(interest["weight"] for interest in interests)
+            strength = max(0.0, args.interest_strength)
+            node_cache: dict[str, Any] = {}
+            scored: list[tuple[float, str, dict[str, Any]]] = []
+            for row, base in candidates:
+                base_norm = (base - lo) / (hi - lo + EPS)
+                fit, matched, ireasons = interest_fit(con, row, interests, node_cache)
+                fit_norm = fit / (weight_sum + EPS)
+                final = base_norm + strength * min(1.0, fit_norm)
+                result = result_from_chunk(row, rank=base)
+                result["base_score"] = base_norm
+                result["interest_score"] = fit_norm
+                result["matched_interests"] = [m["slug"] for m in matched]
+                result["interest_reasons"] = ireasons
+                result["score"] = final
+                scored.append((final, row["chunk_id"], result))
+            scored.sort(key=lambda x: (-x[0], x[1]))
+            results = [r for _, _, r in scored[:args.limit]]
+            out = {"ok": True, "fresh": status.get("fresh", False), "query": args.query, "db_path": str(db), "trust_policy": TRUST_POLICY_VERSION, "results": results, "diagnostics": [] if code == 0 else [status]}
+            print_json_or_markdown(out, args.format)
+            return 0
     results = []
     seen_chunks: set[str] = set()
     seed_source_ids: list[str] = []
@@ -832,6 +1002,8 @@ def print_json_or_markdown(out: dict[str, Any], fmt: str) -> None:
         print(f"- trust: `{r['trust_tier']}`")
         if r.get("edge_reasons"):
             print("- edges: " + ", ".join(f"`{x}`" for x in r["edge_reasons"][:6]))
+        if r.get("interest_reasons"):
+            print("- interests: " + ", ".join(f"`{x}`" for x in r["interest_reasons"][:6]))
         print("\n" + r.get("excerpt", "").strip()[:500] + "\n")
 
 
@@ -860,6 +1032,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--include-reports", action="store_true")
     p.add_argument("--include-untrusted", action="store_true")
     p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--use-interests", action="store_true")
+    p.add_argument("--interest", default=None)
+    p.add_argument("--interest-strength", type=float, default=0.5)
     p.add_argument("--db", default=DEFAULT_DB)
     p = sub.add_parser("checkpoint")
     p.add_argument("--out", required=True)
