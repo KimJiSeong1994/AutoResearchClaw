@@ -1199,6 +1199,91 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     return 0
 
 
+def normalize_topic_id(value: Any) -> str:
+    """Fold scout-topic ids to a canonical form so a base ``llm_agents`` and an
+    interest slug ``llm-agents`` dedupe to one topic instead of double-scouting."""
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+
+
+def interest_to_topic_row(interest: dict[str, Any]) -> dict[str, Any]:
+    """Map an active interest note to a Traveler scout-topic row.
+
+    Reverses the bootstrap weight mapping (high=0.8 / medium=0.6 / low=0.4) back
+    into a scout priority. Query/scope are synthesized from the curated seed
+    keywords and related tags; min_sources/max_candidates fall back to Traveler
+    defaults so curation stays minimal.
+    """
+    slug = interest["slug"]
+    keywords = interest.get("seed_keywords") or []
+    query = " ".join(keywords).strip() or slug.replace("-", " ").replace("_", " ")
+    related = interest.get("related_tags") or []
+    try:
+        weight = float(interest.get("weight", 0.6))
+    except (TypeError, ValueError):
+        weight = 0.6
+    priority = "high" if weight >= 0.7 else ("medium" if weight >= 0.5 else "low")
+    scope_basis = ", ".join(related) if related else query
+    return {
+        "id": slug,
+        "query": query[:200],
+        "scope": f"public research and engineering sources for {scope_basis}"[:300],
+        "priority": priority,
+        "source": "interest-note",
+    }
+
+
+def cmd_scout_topics(args: argparse.Namespace) -> int:
+    """Emit Traveler scout topics merged from a base file and the KG's active
+    interest notes. Curated interest notes override a base topic of the same
+    (normalized) id; new interests are appended. Base-only when the KG is
+    missing, so the Traveler always retains its committed baseline."""
+    db = Path(args.db).expanduser()
+    base_rows: list[dict[str, Any]] = []
+    if args.base:
+        base_path = Path(args.base).expanduser()
+        if base_path.exists():
+            try:
+                payload = json.loads(base_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, dict):
+                base_rows = [r for r in payload.get("topics", []) if isinstance(r, dict)]
+            elif isinstance(payload, list):
+                base_rows = [r for r in payload if isinstance(r, dict)]
+    interests: list[dict[str, Any]] = []
+    if db.exists():
+        try:
+            con = connect(db)
+            init_schema(con)
+            interests = load_active_interests(con, only_slug=None)
+        except sqlite3.Error:
+            interests = []
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in base_rows:
+        rid = normalize_topic_id(row.get("id"))
+        if not rid:
+            continue
+        if rid not in merged:
+            order.append(rid)
+        merged[rid] = row
+    for interest in interests:
+        row = interest_to_topic_row(interest)
+        rid = normalize_topic_id(row["id"])
+        if not rid:
+            continue
+        if rid not in merged:
+            order.append(rid)
+        merged[rid] = row  # curated interest note wins over a base topic of the same id
+    out = {
+        "topics": [merged[rid] for rid in order],
+        "generated_from": {"base_topics": len(base_rows), "interests": len(interests)},
+        "trust_policy": TRUST_POLICY_VERSION,
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_checkpoint(args: argparse.Namespace) -> int:
     db = Path(args.db).expanduser()
     outdir = Path(args.out).expanduser()
@@ -1361,11 +1446,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--strict", action="store_true")
     p.add_argument("--vault", default=None)
     p.add_argument("--db", default=DEFAULT_DB)
+    p = sub.add_parser("scout-topics")
+    p.add_argument("--base", default=None,
+                   help="base scout-topics json (dict with 'topics' or a list) to merge under interest notes")
+    p.add_argument("--db", default=DEFAULT_DB)
     p = sub.add_parser("checkpoint")
     p.add_argument("--out", required=True)
     add_common(p)
     args = ap.parse_args(argv)
-    return globals()[f"cmd_{args.cmd}"](args)
+    return globals()[f"cmd_{args.cmd.replace('-', '_')}"](args)
 
 
 if __name__ == "__main__":
