@@ -76,6 +76,26 @@ else
   echo "warn: autoresearch_pdf_fetch.py not found at $PDF_FETCH_PY — skipping PDF fetch"
 fi
 
+# 1.8 Refresh the persistent PaperWiki knowledge graph from the pages just
+# published, so agent KG queries (query / recommend) stay current. Best-effort:
+# a KG sync failure must never abort the daily research+publish pipeline. `sync`
+# cold-starts a missing DB (it indexes every page on first run), so no separate
+# build bootstrap is needed.
+KG_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+KG_SCRIPT="${PAPERWIKI_KG_SCRIPT:-$KG_REPO_ROOT/scripts/paperwiki_kg.py}"
+KG_DB="${PAPERWIKI_KG_DB:-$KG_REPO_ROOT/.omx/reports/paperwiki-kg/persistent/paperwiki_kg.sqlite}"
+if [ -f "$KG_SCRIPT" ]; then
+  echo "syncing PaperWiki knowledge graph from pages/ ..."
+  if python3 "$KG_SCRIPT" sync --vault "$WIKI_ROOT" --db "$KG_DB" --json >/dev/null; then
+    echo "PaperWiki KG synced:"
+    echo "  $KG_DB"
+  else
+    echo "warn: PaperWiki KG sync failed (continuing) — db: $KG_DB" >&2
+  fi
+else
+  echo "warn: paperwiki_kg.py not found at $KG_SCRIPT — skipping KG sync" >&2
+fi
+
 # 2. Pull weekly trend reports EC2 -> Obsidian PaperReview vault (unchanged).
 if ssh -i "$KEY_FILE" "$REMOTE_HOST" "test -d ${REMOTE_WEEKLY_ARTIFACTS}"; then
   rsync -az --safe-links --max-size=10M \
