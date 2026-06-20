@@ -1,6 +1,6 @@
 # AutoResearchClaw
 
-Local, version-controlled workspace for the OpenClaw agent running on the EC2 gateway.
+EC2 OpenClaw 에이전트의 버전 관리 워크스페이스 — 일일 다소스 리서치, AutoResearchClaw 심층 리서치, PaperWiki KG, Obsidian·Discord 전달 파이프라인을 거버넌스 검증과 함께 배포한다.
 
 ## What this repo contains
 
