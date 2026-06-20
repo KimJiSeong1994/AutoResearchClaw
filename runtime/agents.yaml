@@ -223,8 +223,8 @@ agents:
     name: 집현전-감사팀 integrated operations auditor
     kind: audit-agent
     source_refs:
-      - .omx/plans/prd-jiphyeonjeon-audit-team.md
-      - .omx/plans/test-spec-jiphyeonjeon-audit-team.md
+      - docs/plans/prd-jiphyeonjeon-audit-team.md
+      - docs/plans/test-spec-jiphyeonjeon-audit-team.md
       - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/audit_ops.py
     owns_jobs:
       - jiphyeonjeon-audit-team-digest
