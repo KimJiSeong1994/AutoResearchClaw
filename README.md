@@ -1,6 +1,8 @@
 # AutoResearchClaw
 
-EC2 OpenClaw 에이전트의 버전 관리 워크스페이스 — 일일 다소스 리서치, AutoResearchClaw 심층 리서치, PaperWiki KG, Obsidian·Discord 전달 파이프라인을 거버넌스 검증과 함께 배포한다.
+AI/ML 연구자를 위한 개인 맞춤형 리서치 비서. 논문 북마크·관심사를 학습해 매일 새 논문과 뉴스레터를 자동으로 골라 요약하고, 심층 리서치까지 Obsidian·Discord로 전달한다.
+
+이 저장소는 위 서비스를 EC2 OpenClaw 워크스페이스로 배포·운영하는 소스(에이전트 프롬프트, 커스텀 스킬, 런타임 매니페스트, 배포 스크립트)를 담는다.
 
 ## What this repo contains
 
