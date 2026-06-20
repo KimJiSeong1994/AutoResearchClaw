@@ -1028,13 +1028,13 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     if args.strict and code != 0:
         out = {"ok": False, "fresh": False, "command": "recommend", "db_path": str(db),
                "trust_policy": TRUST_POLICY_VERSION, "results": [], "diagnostics": [status]}
-        print_recommend(out, args.format)
+        print_recommend(out, args.format, args.snippet_date)
         return code
     if code == EXIT_MISSING:
         out = {"ok": False, "fresh": False, "command": "recommend", "db_path": str(db),
                "trust_policy": TRUST_POLICY_VERSION, "error": "missing_db", "results": [],
                "diagnostics": [status]}
-        print_recommend(out, args.format)
+        print_recommend(out, args.format, args.snippet_date)
         return code
     con = connect(db)
     interests = load_active_interests(con, only_slug=args.interest)
@@ -1046,7 +1046,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
             "active_interests": [], "cold_start": True, "results": [],
             "diagnostics": [{"code": "no_active_interests"}],
         }
-        print_recommend(out, args.format)
+        print_recommend(out, args.format, args.snippet_date)
         return 0
 
     def row_allowed(row: sqlite3.Row) -> bool:
@@ -1195,7 +1195,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         "active_interests": [{"slug": i["slug"], "weight": i["weight"]} for i in interests],
         "cold_start": False, "results": selected, "diagnostics": diagnostics,
     }
-    print_recommend(out, args.format)
+    print_recommend(out, args.format, args.snippet_date)
     return 0
 
 
@@ -1253,7 +1253,40 @@ def print_json_or_markdown(out: dict[str, Any], fmt: str) -> None:
         print("\n" + r.get("excerpt", "").strip()[:500] + "\n")
 
 
-def print_recommend(out: dict[str, Any], fmt: str) -> None:
+def render_discord_snippet(out: dict[str, Any], snippet_date: str | None) -> str:
+    """Compact, date-marked recommendation block for the daily Discord briefing.
+
+    Returns an empty string on cold start / no results / non-ok so the caller can
+    skip pushing a snippet entirely. The leading ``<!-- kg-recommend date: ... -->``
+    marker lets the EC2 briefing date-gate the snippet and never post a stale one.
+    """
+    if not out.get("ok") or out.get("cold_start"):
+        return ""
+    results = out.get("results", [])
+    if not results:
+        return ""
+    date_str = snippet_date or (str(out.get("as_of") or "")[:10])
+    interests = out.get("active_interests", [])
+    lines: list[str] = []
+    if date_str:
+        lines.append(f"<!-- kg-recommend date: {date_str} -->")
+    lines.append("## 관심영역 추천 (PaperWiki KG)")
+    if interests:
+        lines.append(f"_관심영역 {len(interests)}개 기준 · 로컬 PaperWiki KG_")
+    for i, r in enumerate(results, 1):
+        title = (str(r.get("title") or r.get("path") or "untitled")).strip()
+        matched = r.get("matched_interests") or []
+        tail = f" — {', '.join(matched)}" if matched else ""
+        lines.append(f"{i}. **{title}**{tail} · `{r.get('path', '')}`")
+    return "\n".join(lines)
+
+
+def print_recommend(out: dict[str, Any], fmt: str, snippet_date: str | None = None) -> None:
+    if fmt == "discord":
+        snippet = render_discord_snippet(out, snippet_date)
+        if snippet:
+            print(snippet)
+        return
     if fmt == "json":
         print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
         return
@@ -1322,7 +1355,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--include-raw", action="store_true")
     p.add_argument("--include-reports", action="store_true")
     p.add_argument("--include-untrusted", action="store_true")
-    p.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    p.add_argument("--format", choices=["json", "markdown", "discord"], default="markdown")
+    p.add_argument("--snippet-date", default=None,
+                   help="YYYY-MM-DD date marker for the discord snippet (default: as_of date)")
     p.add_argument("--strict", action="store_true")
     p.add_argument("--vault", default=None)
     p.add_argument("--db", default=DEFAULT_DB)

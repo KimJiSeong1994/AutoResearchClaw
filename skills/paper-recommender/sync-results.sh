@@ -96,6 +96,30 @@ else
   echo "warn: paperwiki_kg.py not found at $KG_SCRIPT — skipping KG sync" >&2
 fi
 
+# 1.9 Build a compact interest-area recommendation snippet from the freshly
+# synced KG and push it to the EC2 OpenClaw workspace, where the daily Discord
+# briefing date-gates and appends it. Best-effort: a recommend/push failure must
+# never abort the pipeline. An empty snippet (cold start / no active interest
+# notes) is skipped so the briefing never posts an empty block. The KST date
+# marker lets the EC2 side reject a stale snippet from a failed earlier push.
+REMOTE_KG_RECOMMEND_PATH="${REMOTE_KG_RECOMMEND_PATH:-~/.openclaw/workspace/reports/kg-interest-recommend.md}"
+if [ -f "$KG_SCRIPT" ]; then
+  KG_RUN_DATE="$(TZ=Asia/Seoul date +%F)"
+  KG_SNIPPET="$(mktemp)"
+  if python3 "$KG_SCRIPT" recommend --db "$KG_DB" --format discord \
+       --snippet-date "$KG_RUN_DATE" --limit 3 >"$KG_SNIPPET" 2>/dev/null && [ -s "$KG_SNIPPET" ]; then
+    if ssh -i "$KEY_FILE" "$REMOTE_HOST" \
+         "mkdir -p \"\$(dirname $REMOTE_KG_RECOMMEND_PATH)\" && cat > $REMOTE_KG_RECOMMEND_PATH" <"$KG_SNIPPET"; then
+      echo "pushed KG interest-recommend snippet ($KG_RUN_DATE) to EC2: $REMOTE_KG_RECOMMEND_PATH"
+    else
+      echo "warn: KG recommend snippet push failed (continuing)" >&2
+    fi
+  else
+    echo "KG recommend snippet empty (cold start / no active interests) — skipping push"
+  fi
+  rm -f "$KG_SNIPPET"
+fi
+
 # 2. Pull weekly trend reports EC2 -> Obsidian PaperReview vault (unchanged).
 if ssh -i "$KEY_FILE" "$REMOTE_HOST" "test -d ${REMOTE_WEEKLY_ARTIFACTS}"; then
   rsync -az --safe-links --max-size=10M \

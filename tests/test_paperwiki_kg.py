@@ -717,6 +717,28 @@ class PaperWikiRecommendTest(unittest.TestCase):
         self.assertNotEqual(cp.returncode, 0)
         self.assertFalse(json.loads(cp.stdout)["ok"])
 
+    def test_recommend_discord_snippet_is_dated_and_sectioned(self) -> None:
+        # The discord format emits a date-marked, section-headed block the EC2
+        # daily briefing can date-gate and chunk on the `## ` boundary.
+        self.add_interest()
+        self.build()
+        cp = run_cmd("recommend", "--db", str(self.db), "--format", "discord",
+                     "--snippet-date", "2026-06-20", "--limit", "3")
+        body = cp.stdout
+        lines = [ln for ln in body.splitlines() if ln.strip()]
+        self.assertEqual(lines[0], "<!-- kg-recommend date: 2026-06-20 -->")
+        self.assertIn("## 관심영역 추천 (PaperWiki KG)", body)
+        self.assertIn("`pages/AliasTarget.md`", body)
+        self.assertNotIn("pages/interests/", body)
+
+    def test_recommend_discord_cold_start_emits_nothing(self) -> None:
+        # No active interest notes -> empty stdout so the pipeline skips the push
+        # and never posts an empty recommendation block.
+        self.build()
+        cp = run_cmd("recommend", "--db", str(self.db), "--format", "discord",
+                     "--snippet-date", "2026-06-20")
+        self.assertEqual(cp.stdout.strip(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

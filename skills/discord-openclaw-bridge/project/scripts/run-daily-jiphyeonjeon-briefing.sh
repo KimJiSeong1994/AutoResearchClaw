@@ -57,6 +57,9 @@ export NEWSLETTER_WIKI_ROOT="${NEWSLETTER_WIKI_ROOT:-$WORKSPACE/wiki}"
 export NEWSLETTER_REPORT_PATH="${NEWSLETTER_REPORT_PATH:-$WORKSPACE/reports/newsletter-briefing-latest.md}"
 export NEWSLETTER_ARCHIVE_SOURCE="${NEWSLETTER_ARCHIVE_SOURCE:-$NEWSLETTER_WIKI_ROOT/raw/newsletters/$RUN_DATE/items.json}"
 export DISCORD_BRIEFING_SOURCE="${DISCORD_BRIEFING_SOURCE:-$WORKSPACE/reports/daily-trends-latest.md}"
+# PaperWiki KG interest recommendation, pushed here by the local sync-results.sh
+# step 1.9. Appended to the daily briefing only when its date marker matches today.
+export KG_RECOMMEND_SNIPPET="${KG_RECOMMEND_SNIPPET:-$WORKSPACE/reports/kg-interest-recommend.md}"
 WAIT_SECONDS="${DAILY_BRIEFING_WAIT_SECONDS:-600}"
 WAIT_INTERVAL="${DAILY_BRIEFING_WAIT_INTERVAL_SECONDS:-5}"
 NEWSLETTER_LOCK_DIR="${NEWSLETTER_ARCHIVE_LOCK_DIR:-$WORKSPACE/.locks/newsletter-archive-and-cardnews.lock}"
@@ -304,6 +307,30 @@ for idx, item in enumerate(selected, start=1):
     ]
     if extra_count:
         lines.append(f"- 관련 링크: 같은 제목으로 수집된 추가 공개 링크 {extra_count}개")
+# PaperWiki KG interest recommendation (pushed from local sync-results.sh step
+# 1.9). Date-gated: only appended when the snippet's marker matches run_date, so
+# a stale snippet from a failed earlier push is never posted. The `## ` heading
+# makes it its own message chunk in post_briefing's splitter.
+kg_snippet_path = os.environ.get("KG_RECOMMEND_SNIPPET", "").strip()
+if kg_snippet_path:
+    snippet_file = Path(kg_snippet_path).expanduser()
+    if snippet_file.exists():
+        try:
+            snippet_text = snippet_file.read_text(encoding="utf-8")
+        except OSError:
+            snippet_text = ""
+        snippet_lines = snippet_text.splitlines()
+        marker_idx = next((i for i, ln in enumerate(snippet_lines) if ln.strip()), None)
+        if marker_idx is not None:
+            marker = re.match(
+                r"<!--\s*kg-recommend date:\s*(\d{4}-\d{2}-\d{2})\s*-->\s*$",
+                snippet_lines[marker_idx].strip(),
+            )
+            if marker and marker.group(1) == run_date:
+                section = "\n".join(snippet_lines[marker_idx + 1 :]).strip()
+                if section:
+                    lines += ["", section]
+
 lines += [
     "",
     "## 운영 메모",
