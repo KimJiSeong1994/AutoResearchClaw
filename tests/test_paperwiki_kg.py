@@ -593,5 +593,130 @@ class PaperWikiBootstrapTest(unittest.TestCase):
         self.assertNotIn("second", body)
 
 
+class PaperWikiRecommendTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self.tmp.name)
+        self.vault = self.work / "vault"
+        shutil.copytree(FIXTURE, self.vault)
+        self.db = self.work / "paperwiki_kg.sqlite"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def add_interest(self) -> None:
+        write_note(
+            self.vault, "pages/interests/llm-agents.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.8,
+             "related_tags": ["kg"], "seed_keywords": ["agent", "planning"], "source": "user"},
+            "# LLM Agents\n\nInterest in LLM agents and planning.\n\n## Anchors\n- [[Alias Target]]\n",
+        )
+
+    def build(self, *extra: str) -> None:
+        run_cmd("build", "--vault", str(self.vault), "--db", str(self.db), "--include-raw", "--json", *extra)
+
+    def recommend_json(self, *extra: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return run_cmd("recommend", "--db", str(self.db), "--format", "json", *extra, check=check)
+
+    def test_recommend_returns_interest_anchored_results(self) -> None:
+        self.add_interest()
+        self.build()
+        out = json.loads(self.recommend_json().stdout)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["command"], "recommend")
+        self.assertFalse(out["cold_start"])
+        self.assertTrue(out["results"])
+        paths = {r["path"] for r in out["results"]}
+        self.assertIn("pages/AliasTarget.md", paths)
+        self.assertFalse(any(p.startswith("pages/interests/") for p in paths))
+        for r in out["results"]:
+            self.assertIn("components", r)
+            for key in ["fit", "freshness", "trust_w", "novelty"]:
+                self.assertIn(key, r["components"])
+            self.assertIn("why", r)
+            self.assertIn("matched_interests", r)
+            self.assertIn("score", r)
+
+    def test_recommend_deterministic_with_as_of(self) -> None:
+        self.add_interest()
+        self.build()
+        first = json.loads(self.recommend_json("--as-of", "2026-06-20T00:00:00Z").stdout)
+        second = json.loads(self.recommend_json("--as-of", "2026-06-20T00:00:00Z").stdout)
+        self.assertEqual(first["results"], second["results"])
+        self.assertEqual(first["as_of"], second["as_of"])
+
+    def test_recommend_freshness_prefers_recent(self) -> None:
+        self.add_interest()
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute(
+            "UPDATE kg_events SET applied_at='2020-01-01T00:00:00Z' WHERE source_path='pages/AliasTarget.md'"
+        )
+        con.commit()
+        con.close()
+        out = json.loads(self.recommend_json("--as-of", "2026-06-20T00:00:00Z").stdout)
+        by_path = {r["path"]: r for r in out["results"]}
+        self.assertIn("pages/AliasTarget.md", by_path)
+        self.assertIn("pages/Trusted.md", by_path)
+        self.assertLess(
+            by_path["pages/AliasTarget.md"]["components"]["freshness"],
+            by_path["pages/Trusted.md"]["components"]["freshness"],
+        )
+
+    def test_recommend_trust_gate(self) -> None:
+        self.add_interest()
+        self.build()
+        default = json.loads(self.recommend_json().stdout)
+        self.assertFalse(any(r["path"].startswith("pages/generated/") for r in default["results"]))
+        with_raw = json.loads(self.recommend_json("--include-raw").stdout)
+        self.assertFalse(any(r["path"].startswith("pages/generated/") for r in with_raw["results"]))
+
+    def test_recommend_cold_start_empty(self) -> None:
+        self.build()
+        cp = self.recommend_json()
+        out = json.loads(cp.stdout)
+        self.assertEqual(cp.returncode, 0)
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["cold_start"])
+        self.assertEqual(out["results"], [])
+
+    def test_recommend_diversity_cap(self) -> None:
+        write_note(
+            self.vault, "pages/interests/multichunk.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.9,
+             "related_tags": ["kg"], "seed_keywords": ["zorptopic"], "source": "user"},
+            "# Multichunk\n\nInterest in zorptopic.\n",
+        )
+        write_note(
+            self.vault, "pages/Crowded.md",
+            {"title": "Crowded", "tags": ["kg"]},
+            "# Section One\n\nzorptopic appears here.\n\n# Section Two\n\nzorptopic appears again.\n"
+            "\n# Section Three\n\nzorptopic once more.\n\n# Section Four\n\nzorptopic yet again.\n",
+        )
+        self.build()
+        out = json.loads(self.recommend_json("--max-per-source", "2", "--limit", "10").stdout)
+        from collections import Counter
+        counts = Counter(r["path"] for r in out["results"])
+        for path, count in counts.items():
+            self.assertLessEqual(count, 2, f"{path} exceeded max-per-source: {count}")
+
+    def test_recommend_missing_db_graceful(self) -> None:
+        cp = self.recommend_json(check=False)
+        out = json.loads(cp.stdout)
+        self.assertEqual(cp.returncode, 5)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["results"], [])
+
+    def test_recommend_strict_stale(self) -> None:
+        self.add_interest()
+        self.build()
+        note = self.vault / "pages" / "Trusted.md"
+        note.write_text(note.read_text(encoding="utf-8") + "\nDrift line.\n", encoding="utf-8")
+        cp = run_cmd("recommend", "--db", str(self.db), "--format", "json", "--strict",
+                     "--vault", str(self.vault), check=False)
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertFalse(json.loads(cp.stdout)["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

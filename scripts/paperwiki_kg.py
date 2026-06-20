@@ -8,6 +8,7 @@ events, freshness checks, and trust-aware query gates.
 from __future__ import annotations
 
 import argparse
+import calendar
 import hashlib
 import json
 import os
@@ -775,6 +776,66 @@ def interest_fit(con: sqlite3.Connection, chunk_row: sqlite3.Row, interests: lis
     return fit, matched, reasons
 
 
+def parse_iso_epoch(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return float(calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ")))
+    except (ValueError, TypeError):
+        return None
+
+
+def first_seen_map(con: sqlite3.Connection) -> dict[str, float]:
+    seen: dict[str, float] = {}
+    for row in con.execute(
+        "SELECT source_path, MIN(applied_at) AS first_seen FROM kg_events "
+        "WHERE source_path IS NOT NULL GROUP BY source_path"
+    ):
+        epoch = parse_iso_epoch(row["first_seen"])
+        if epoch is not None:
+            seen[row["source_path"]] = epoch
+    return seen
+
+
+def resolve_as_of_epoch(con: sqlite3.Connection, explicit: str | None) -> tuple[float, str]:
+    if explicit:
+        epoch = parse_iso_epoch(explicit)
+        if epoch is not None:
+            return epoch, explicit
+    health = read_health(con)
+    health_updated = health.get("updated_at")
+    epoch = parse_iso_epoch(health_updated) if isinstance(health_updated, str) else None
+    if epoch is not None:
+        return epoch, health_updated
+    latest = con.execute("SELECT MAX(applied_at) AS m FROM kg_events").fetchone()
+    latest_iso = latest["m"] if latest else None
+    epoch = parse_iso_epoch(latest_iso)
+    if epoch is not None:
+        return epoch, latest_iso
+    fallback = now()
+    return parse_iso_epoch(fallback) or 0.0, fallback
+
+
+def parse_since_epoch(value: str | None, as_of_epoch: float) -> float | None:
+    if not value:
+        return None
+    m = re.fullmatch(r"(\d+)d", value.strip())
+    if m:
+        return as_of_epoch - int(m.group(1)) * 86400.0
+    try:
+        return float(calendar.timegm(time.strptime(value.strip(), "%Y-%m-%d")))
+    except (ValueError, TypeError):
+        return None
+
+
+def freshness_score(first_seen_epoch: float | None, as_of_epoch: float, half_life: float) -> float:
+    if first_seen_epoch is None:
+        return 0.05
+    age_days = max(0.0, (as_of_epoch - first_seen_epoch) / 86400.0)
+    hl = half_life if half_life > 0 else EPS
+    return max(0.05, min(1.0, 0.5 ** (age_days / hl)))
+
+
 def cmd_query(args: argparse.Namespace) -> int:
     db = Path(args.db).expanduser()
     vault = Path(args.vault).expanduser().resolve() if args.vault else None
@@ -953,6 +1014,191 @@ def cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_recommend(args: argparse.Namespace) -> int:
+    db = Path(args.db).expanduser()
+    vault = Path(args.vault).expanduser().resolve() if args.vault else None
+    if vault is None and db.exists():
+        try:
+            hv = read_health(connect(db)).get("vault")
+            if hv:
+                vault = Path(hv).expanduser().resolve()
+        except sqlite3.Error:
+            pass
+    code, status = validate_db(db, vault)
+    if args.strict and code != 0:
+        out = {"ok": False, "fresh": False, "command": "recommend", "db_path": str(db),
+               "trust_policy": TRUST_POLICY_VERSION, "results": [], "diagnostics": [status]}
+        print_recommend(out, args.format)
+        return code
+    if code == EXIT_MISSING:
+        out = {"ok": False, "fresh": False, "command": "recommend", "db_path": str(db),
+               "trust_policy": TRUST_POLICY_VERSION, "error": "missing_db", "results": [],
+               "diagnostics": [status]}
+        print_recommend(out, args.format)
+        return code
+    con = connect(db)
+    interests = load_active_interests(con, only_slug=args.interest)
+    as_of_epoch, as_of_iso = resolve_as_of_epoch(con, args.as_of)
+    if not interests:
+        out = {
+            "ok": True, "fresh": status.get("fresh", False), "command": "recommend",
+            "db_path": str(db), "trust_policy": TRUST_POLICY_VERSION, "as_of": as_of_iso,
+            "active_interests": [], "cold_start": True, "results": [],
+            "diagnostics": [{"code": "no_active_interests"}],
+        }
+        print_recommend(out, args.format)
+        return 0
+
+    def row_allowed(row: sqlite3.Row) -> bool:
+        trust = row["trust_tier"]
+        if trust == "trusted":
+            return True
+        if trust == "raw" and args.include_raw:
+            return True
+        if trust == "report" and args.include_reports:
+            return True
+        if args.include_untrusted:
+            return True
+        return False
+
+    def result_from_chunk(row: sqlite3.Row, *, rank: float) -> dict[str, Any]:
+        edge_rows = con.execute("SELECT raw_target,resolution_state,target_text FROM kg_edges WHERE source_id=? AND tombstone=0 LIMIT 8", (row["source_id"],)).fetchall()
+        return {
+            "path": row["path"], "title": row["title"], "chunk_id": row["chunk_id"],
+            "line_start": row["line_start"], "line_end": row["line_end"],
+            "score": rank,
+            "trust_tier": row["trust_tier"], "source_hash": row["source_hash"],
+            "edge_reasons": [f"fts:{e['resolution_state']}:{e['raw_target']}" for e in edge_rows],
+            "citations": [{"path": row["path"], "line_start": row["line_start"], "line_end": row["line_end"]}],
+            "warnings": [] if row["trust_tier"] == "trusted" else ["untrusted_or_opt_in_source"],
+            "excerpt": row["text"][:500],
+        }
+
+    diagnostics: list[dict[str, Any]] = [] if code == 0 else [status]
+    candidates: dict[str, sqlite3.Row] = {}
+
+    def add_chunk(chunk: sqlite3.Row) -> None:
+        if chunk["chunk_id"] in candidates:
+            return
+        if chunk["path"].startswith("pages/interests/"):
+            return
+        if not row_allowed(chunk):
+            return
+        candidates[chunk["chunk_id"]] = chunk
+
+    # C1 anchor 1-hop: first chunk per anchor/neighbor node.
+    anchor_node_ids: set[str] = set()
+    for interest in interests:
+        anchor_node_ids |= interest["anchor_node_ids"]
+        anchor_node_ids |= interest["neighbor_node_ids"]
+    for node_id in sorted(anchor_node_ids):
+        for chunk in con.execute(
+            "SELECT c.* FROM kg_chunks c JOIN kg_nodes n ON n.source_id=c.source_id "
+            "WHERE n.node_id=? AND c.tombstone=0 ORDER BY c.line_start LIMIT 1", (node_id,)
+        ).fetchall():
+            add_chunk(chunk)
+
+    # C2 tag-carriers: first chunk per source whose node carries a related tag.
+    related_tags: set[str] = set()
+    for interest in interests:
+        related_tags |= interest["tag_set"]
+    tag_source_ids: list[str] = []
+    seen_tag_sources: set[str] = set()
+    for tag in sorted(related_tags):
+        for row in con.execute(
+            "SELECT DISTINCT n.source_id FROM kg_assertions a "
+            "JOIN kg_nodes n ON n.node_id=a.object_id "
+            "WHERE a.assertion=? AND n.tombstone=0", (f"tag:{tag}",)
+        ).fetchall():
+            if row["source_id"] not in seen_tag_sources:
+                seen_tag_sources.add(row["source_id"])
+                tag_source_ids.append(row["source_id"])
+    for source_id in tag_source_ids:
+        for chunk in con.execute(
+            "SELECT c.* FROM kg_chunks c WHERE c.source_id=? AND c.tombstone=0 "
+            "ORDER BY c.line_start LIMIT 1", (source_id,)
+        ).fetchall():
+            add_chunk(chunk)
+
+    # C3 seed-keyword FTS over-fetch (degrade gracefully on FTS error).
+    seed_terms: list[str] = []
+    for interest in interests:
+        seed_terms.extend(interest["seed_keywords"])
+    if seed_terms:
+        match = sql_match_query(" ".join(seed_terms))
+        try:
+            for chunk in con.execute(
+                "SELECT c.*, bm25(fts_chunks) AS rank FROM fts_chunks "
+                "JOIN kg_chunks c ON fts_chunks.chunk_id = c.chunk_id "
+                "WHERE fts_chunks MATCH ? AND c.tombstone=0 ORDER BY rank LIMIT ?",
+                (match, args.limit * 6)
+            ).fetchall():
+                add_chunk(chunk)
+        except sqlite3.OperationalError as e:
+            diagnostics.append({"code": "fts_degraded", "message": str(e)})
+
+    weight_sum = sum(interest["weight"] for interest in interests)
+    since_epoch = parse_since_epoch(args.since, as_of_epoch)
+    seen = first_seen_map(con)
+    novelty_cache: dict[str, int] = {}
+    node_cache: dict[str, Any] = {}
+    trust_weights = {"trusted": 1.0, "report": 0.6, "raw": 0.4}
+
+    def outgoing_resolved(source_id: str) -> int:
+        if source_id not in novelty_cache:
+            node = con.execute("SELECT node_id FROM kg_nodes WHERE source_id=? AND tombstone=0", (source_id,)).fetchone()
+            if node is None:
+                novelty_cache[source_id] = 0
+            else:
+                novelty_cache[source_id] = con.execute(
+                    "SELECT COUNT(*) c FROM kg_edges WHERE source_node_id=? AND tombstone=0 "
+                    "AND resolution_state='resolved'", (node["node_id"],)
+                ).fetchone()["c"]
+        return novelty_cache[source_id]
+
+    scored: list[tuple[float, str, dict[str, Any]]] = []
+    for chunk in candidates.values():
+        first_seen = seen.get(chunk["path"])
+        if since_epoch is not None and (first_seen is None or first_seen < since_epoch):
+            continue
+        fit, matched, reasons = interest_fit(con, chunk, interests, node_cache)
+        fit_norm = fit / (weight_sum + EPS)
+        freshness = freshness_score(first_seen, as_of_epoch, args.half_life)
+        trust_w = trust_weights.get(chunk["trust_tier"], 0.2)
+        novelty = 1.0 + (0.15 if fit > 0 and outgoing_resolved(chunk["source_id"]) < 2 else 0.0)
+        raw_score = fit_norm * freshness * trust_w * novelty
+        result = result_from_chunk(chunk, rank=raw_score)
+        result["components"] = {"fit": fit_norm, "freshness": freshness, "trust_w": trust_w, "novelty": novelty}
+        result["matched_interests"] = [m["slug"] for m in matched]
+        result["why"] = [
+            {"interest": m["slug"], "via": "interest", "detail": reasons, "contribution": m["contribution"]}
+            for m in matched
+        ]
+        result["score"] = raw_score
+        scored.append((raw_score, chunk["chunk_id"], result))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    selected: list[dict[str, Any]] = []
+    per_source: dict[str, int] = {}
+    for _, _, result in scored:
+        path = result["path"]
+        if per_source.get(path, 0) >= args.max_per_source:
+            continue
+        per_source[path] = per_source.get(path, 0) + 1
+        selected.append(result)
+        if len(selected) >= args.limit:
+            break
+
+    out = {
+        "ok": True, "fresh": status.get("fresh", False), "command": "recommend",
+        "db_path": str(db), "trust_policy": TRUST_POLICY_VERSION, "as_of": as_of_iso,
+        "active_interests": [{"slug": i["slug"], "weight": i["weight"]} for i in interests],
+        "cold_start": False, "results": selected, "diagnostics": diagnostics,
+    }
+    print_recommend(out, args.format)
+    return 0
+
+
 def cmd_checkpoint(args: argparse.Namespace) -> int:
     db = Path(args.db).expanduser()
     outdir = Path(args.out).expanduser()
@@ -1007,6 +1253,36 @@ def print_json_or_markdown(out: dict[str, Any], fmt: str) -> None:
         print("\n" + r.get("excerpt", "").strip()[:500] + "\n")
 
 
+def print_recommend(out: dict[str, Any], fmt: str) -> None:
+    if fmt == "json":
+        print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print("# PaperWiki KG Recommendations\n")
+    print(f"- as_of: `{out.get('as_of')}`")
+    print(f"- fresh: `{out.get('fresh')}`")
+    print(f"- cold_start: `{out.get('cold_start')}`")
+    interests = out.get("active_interests", [])
+    if interests:
+        print("- interests: " + ", ".join(f"`{i['slug']}@{i['weight']}`" for i in interests))
+    if not out.get("ok"):
+        print(f"- error: `{out.get('error', out.get('diagnostics'))}`")
+        return
+    if out.get("cold_start"):
+        print("\n_No active interest notes; cold start._")
+        return
+    for i, r in enumerate(out.get("results", []), 1):
+        print(f"\n## {i}. {r['title']}")
+        print(f"- path: `{r['path']}`")
+        print(f"- lines: {r['line_start']}-{r['line_end']}")
+        print(f"- trust: `{r['trust_tier']}`")
+        print(f"- score: `{round(r.get('score', 0.0), 4)}`")
+        comp = r.get("components", {})
+        print("- components: " + ", ".join(f"{k}=`{round(v, 4)}`" for k, v in comp.items()))
+        if r.get("matched_interests"):
+            print("- interests: " + ", ".join(f"`{x}`" for x in r["matched_interests"]))
+        print("\n" + r.get("excerpt", "").strip()[:500] + "\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Persistent PaperWiki KG")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1035,6 +1311,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--use-interests", action="store_true")
     p.add_argument("--interest", default=None)
     p.add_argument("--interest-strength", type=float, default=0.5)
+    p.add_argument("--db", default=DEFAULT_DB)
+    p = sub.add_parser("recommend")
+    p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--interest", default=None)
+    p.add_argument("--since", default=None)
+    p.add_argument("--as-of", default=None)
+    p.add_argument("--half-life", type=float, default=60.0)
+    p.add_argument("--max-per-source", type=int, default=2)
+    p.add_argument("--include-raw", action="store_true")
+    p.add_argument("--include-reports", action="store_true")
+    p.add_argument("--include-untrusted", action="store_true")
+    p.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    p.add_argument("--strict", action="store_true")
+    p.add_argument("--vault", default=None)
     p.add_argument("--db", default=DEFAULT_DB)
     p = sub.add_parser("checkpoint")
     p.add_argument("--out", required=True)
