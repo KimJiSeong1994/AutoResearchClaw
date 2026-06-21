@@ -1551,6 +1551,47 @@ def test_agent_duplicate_indices_uses_openclaw_json(monkeypatch) -> None:
     assert requests[0]["max_tokens"] == 400
 
 
+def test_agent_duplicate_indices_prefers_hermes_aliases(monkeypatch) -> None:
+    previous = _quality_card(1, url="https://arxiv.org/abs/2605.03546")
+    current = dict(previous)
+    current["url"] = "https://research.google/blog/amie-doctor-evaluation"
+    requests: list[dict[str, object]] = []
+
+    class FakeGatewayClient:
+        def __init__(self, policy):
+            self.policy = policy
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def chat_completion(self, model, messages, *, temperature=0, max_tokens=None, response_format_json=False):
+            requests.append({
+                "url": self.policy.chat_url,
+                "headers": self.policy.headers,
+                "model": model,
+            })
+            return '{"duplicates":[{"current_index":0,"reason":"same_story"}]}'
+
+    monkeypatch.setattr(post_card_news, "OpenClawGatewayClient", FakeGatewayClient)
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "openclaw-token")
+    monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1")
+    monkeypatch.setenv("OPENCLAW_MODEL", "openclaw/clawbridge")
+    monkeypatch.setenv("HERMES_GATEWAY_TOKEN", "hermes-token")
+    monkeypatch.setenv("HERMES_BASE_URL", "http://127.0.0.1:28789/v1")
+    monkeypatch.setenv("HERMES_MODEL", "nous/hermes-agent")
+
+    config = CardNewsQualityGateConfig(agent_dedupe_enabled=True, agent_dedupe_max_previous=3)
+    result = asyncio.run(_agent_duplicate_indices([current], [_agent_context(previous)], config))
+
+    assert result == {0}
+    assert requests[0]["url"] == "http://127.0.0.1:28789/v1/chat/completions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer hermes-token"
+    assert requests[0]["model"] == "nous/hermes-agent"
+
+
 def test_rank_agent_contexts_prefers_similar_story_over_recent_noise() -> None:
     current = _quality_card(1, url="https://mirror.example.com/agent-memory")
     similar = _agent_context(_quality_card(1, url="https://example.com/original-agent-memory"))
@@ -1838,6 +1879,7 @@ def test_run_skips_before_discord_calls_and_writes_audit(tmp_path: Path, monkeyp
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
     monkeypatch.setenv("DISCORD_CARD_NEWS_REPORT_SKIP_TO_OPS", "0")
+    monkeypatch.setenv("JIPHYEONJEON_PUBLICATION_TRUST_GATE", "0")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "3")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "3")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "2")
@@ -1886,6 +1928,7 @@ def test_run_quality_gate_disable_bypasses_skip_and_audit(tmp_path: Path, monkey
     monkeypatch.setenv("DISCORD_CARD_NEWS_AUDIT_PATH", str(audit_path))
     monkeypatch.setenv("DISCORD_CARD_NEWS_ENRICH_PUBLIC_URLS", "0")
     monkeypatch.setenv("DISCORD_CARD_NEWS_QUALITY_GATE", "0")
+    monkeypatch.setenv("JIPHYEONJEON_PUBLICATION_TRUST_GATE", "0")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_PUBLISHABLE_CARDS", "3")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_NEW_CARDS", "3")
     monkeypatch.setenv("DISCORD_CARD_NEWS_MIN_EVIDENCE_CARDS", "2")

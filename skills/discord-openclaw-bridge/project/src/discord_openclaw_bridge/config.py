@@ -177,21 +177,53 @@ def _reporter_draft_dir() -> Path:
     ).expanduser()
 
 
-def _openclaw_gateway_token() -> str:
-    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
-    token_file = os.environ.get("OPENCLAW_GATEWAY_TOKEN_FILE", "").strip()
-    if not token and token_file:
+def _env_value(name: str) -> str:
+    return os.environ.get(name, "").strip()
+
+
+def _agent_gateway_token() -> str:
+    token = _env_value("HERMES_GATEWAY_TOKEN")
+    if token:
+        return token
+    token = _env_value("OPENCLAW_GATEWAY_TOKEN")
+    if token:
+        return token
+
+    for name in ("HERMES_GATEWAY_TOKEN_FILE", "OPENCLAW_GATEWAY_TOKEN_FILE"):
+        token_file = _env_value(name)
+        if not token_file:
+            continue
         path = Path(token_file).expanduser()
         if path.exists():
-            token = path.read_text().strip()
-    return token
+            return path.read_text().strip()
+    return ""
+
+
+def _openclaw_gateway_token() -> str:
+    return _agent_gateway_token()
+
+
+def _agent_base_url() -> tuple[str, str]:
+    hermes_base_url = _env_value("HERMES_BASE_URL")
+    if hermes_base_url:
+        return hermes_base_url.rstrip("/"), "HERMES_BASE_URL"
+    openclaw_base_url = _env_value("OPENCLAW_BASE_URL") or "http://127.0.0.1:18789/v1"
+    return openclaw_base_url.rstrip("/"), "OPENCLAW_BASE_URL"
 
 
 def _openclaw_base_url() -> str:
-    base_url = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1").strip().rstrip("/")
+    base_url, source_name = _agent_base_url()
     if not (base_url.startswith("http://127.0.0.1:") or base_url.startswith("http://localhost:")):
-        raise ConfigError("OPENCLAW_BASE_URL must remain loopback for this bridge")
+        raise ConfigError(f"{source_name} must remain loopback for this bridge")
     return base_url
+
+
+def _agent_model() -> str:
+    return _env_value("HERMES_MODEL") or _env_value("OPENCLAW_MODEL") or "openclaw/clawbridge"
+
+
+def _agent_timeout_sec() -> float:
+    return float(_env_value("HERMES_TIMEOUT_SEC") or _env_value("OPENCLAW_TIMEOUT_SEC") or "120")
 
 
 def load_config() -> BridgeConfig:
@@ -203,7 +235,7 @@ def load_config() -> BridgeConfig:
 
     token = _openclaw_gateway_token()
     if not token:
-        raise ConfigError("missing OPENCLAW_GATEWAY_TOKEN or readable OPENCLAW_GATEWAY_TOKEN_FILE")
+        raise ConfigError("missing HERMES_GATEWAY_TOKEN/OPENCLAW_GATEWAY_TOKEN or readable gateway token file")
 
     base_url = _openclaw_base_url()
 
@@ -216,8 +248,8 @@ def load_config() -> BridgeConfig:
         allowed_channel_id=allowed_channel_id,
         openclaw_base_url=base_url,
         openclaw_gateway_token=token,
-        openclaw_model=os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip(),
-        timeout_sec=float(os.environ.get("OPENCLAW_TIMEOUT_SEC", "120")),
+        openclaw_model=_agent_model(),
+        timeout_sec=_agent_timeout_sec(),
         enable_mention_responses=_bool_env("DISCORD_ENABLE_MENTION_RESPONSES", False),
         max_prompt_chars=int(os.environ.get("DISCORD_MAX_PROMPT_CHARS", "4000")),
         max_response_chars=int(os.environ.get("DISCORD_MAX_RESPONSE_CHARS", "1800")),
@@ -277,8 +309,8 @@ def load_traveler_config() -> TravelerBotConfig:
         traveler_source_queue_path=_traveler_source_queue_path(),
         openclaw_base_url=_openclaw_base_url(),
         openclaw_gateway_token=_openclaw_gateway_token(),
-        openclaw_model=os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip(),
-        timeout_sec=float(os.environ.get("OPENCLAW_TIMEOUT_SEC", "120")),
+        openclaw_model=_agent_model(),
+        timeout_sec=_agent_timeout_sec(),
         max_response_chars=int(os.environ.get("DISCORD_MAX_RESPONSE_CHARS", "1800")),
     )
 
