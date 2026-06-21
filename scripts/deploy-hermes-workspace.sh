@@ -19,6 +19,12 @@ case "$HERMES_REMOTE_WORKSPACE" in
     exit 1
     ;;
 esac
+case "$HERMES_REMOTE_WORKSPACE" in
+  *"/../"*|*"../"*|*".."|*"/..")
+    echo "FAIL: HERMES_REMOTE_WORKSPACE must not contain parent-directory traversal" >&2
+    exit 1
+    ;;
+esac
 
 quote_remote() {
   printf '%q' "$1"
