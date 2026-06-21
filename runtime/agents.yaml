@@ -53,6 +53,28 @@ agents:
       - keep gateway on loopback unless explicitly changed
       - do not delete sessions, auth files, or agent state without approval
 
+  - id: hermes-ec2-ops
+    name: Hermes Agent EC2 canary operations agent
+    kind: ops-skill
+    source_refs:
+      - docs/plans/prd-openclaw-to-hermes-migration.md
+      - docs/plans/test-spec-openclaw-to-hermes-migration.md
+      - scripts/check-hermes-ops.sh
+      - scripts/deploy-hermes-workspace.sh
+    owns_jobs:
+      - hermes-workspace-deploy
+      - hermes-ops-readiness-check
+    responsibilities:
+      - inspect Hermes canary gateway status without mutating OpenClaw production paths
+      - deploy side-by-side workspace files into the Hermes canary workspace
+      - verify loopback-only /v1 models health when a Hermes token file exists
+      - report canary service, listener, bridge env, and log signal without printing secrets
+    boundaries:
+      - keep Hermes canary gateway on loopback unless explicitly changed
+      - do not restart production services or mutate OpenClaw state
+      - do not print Hermes or OpenClaw token values
+      - canary deploy remains separate from OpenClaw workspace deploy
+
   - id: researchclaw
     name: ResearchClaw via OpenClaw
     kind: project-agent

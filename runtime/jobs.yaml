@@ -77,6 +77,45 @@ jobs:
       side_effects: read-only remote inspection
       secrets: never print gateway token values
 
+  - id: hermes-workspace-deploy
+    name: Deploy Hermes canary workspace control files
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/deploy-hermes-workspace.sh
+    triggers:
+      - manual canary only
+    depends_on:
+      - prompt-governance-validate
+    target:
+      host: openclaw-ec2
+      path: ~/.hermes/workspace
+    outputs:
+      - Hermes canary workspace control files
+      - prompt registry
+    safety:
+      side_effects: remote canary workspace file sync only
+      secrets: do not print Hermes or OpenClaw gateway tokens
+
+  - id: hermes-ops-readiness-check
+    name: Check remote Hermes canary ops readiness
+    type: health-check
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/check-hermes-ops.sh
+    triggers:
+      - manual canary only
+      - after Hermes canary deploy
+    checks:
+      - Hermes canary service state
+      - loopback listener
+      - /v1/models probe
+      - Discord bridge Hermes env aliases
+      - recent Hermes warning/error log signal
+    safety:
+      side_effects: read-only remote canary inspection
+      secrets: never print Hermes or OpenClaw gateway token values
+
   - id: openclaw-dashboard-tunnel
     name: Open dashboard over SSH tunnel
     type: operator-command
