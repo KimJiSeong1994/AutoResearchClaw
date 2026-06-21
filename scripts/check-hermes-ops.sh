@@ -17,6 +17,12 @@ case "$HERMES_WORKSPACE" in
     ;;
 esac
 case "$HERMES_WORKSPACE" in
+  *"'"*)
+    echo "FAIL: HERMES_WORKSPACE contains unsafe shell characters" >&2
+    exit 1
+    ;;
+esac
+case "$HERMES_WORKSPACE" in
   *"/../"*|*"../"*|*".."|*"/..")
     echo "FAIL: HERMES_WORKSPACE must not contain parent-directory traversal" >&2
     exit 1

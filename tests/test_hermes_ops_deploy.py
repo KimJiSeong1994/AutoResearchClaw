@@ -159,6 +159,29 @@ class HermesOpsDeployTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("must not contain parent-directory traversal", result.stderr)
 
+    def test_deploy_rejects_single_quote_in_hermes_workspace(self) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "REMOTE_HOST": "example.invalid",
+                "KEY_FILE": "/tmp/nonexistent-key",
+                "HERMES_REMOTE_WORKSPACE": "~/.hermes/work'space",
+            }
+        )
+
+        result = subprocess.run(
+            ["bash", str(DEPLOY_HERMES)],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("contains unsafe shell characters", result.stderr)
+
     def test_readiness_rejects_parent_traversal_from_hermes_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

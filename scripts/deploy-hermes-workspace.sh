@@ -14,7 +14,7 @@ case "$HERMES_REMOTE_WORKSPACE" in
     ;;
 esac
 case "$HERMES_REMOTE_WORKSPACE" in
-  *[[:space:]]*|*[\;\"\`\$\\\&\|\<\>\(\)\*\?\[\]]*)
+  *[[:space:]]*|*[\;\"\'\`\$\\\&\|\<\>\(\)\*\?\[\]]*)
     echo "FAIL: HERMES_REMOTE_WORKSPACE contains unsafe shell characters" >&2
     exit 1
     ;;
