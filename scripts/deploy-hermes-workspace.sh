@@ -6,12 +6,10 @@ REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 HERMES_REMOTE_WORKSPACE="${HERMES_REMOTE_WORKSPACE:-~/.hermes/workspace}"
 case "$HERMES_REMOTE_WORKSPACE" in
-  ~/.hermes/*|~/.hermes)
-    ;;
-  */.hermes/*|*/.hermes)
+  "~/.hermes/"*|"~/.hermes")
     ;;
   *)
-    echo "FAIL: HERMES_REMOTE_WORKSPACE must stay under a .hermes canary directory" >&2
+    echo "FAIL: HERMES_REMOTE_WORKSPACE must stay under the ~/.hermes canary directory" >&2
     exit 1
     ;;
 esac
@@ -33,7 +31,10 @@ if [[ -n "${SSH_OPTIONS:-}" ]]; then
   SSH_BASE+=("${SSH_EXTRA_OPTIONS[@]}")
 fi
 SSH_BASE+=(-i "$KEY_FILE")
-RSYNC_SSH="${SSH_BASE[*]}"
+RSYNC_SSH=""
+for ssh_arg in "${SSH_BASE[@]}"; do
+  RSYNC_SSH+="${RSYNC_SSH:+ }$(quote_remote "$ssh_arg")"
+done
 
 cd "$ROOT_DIR"
 

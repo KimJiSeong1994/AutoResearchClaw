@@ -22,13 +22,14 @@ class HermesOpsDeployTest(unittest.TestCase):
         text = DEPLOY_HERMES.read_text(encoding="utf-8")
 
         self.assertIn("HERMES_REMOTE_WORKSPACE=\"${HERMES_REMOTE_WORKSPACE:-~/.hermes/workspace}\"", text)
-        self.assertIn("HERMES_REMOTE_WORKSPACE must stay under a .hermes canary directory", text)
+        self.assertIn("HERMES_REMOTE_WORKSPACE must stay under the ~/.hermes canary directory", text)
         self.assertIn("HERMES_REMOTE_WORKSPACE contains unsafe shell characters", text)
         self.assertIn("remote_workspace_quoted=", text)
+        self.assertIn("for ssh_arg in", text)
         self.assertIn("python3 scripts/check-prompt-governance.py", text)
         self.assertIn("python3 scripts/check-runtime-manifests.py", text)
         self.assertIn("SSH_OPTIONS", text)
-        self.assertIn("RSYNC_SSH=\"${SSH_BASE[*]}\"", text)
+        self.assertIn('RSYNC_SSH+="${RSYNC_SSH:+ }$(quote_remote "$ssh_arg")"', text)
         self.assertIn("runtime/", text)
         self.assertIn("scripts/", text)
         self.assertIn("--exclude '.env'", text)
@@ -40,8 +41,8 @@ class HermesOpsDeployTest(unittest.TestCase):
         text = CHECK_HERMES.read_text(encoding="utf-8")
 
         self.assertIn("HERMES_BASE_URL=\"${HERMES_BASE_URL:-http://127.0.0.1:28789/v1}\"", text)
-        self.assertIn("HERMES_BASE_URL must remain loopback", text)
-        self.assertIn("HERMES_WORKSPACE must stay under a .hermes canary directory", text)
+        self.assertIn("HERMES_BASE_URL must remain strict loopback", text)
+        self.assertIn("HERMES_WORKSPACE must stay under the ~/.hermes canary directory", text)
         self.assertIn("HERMES_GATEWAY_TOKEN_FILE", text)
         self.assertIn('HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-~/.hermes_gateway_token}"', text)
         self.assertIn("quote_remote", text)
@@ -51,7 +52,9 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("not loopback-only", text)
         self.assertIn("curl_config=", text)
         self.assertIn("trap 'rm -f", text)
+        self.assertIn("glob.glob", text)
         self.assertNotIn('Authorization: Bearer $(', text)
+        self.assertNotIn("ls -1t $HERMES_LOG_GLOB", text)
         self.assertIn("SSH_OPTIONS", text)
         self.assertIn("never print", (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8"))
         forbidden = ("systemctl --user restart", "systemctl --user start", "rm -rf", "cat $token_file")
@@ -101,7 +104,61 @@ class HermesOpsDeployTest(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must stay under a .hermes canary directory", result.stderr)
+        self.assertIn("must stay under the ~/.hermes canary directory", result.stderr)
+
+    def test_deploy_rejects_nested_openclaw_hermes_workspace_override(self) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "REMOTE_HOST": "example.invalid",
+                "KEY_FILE": "/tmp/nonexistent-key",
+                "HERMES_REMOTE_WORKSPACE": "~/.openclaw/workspace/.hermes",
+            }
+        )
+
+        result = subprocess.run(
+            ["bash", str(DEPLOY_HERMES)],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must stay under the ~/.hermes canary directory", result.stderr)
+
+    def test_readiness_rejects_loopback_userinfo_url_before_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_ssh = tmp_path / "ssh"
+            fake_ssh.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+            fake_ssh.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{tmp_path}{os.pathsep}{env.get('PATH', '')}",
+                    "REMOTE_HOST": "example.invalid",
+                    "KEY_FILE": "/tmp/nonexistent-key",
+                    "HERMES_BASE_URL": "http://127.0.0.1:28789@evil.example/v1",
+                }
+            )
+
+            result = subprocess.run(
+                ["bash", str(CHECK_HERMES)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 99)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must remain strict loopback", result.stderr)
 
     def test_readiness_passes_remote_defaults_as_remote_safe_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

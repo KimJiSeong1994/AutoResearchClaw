@@ -9,10 +9,10 @@ HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-~/.hermes_gateway_token}"
 HERMES_SERVICE="${HERMES_SERVICE:-hermes-gateway.service}"
 HERMES_LOG_GLOB="${HERMES_LOG_GLOB:-/tmp/hermes/*.log}"
 case "$HERMES_WORKSPACE" in
-  ~/.hermes/*|~/.hermes|*/.hermes/*|*/.hermes)
+  "~/.hermes/"*|"~/.hermes")
     ;;
   *)
-    echo "FAIL: HERMES_WORKSPACE must stay under a .hermes canary directory" >&2
+    echo "FAIL: HERMES_WORKSPACE must stay under the ~/.hermes canary directory" >&2
     exit 1
     ;;
 esac
@@ -29,10 +29,10 @@ if [[ -n "${SSH_OPTIONS:-}" ]]; then
   SSH_OPTS+=("${SSH_EXTRA_OPTIONS[@]}")
 fi
 
-case "$HERMES_BASE_URL" in
-  http://127.0.0.1:*|http://localhost:*) ;;
-  *) echo "FAIL: HERMES_BASE_URL must remain loopback for canary readiness" >&2; exit 1 ;;
-esac
+if [[ ! "$HERMES_BASE_URL" =~ ^http://(127\.0\.0\.1|localhost):[0-9]+(/.*)?$ ]]; then
+  echo "FAIL: HERMES_BASE_URL must remain strict loopback http://127.0.0.1:<port>/... or http://localhost:<port>/..." >&2
+  exit 1
+fi
 
 quote_remote() {
   printf '%q' "$1"
@@ -141,7 +141,15 @@ else
 fi
 
 section "recent hermes log signal"
-latest_log="$(ls -1t $HERMES_LOG_GLOB 2>/dev/null | head -1 || true)"
+latest_log="$(HERMES_LOG_GLOB="$HERMES_LOG_GLOB" python3 - <<'PY'
+import glob
+import os
+
+paths = glob.glob(os.environ["HERMES_LOG_GLOB"])
+if paths:
+    print(max(paths, key=os.path.getmtime))
+PY
+)"
 if [ -n "$latest_log" ]; then
   echo "$latest_log"
   LOG_PATH="$latest_log" python3 - <<'PY'
