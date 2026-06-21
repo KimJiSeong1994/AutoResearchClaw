@@ -5,6 +5,27 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
 KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 HERMES_REMOTE_WORKSPACE="${HERMES_REMOTE_WORKSPACE:-~/.hermes/workspace}"
+case "$HERMES_REMOTE_WORKSPACE" in
+  ~/.hermes/*|~/.hermes)
+    ;;
+  */.hermes/*|*/.hermes)
+    ;;
+  *)
+    echo "FAIL: HERMES_REMOTE_WORKSPACE must stay under a .hermes canary directory" >&2
+    exit 1
+    ;;
+esac
+case "$HERMES_REMOTE_WORKSPACE" in
+  *[[:space:]]*|*[\;\"\`\$\\\&\|\<\>\(\)\*\?\[\]]*)
+    echo "FAIL: HERMES_REMOTE_WORKSPACE contains unsafe shell characters" >&2
+    exit 1
+    ;;
+esac
+
+quote_remote() {
+  printf '%q' "$1"
+}
+
 SSH_BASE=(ssh)
 if [[ -n "${SSH_OPTIONS:-}" ]]; then
   # shellcheck disable=SC2206
@@ -19,7 +40,9 @@ cd "$ROOT_DIR"
 python3 scripts/check-prompt-governance.py
 python3 scripts/check-runtime-manifests.py
 
-"${SSH_BASE[@]}" "$REMOTE_HOST" "mkdir -p $HERMES_REMOTE_WORKSPACE/skills $HERMES_REMOTE_WORKSPACE/runtime $HERMES_REMOTE_WORKSPACE/scripts"
+remote_workspace_quoted="$(quote_remote "$HERMES_REMOTE_WORKSPACE")"
+
+"${SSH_BASE[@]}" "$REMOTE_HOST" "mkdir -p $remote_workspace_quoted/skills $remote_workspace_quoted/runtime $remote_workspace_quoted/scripts"
 
 COPYFILE_DISABLE=1 rsync -az \
   -e "$RSYNC_SSH" \
@@ -65,6 +88,6 @@ COPYFILE_DISABLE=1 rsync -az --delete \
   scripts/ \
   "$REMOTE_HOST:$HERMES_REMOTE_WORKSPACE/scripts/"
 
-"${SSH_BASE[@]}" "$REMOTE_HOST" "find $HERMES_REMOTE_WORKSPACE -maxdepth 2 -name '._*' -delete; find $HERMES_REMOTE_WORKSPACE/skills $HERMES_REMOTE_WORKSPACE/scripts -name '*.sh' -exec chmod +x {} +; find $HERMES_REMOTE_WORKSPACE/scripts -name '*.py' -exec chmod +x {} +"
+"${SSH_BASE[@]}" "$REMOTE_HOST" "find $remote_workspace_quoted -maxdepth 2 -name '._*' -delete; find $remote_workspace_quoted/skills $remote_workspace_quoted/scripts -name '*.sh' -exec chmod +x {} +; find $remote_workspace_quoted/scripts -name '*.py' -exec chmod +x {} +"
 
 echo "Deployed Hermes canary workspace files to $REMOTE_HOST:$HERMES_REMOTE_WORKSPACE"
