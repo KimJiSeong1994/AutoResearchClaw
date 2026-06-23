@@ -64,18 +64,20 @@ agents:
     owns_jobs:
       - hermes-workspace-deploy
       - hermes-ops-readiness-check
+      - hermes-bridge-smoke-check
     runtime:
       profile: hermes-canary
       workspace: ~/.hermes/workspace
       gateway_endpoint: http://127.0.0.1:28789/v1
       token_file: ~/.hermes_gateway_token
       service: hermes-gateway.service
-      log_glob: /tmp/hermes/*.log
+      log_glob: ~/.hermes/logs/*.log
       bridge_env: ~/.hermes/workspace/skills/discord-openclaw-bridge/project/.env
     responsibilities:
       - inspect Hermes canary gateway status without mutating OpenClaw production paths
       - deploy side-by-side workspace files into the Hermes canary workspace
       - verify loopback-only /v1 models health when a Hermes token file exists
+      - verify Discord bridge canary chat calls through Hermes before production cutover
       - report canary service, listener, bridge env, and log signal without printing secrets
     boundaries:
       - keep Hermes canary gateway on loopback unless explicitly changed

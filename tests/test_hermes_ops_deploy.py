@@ -9,14 +9,16 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_HERMES = ROOT / "scripts" / "check-hermes-ops.sh"
+SMOKE_HERMES_BRIDGE = ROOT / "scripts" / "check-hermes-bridge-smoke.sh"
 DEPLOY_HERMES = ROOT / "scripts" / "deploy-hermes-workspace.sh"
 
 
 class HermesOpsDeployTest(unittest.TestCase):
     def test_hermes_scripts_exist_and_are_bash_valid(self) -> None:
         self.assertTrue(CHECK_HERMES.exists())
+        self.assertTrue(SMOKE_HERMES_BRIDGE.exists())
         self.assertTrue(DEPLOY_HERMES.exists())
-        subprocess.run(["bash", "-n", str(CHECK_HERMES), str(DEPLOY_HERMES)], check=True, cwd=ROOT)
+        subprocess.run(["bash", "-n", str(CHECK_HERMES), str(SMOKE_HERMES_BRIDGE), str(DEPLOY_HERMES)], check=True, cwd=ROOT)
 
     def test_hermes_deploy_is_side_by_side_and_secret_safe(self) -> None:
         text = DEPLOY_HERMES.read_text(encoding="utf-8")
@@ -64,6 +66,23 @@ class HermesOpsDeployTest(unittest.TestCase):
         for token in forbidden:
             self.assertNotIn(token, text)
 
+    def test_hermes_bridge_smoke_is_loopback_and_secret_safe(self) -> None:
+        text = SMOKE_HERMES_BRIDGE.read_text(encoding="utf-8")
+
+        self.assertIn("HERMES_BASE_URL=\"${HERMES_BASE_URL:-http://127.0.0.1:28789/v1}\"", text)
+        self.assertIn("HERMES_BASE_URL must remain strict loopback", text)
+        self.assertIn("HERMES_WORKSPACE must stay under the ~/.hermes canary directory", text)
+        self.assertIn("HERMES_WORKSPACE must not contain parent-directory traversal", text)
+        self.assertIn("HERMES_GATEWAY_TOKEN_FILE", text)
+        self.assertIn("OpenClawGatewayClient", text)
+        self.assertIn("models_health", text)
+        self.assertIn("chat_completion", text)
+        self.assertIn("discord-openclaw-bridge-hermes-smoke/1.0", text)
+        self.assertIn("quote_remote", text)
+        self.assertNotIn("cat $token_file", text)
+        self.assertNotIn("systemctl --user restart", text)
+        self.assertNotIn("rm -rf", text)
+
     def test_runtime_manifests_declare_hermes_canary_without_removing_openclaw(self) -> None:
         agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
         jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
@@ -78,10 +97,13 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("do not restart production services or mutate OpenClaw state", agents)
         self.assertIn("id: hermes-workspace-deploy", jobs)
         self.assertIn("id: hermes-ops-readiness-check", jobs)
+        self.assertIn("id: hermes-bridge-smoke-check", jobs)
         self.assertIn("bash scripts/deploy-hermes-workspace.sh", jobs)
         self.assertIn("bash scripts/check-hermes-ops.sh", jobs)
+        self.assertIn("bash scripts/check-hermes-bridge-smoke.sh", jobs)
         self.assertIn("manual canary only", jobs)
         self.assertIn("read-only remote canary inspection", jobs)
+        self.assertIn("canary OpenAI-compatible chat smoke", jobs)
         self.assertIn("id: openclaw-workspace-deploy", jobs)
         self.assertIn("id: openclaw-ops-readiness-check", jobs)
         self.assertIn("id: openclaw-ec2-ops", agents)

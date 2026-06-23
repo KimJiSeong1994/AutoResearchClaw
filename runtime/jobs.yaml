@@ -116,6 +116,26 @@ jobs:
       side_effects: read-only remote canary inspection
       secrets: never print Hermes or OpenClaw gateway token values
 
+  - id: hermes-bridge-smoke-check
+    name: Check Discord bridge against Hermes canary chat API
+    type: health-check
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/check-hermes-bridge-smoke.sh
+    triggers:
+      - manual canary only
+      - after Hermes canary readiness passes
+      - before production cutover
+    depends_on:
+      - hermes-ops-readiness-check
+    checks:
+      - Discord bridge imports from the Hermes canary workspace
+      - Hermes env aliases select the canary loopback gateway
+      - canary OpenAI-compatible chat smoke returns the expected sentinel
+    safety:
+      side_effects: remote canary OpenAI-compatible chat smoke only
+      secrets: never print Hermes, OpenClaw, Discord, or provider token values
+
   - id: openclaw-dashboard-tunnel
     name: Open dashboard over SSH tunnel
     type: operator-command
