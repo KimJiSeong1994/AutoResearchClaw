@@ -47,6 +47,7 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("HERMES_WORKSPACE must not contain parent-directory traversal", text)
         self.assertIn("HERMES_GATEWAY_TOKEN_FILE", text)
         self.assertIn('HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-~/.hermes_gateway_token}"', text)
+        self.assertIn('HERMES_LOG_GLOB="${HERMES_LOG_GLOB:-~/.hermes/logs/*.log}"', text)
         self.assertIn("quote_remote", text)
         self.assertNotIn('HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-$HOME/.hermes_gateway_token}"', text)
         self.assertIn('"$base_url/models"', text)

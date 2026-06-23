@@ -7,7 +7,7 @@ HERMES_WORKSPACE="${HERMES_WORKSPACE:-~/.hermes/workspace}"
 HERMES_BASE_URL="${HERMES_BASE_URL:-http://127.0.0.1:28789/v1}"
 HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-~/.hermes_gateway_token}"
 HERMES_SERVICE="${HERMES_SERVICE:-hermes-gateway.service}"
-HERMES_LOG_GLOB="${HERMES_LOG_GLOB:-/tmp/hermes/*.log}"
+HERMES_LOG_GLOB="${HERMES_LOG_GLOB:-~/.hermes/logs/*.log}"
 case "$HERMES_WORKSPACE" in
   "~/.hermes/"*|"~/.hermes")
     ;;
