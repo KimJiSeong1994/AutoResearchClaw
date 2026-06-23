@@ -10,6 +10,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_HERMES = ROOT / "scripts" / "check-hermes-ops.sh"
 SMOKE_HERMES_BRIDGE = ROOT / "scripts" / "check-hermes-bridge-smoke.sh"
+INSTALL_HERMES_BRIDGE = ROOT / "scripts" / "install-hermes-bridge-canary-service.sh"
 DEPLOY_HERMES = ROOT / "scripts" / "deploy-hermes-workspace.sh"
 
 
@@ -17,8 +18,20 @@ class HermesOpsDeployTest(unittest.TestCase):
     def test_hermes_scripts_exist_and_are_bash_valid(self) -> None:
         self.assertTrue(CHECK_HERMES.exists())
         self.assertTrue(SMOKE_HERMES_BRIDGE.exists())
+        self.assertTrue(INSTALL_HERMES_BRIDGE.exists())
         self.assertTrue(DEPLOY_HERMES.exists())
-        subprocess.run(["bash", "-n", str(CHECK_HERMES), str(SMOKE_HERMES_BRIDGE), str(DEPLOY_HERMES)], check=True, cwd=ROOT)
+        subprocess.run(
+            [
+                "bash",
+                "-n",
+                str(CHECK_HERMES),
+                str(SMOKE_HERMES_BRIDGE),
+                str(INSTALL_HERMES_BRIDGE),
+                str(DEPLOY_HERMES),
+            ],
+            check=True,
+            cwd=ROOT,
+        )
 
     def test_hermes_deploy_is_side_by_side_and_secret_safe(self) -> None:
         text = DEPLOY_HERMES.read_text(encoding="utf-8")
@@ -83,6 +96,24 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertNotIn("systemctl --user restart", text)
         self.assertNotIn("rm -rf", text)
 
+    def test_hermes_bridge_canary_installer_is_guarded_and_disabled(self) -> None:
+        text = INSTALL_HERMES_BRIDGE.read_text(encoding="utf-8")
+
+        self.assertIn("HERMES_BRIDGE_SERVICE=\"${HERMES_BRIDGE_SERVICE:-discord-hermes-bridge-canary.service}\"", text)
+        self.assertIn("HERMES_BRIDGE_ENABLE_GUARD=\"${HERMES_BRIDGE_ENABLE_GUARD:-~/.hermes/ENABLE_DISCORD_BRIDGE_CANARY}\"", text)
+        self.assertIn("ConditionPathExists=$guard_file", text)
+        self.assertIn("systemctl --user disable --now", text)
+        self.assertIn("rm -f \"$guard_file\"", text)
+        self.assertIn("Description=Discord bridge for Hermes canary gateway", text)
+        self.assertIn("HERMES_BASE_URL", text)
+        self.assertIn("OPENCLAW_BASE_URL", text)
+        self.assertIn("/home/ubuntu/.hermes/workspace", text)
+        self.assertIn("ExecStart=$python_bin -m discord_openclaw_bridge.bot", text)
+        self.assertNotIn("systemctl --user enable", text)
+        self.assertNotIn("systemctl --user start", text)
+        self.assertNotIn("cat $token_file", text)
+        self.assertNotIn("rm -rf", text)
+
     def test_runtime_manifests_declare_hermes_canary_without_removing_openclaw(self) -> None:
         agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
         jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
@@ -98,12 +129,15 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("id: hermes-workspace-deploy", jobs)
         self.assertIn("id: hermes-ops-readiness-check", jobs)
         self.assertIn("id: hermes-bridge-smoke-check", jobs)
+        self.assertIn("id: hermes-bridge-canary-service-install", jobs)
         self.assertIn("bash scripts/deploy-hermes-workspace.sh", jobs)
         self.assertIn("bash scripts/check-hermes-ops.sh", jobs)
         self.assertIn("bash scripts/check-hermes-bridge-smoke.sh", jobs)
+        self.assertIn("bash scripts/install-hermes-bridge-canary-service.sh", jobs)
         self.assertIn("manual canary only", jobs)
         self.assertIn("read-only remote canary inspection", jobs)
         self.assertIn("canary OpenAI-compatible chat smoke", jobs)
+        self.assertIn("guarded disabled service unit", jobs)
         self.assertIn("id: openclaw-workspace-deploy", jobs)
         self.assertIn("id: openclaw-ops-readiness-check", jobs)
         self.assertIn("id: openclaw-ec2-ops", agents)

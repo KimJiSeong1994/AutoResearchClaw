@@ -136,6 +136,25 @@ jobs:
       side_effects: remote canary OpenAI-compatible chat smoke only
       secrets: never print Hermes, OpenClaw, Discord, or provider token values
 
+  - id: hermes-bridge-canary-service-install
+    name: Install guarded Hermes canary Discord bridge service
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/install-hermes-bridge-canary-service.sh
+    triggers:
+      - manual canary only
+      - after Hermes bridge smoke passes
+      - before production cutover
+    depends_on:
+      - hermes-bridge-smoke-check
+    outputs:
+      - guarded disabled service unit
+      - Hermes canary bridge .env with loopback Hermes aliases
+    safety:
+      side_effects: installs a disabled user service unit and canary .env only
+      secrets: copies existing remote Discord/provider tokens on-host but never prints token values
+
   - id: openclaw-dashboard-tunnel
     name: Open dashboard over SSH tunnel
     type: operator-command
