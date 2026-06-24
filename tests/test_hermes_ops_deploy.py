@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_HERMES = ROOT / "scripts" / "check-hermes-ops.sh"
 SMOKE_HERMES_BRIDGE = ROOT / "scripts" / "check-hermes-bridge-smoke.sh"
 INSTALL_HERMES_BRIDGE = ROOT / "scripts" / "install-hermes-bridge-canary-service.sh"
+INSTALL_HERMES_AUX = ROOT / "scripts" / "install-hermes-auxiliary-bot-services.sh"
 DEPLOY_HERMES = ROOT / "scripts" / "deploy-hermes-workspace.sh"
 
 
@@ -19,6 +20,7 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertTrue(CHECK_HERMES.exists())
         self.assertTrue(SMOKE_HERMES_BRIDGE.exists())
         self.assertTrue(INSTALL_HERMES_BRIDGE.exists())
+        self.assertTrue(INSTALL_HERMES_AUX.exists())
         self.assertTrue(DEPLOY_HERMES.exists())
         subprocess.run(
             [
@@ -27,6 +29,7 @@ class HermesOpsDeployTest(unittest.TestCase):
                 str(CHECK_HERMES),
                 str(SMOKE_HERMES_BRIDGE),
                 str(INSTALL_HERMES_BRIDGE),
+                str(INSTALL_HERMES_AUX),
                 str(DEPLOY_HERMES),
             ],
             check=True,
@@ -63,6 +66,8 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("HERMES_GATEWAY_TOKEN_FILE", text)
         self.assertIn('HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-~/.hermes_gateway_token}"', text)
         self.assertIn('HERMES_LOG_GLOB="${HERMES_LOG_GLOB:-~/.hermes/logs/*.log}"', text)
+        self.assertIn('HERMES_CURL_MAX_TIME="${HERMES_CURL_MAX_TIME:-60}"', text)
+        self.assertIn('printf \'max-time = %s\\n\' "$HERMES_CURL_MAX_TIME"', text)
         self.assertIn("quote_remote", text)
         self.assertNotIn('HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-$HOME/.hermes_gateway_token}"', text)
         self.assertIn('"$base_url/models"', text)
@@ -91,6 +96,8 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("models_health", text)
         self.assertIn("chat_completion", text)
         self.assertIn("discord-openclaw-bridge-hermes-smoke/1.0", text)
+        self.assertIn('HERMES_SMOKE_TIMEOUT_SEC="${HERMES_SMOKE_TIMEOUT_SEC:-600}"', text)
+        self.assertIn('timeout_sec=float(os.environ["HERMES_SMOKE_TIMEOUT_SEC"])', text)
         self.assertIn("quote_remote", text)
         self.assertNotIn("cat $token_file", text)
         self.assertNotIn("systemctl --user restart", text)
@@ -114,6 +121,25 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertNotIn("cat $token_file", text)
         self.assertNotIn("rm -rf", text)
 
+
+    def test_hermes_auxiliary_bot_installer_is_guarded_and_reversible(self) -> None:
+        text = INSTALL_HERMES_AUX.read_text(encoding="utf-8")
+
+        self.assertIn('HERMES_AUX_CUTOVER="${HERMES_AUX_CUTOVER:-0}"', text)
+        self.assertIn('HERMES_AUX_CUTOVER must be 0 or 1', text)
+        self.assertIn('discord-hermes-jiphyeonjeon-miner.service', text)
+        self.assertIn('discord-hermes-jiphyeonjeon-traveler.service', text)
+        self.assertIn('discord-hermes-jiphyeonjeon-reporter.service', text)
+        self.assertIn('systemctl --user stop "$old"', text)
+        self.assertIn('systemctl --user start "$new"', text)
+        self.assertIn('systemctl --user disable "$old"', text)
+        self.assertIn('systemctl --user enable "$new"', text)
+        self.assertIn('systemctl --user start "$old" || true', text)
+        self.assertIn('$project/.venv/bin/$entry', text)
+        self.assertIn('ReadWritePaths=$project $workspace $HOME/.hermes/state $extra_rw', text)
+        self.assertNotIn('cat $token_file', text)
+        self.assertNotIn('rm -rf', text)
+
     def test_runtime_manifests_declare_hermes_canary_without_removing_openclaw(self) -> None:
         agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
         jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
@@ -130,14 +156,17 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("id: hermes-ops-readiness-check", jobs)
         self.assertIn("id: hermes-bridge-smoke-check", jobs)
         self.assertIn("id: hermes-bridge-canary-service-install", jobs)
+        self.assertIn("id: hermes-auxiliary-bot-service-install", jobs)
         self.assertIn("bash scripts/deploy-hermes-workspace.sh", jobs)
         self.assertIn("bash scripts/check-hermes-ops.sh", jobs)
         self.assertIn("bash scripts/check-hermes-bridge-smoke.sh", jobs)
         self.assertIn("bash scripts/install-hermes-bridge-canary-service.sh", jobs)
+        self.assertIn("bash scripts/install-hermes-auxiliary-bot-services.sh", jobs)
         self.assertIn("manual canary only", jobs)
         self.assertIn("read-only remote canary inspection", jobs)
         self.assertIn("canary OpenAI-compatible chat smoke", jobs)
         self.assertIn("guarded disabled service unit", jobs)
+        self.assertIn("guarded auxiliary bot service units", jobs)
         self.assertIn("id: openclaw-workspace-deploy", jobs)
         self.assertIn("id: openclaw-ops-readiness-check", jobs)
         self.assertIn("id: openclaw-ec2-ops", agents)

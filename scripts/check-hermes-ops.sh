@@ -8,6 +8,7 @@ HERMES_BASE_URL="${HERMES_BASE_URL:-http://127.0.0.1:28789/v1}"
 HERMES_TOKEN_FILE="${HERMES_GATEWAY_TOKEN_FILE:-~/.hermes_gateway_token}"
 HERMES_SERVICE="${HERMES_SERVICE:-hermes-gateway.service}"
 HERMES_LOG_GLOB="${HERMES_LOG_GLOB:-~/.hermes/logs/*.log}"
+HERMES_CURL_MAX_TIME="${HERMES_CURL_MAX_TIME:-60}"
 case "$HERMES_WORKSPACE" in
   "~/.hermes/"*|"~/.hermes")
     ;;
@@ -55,7 +56,7 @@ echo "host: $REMOTE_HOST"
 echo
 
 ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
-  "HERMES_WORKSPACE=$(quote_remote "$HERMES_WORKSPACE") HERMES_BASE_URL=$(quote_remote "$HERMES_BASE_URL") HERMES_TOKEN_FILE=$(quote_remote "$HERMES_TOKEN_FILE") HERMES_SERVICE=$(quote_remote "$HERMES_SERVICE") HERMES_LOG_GLOB=$(quote_remote "$HERMES_LOG_GLOB") bash -s" <<'REMOTE'
+  "HERMES_WORKSPACE=$(quote_remote "$HERMES_WORKSPACE") HERMES_BASE_URL=$(quote_remote "$HERMES_BASE_URL") HERMES_TOKEN_FILE=$(quote_remote "$HERMES_TOKEN_FILE") HERMES_SERVICE=$(quote_remote "$HERMES_SERVICE") HERMES_LOG_GLOB=$(quote_remote "$HERMES_LOG_GLOB") HERMES_CURL_MAX_TIME=$(quote_remote "$HERMES_CURL_MAX_TIME") bash -s" <<'REMOTE'
 set -euo pipefail
 
 workspace="${HERMES_WORKSPACE/#\~/$HOME}"
@@ -120,7 +121,7 @@ if command -v curl >/dev/null 2>&1 && [ -f "$token_file" ]; then
     printf 'fail\n'
     printf 'silent\n'
     printf 'show-error\n'
-    printf 'max-time = 15\n'
+    printf 'max-time = %s\n' "$HERMES_CURL_MAX_TIME"
     printf 'header = "Authorization: Bearer '
     tr -d '\n' < "$token_file"
     printf '"\n'

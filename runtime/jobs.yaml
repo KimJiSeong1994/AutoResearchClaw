@@ -155,6 +155,25 @@ jobs:
       side_effects: installs a disabled user service unit and canary .env only
       secrets: copies existing remote Discord/provider tokens on-host but never prints token values
 
+  - id: hermes-auxiliary-bot-service-install
+    name: Install or cut over Hermes auxiliary Discord bot services
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/install-hermes-auxiliary-bot-services.sh
+    triggers:
+      - manual canary only
+      - after Hermes bridge cutover is stable
+      - before OpenClaw gateway decommission
+    depends_on:
+      - hermes-bridge-canary-service-install
+    outputs:
+      - guarded auxiliary bot service units
+      - optional reversible cutover when HERMES_AUX_CUTOVER=1
+    safety:
+      side_effects: installs Hermes auxiliary user units by default; stops old and starts new only when HERMES_AUX_CUTOVER=1
+      secrets: copies existing remote Discord/provider env on-host but never prints token values
+
   - id: openclaw-dashboard-tunnel
     name: Open dashboard over SSH tunnel
     type: operator-command
