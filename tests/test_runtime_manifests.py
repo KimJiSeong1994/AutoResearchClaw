@@ -179,14 +179,42 @@ class RuntimeManifestTest(unittest.TestCase):
         installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"
         stable_entrypoint = ROOT / "scripts" / "traveler-collection-report.sh"
 
-        self.assertIn("runtime/traveler-scout-topics.json", runner.read_text(encoding="utf-8"))
+        runner_text = runner.read_text(encoding="utf-8")
+        wrapper_text = stable_entrypoint.read_text(encoding="utf-8")
+        self.assertIn("runtime/traveler-scout-topics.json", runner_text)
+        self.assertIn("HERMES_WORKSPACE", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", runner_text)
+        self.assertIn("${JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH}", runner_text)
+        self.assertIn("HERMES_WORKSPACE", wrapper_text)
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
         self.assertTrue(stable_entrypoint.exists())
-        self.assertIn("run-traveler-collection-report.sh", stable_entrypoint.read_text(encoding="utf-8"))
+        self.assertIn("run-traveler-collection-report.sh", wrapper_text)
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("scripts/traveler-collection-report.sh", installer_text)
+        self.assertIn("HERMES_WORKSPACE=$WORKSPACE $WRAPPER", installer_text)
         self.assertIn("bash -n \"$WRAPPER\"", installer_text)
         self.assertIn("bash -n \"$RUNNER\"", installer_text)
+
+    def test_traveler_cron_installer_rejects_unsafe_workspace(self) -> None:
+        installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"
+        for workspace in ("~/.hermes/work space", "~/.hermes/work%space"):
+            with self.subTest(workspace=workspace):
+                result = subprocess.run(
+                    ["bash", str(installer)],
+                    cwd=ROOT,
+                    env={
+                        **os.environ,
+                        "REMOTE_HOST": "example.invalid",
+                        "KEY_FILE": "/tmp/nonexistent-jiphyeonjeon-key",
+                        "REMOTE_WORKSPACE": workspace,
+                    },
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(2, result.returncode)
+                self.assertIn("unsafe shell characters", result.stderr)
 
     def test_newsletter_cron_uses_committed_runners(self) -> None:
         skill_root = ROOT / "skills" / "discord-openclaw-bridge"

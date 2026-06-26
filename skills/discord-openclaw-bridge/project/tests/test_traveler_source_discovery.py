@@ -955,3 +955,166 @@ def test_discovery_propagates_autonomous_scout_metadata_to_candidate(tmp_path: P
     assert rows[0]["scout_topic_id"] == "llm_agents"
     assert rows[0]["scout_priority"] == "high"
     assert "autonomous-scout" in rows[0]["tags"]
+
+
+def test_static_curated_source_with_low_keyword_match_still_reaches_review_queue(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "source-candidates.jsonl"
+    evidence = tmp_path / "evidence.jsonl"
+    record_research_request(
+        TravelerResearchRequest(
+            topic="LLM agents research engineering",
+            min_sources_to_review=10,
+            max_candidates=1,
+            discovery_mode="autonomous_scout",
+            scout_topic_id="llm_agents",
+        ),
+        queue_path=research,
+        candidate_queue_path=candidates,
+    )
+
+    def fetcher(url: str) -> FetchResult:
+        return FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=120,
+            body="<html><head><title>Public recurring research updates</title></head></html>",
+        )
+
+    summary = asyncio.run(discover_sources(
+        research_queue_path=research,
+        default_candidate_queue_path=candidates,
+        providers=[StaticTechnicalSourceProvider()],
+        deep_research=True,
+        evidence_path=evidence,
+        evidence_fetcher=fetcher,
+    ))
+
+    rows = _jsonl(candidates)
+    evidence_rows = _jsonl(evidence)
+    assert summary.accepted_count == 1
+    assert rows[0]["status"] == "pending_source_review"
+    assert rows[0]["evidence"]["status"] == "fetched"
+    assert evidence_rows[0]["decision"]["reason"] == "curated_static_source_surface_requires_review"
+
+
+def test_requested_static_source_with_low_keyword_match_stays_rejected(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "source-candidates.jsonl"
+    evidence = tmp_path / "evidence.jsonl"
+    record_research_request(
+        TravelerResearchRequest(topic="LLM agents research engineering", min_sources_to_review=10, max_candidates=1),
+        queue_path=research,
+        candidate_queue_path=candidates,
+    )
+
+    def fetcher(url: str) -> FetchResult:
+        return FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=120,
+            body="<html><head><title>Public recurring updates</title></head></html>",
+        )
+
+    summary = asyncio.run(discover_sources(
+        research_queue_path=research,
+        default_candidate_queue_path=candidates,
+        providers=[StaticTechnicalSourceProvider()],
+        deep_research=True,
+        evidence_path=evidence,
+        evidence_fetcher=fetcher,
+    ))
+
+    assert summary.accepted_count == 0
+    assert not candidates.exists()
+    assert _jsonl(evidence)[0]["decision"]["candidate_state"] != "accepted"
+
+
+def test_autonomous_static_exception_requires_static_provider_review_type_and_ok_fetch(tmp_path: Path) -> None:
+    def low_relevance_fetcher(url: str) -> FetchResult:
+        return FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=120,
+            body="<html><head><title>Public recurring updates</title></head></html>",
+        )
+
+    def failed_fetcher(url: str) -> FetchResult:
+        return FetchResult(status="failed", url=url, canonical_url=url, reason="network unavailable")
+
+    cases = [
+        (
+            "non_static_provider",
+            FakeProvider([
+                DiscoveryCandidate(
+                    url="https://example.com/non-static",
+                    title="Recurring updates",
+                    source_type="research_lab_blog",
+                    reliability_note="Public recurring page.",
+                    cadence_note="Updated.",
+                    topic_fit="Agent research updates.",
+                    collection_hint="poll_public_blog",
+                    provider="fake-provider",
+                )
+            ]),
+            low_relevance_fetcher,
+        ),
+        (
+            "non_review_source_type",
+            FakeProvider([
+                DiscoveryCandidate(
+                    url="https://example.com/paper",
+                    title="Paper page",
+                    source_type="paper_page",
+                    reliability_note="Public page.",
+                    cadence_note="Updated.",
+                    topic_fit="Agent research updates.",
+                    collection_hint="manual_review",
+                    provider="static-technical-sources",
+                )
+            ]),
+            low_relevance_fetcher,
+        ),
+        (
+            "failed_fetch",
+            StaticTechnicalSourceProvider(),
+            failed_fetcher,
+        ),
+    ]
+
+    for name, provider, fetcher in cases:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        research = case_dir / "research.jsonl"
+        candidates = case_dir / "source-candidates.jsonl"
+        evidence = case_dir / "evidence.jsonl"
+        record_research_request(
+            TravelerResearchRequest(
+                topic="LLM agents research engineering",
+                min_sources_to_review=10,
+                max_candidates=1,
+                discovery_mode="autonomous_scout",
+                scout_topic_id="llm_agents",
+            ),
+            queue_path=research,
+            candidate_queue_path=candidates,
+        )
+
+        summary = asyncio.run(discover_sources(
+            research_queue_path=research,
+            default_candidate_queue_path=candidates,
+            providers=[provider],
+            deep_research=True,
+            evidence_path=evidence,
+            evidence_fetcher=fetcher,
+        ))
+
+        assert summary.accepted_count == 0, name
+        assert not candidates.exists(), name
+        assert _jsonl(evidence)[0]["decision"].get("reason") != "curated_static_source_surface_requires_review"

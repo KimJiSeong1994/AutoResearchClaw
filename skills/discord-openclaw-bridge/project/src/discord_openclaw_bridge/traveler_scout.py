@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .miner import clean_text
-from .traveler import TravelerResearchRequest, default_research_queue_path, default_source_queue_path, record_research_request
+from .traveler import TravelerResearchRequest, default_research_queue_path, record_research_request
 
 DEFAULT_SCOUT_QUEUE_PATH = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
 DEFAULT_SCOUT_STATUS_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-scout-last-status.json"
@@ -165,17 +165,63 @@ def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _pending_scout_topic_ids(path: Path) -> set[str]:
+def _is_test_research_request(row: dict[str, Any]) -> bool:
+    topic = clean_text(row.get("topic"), limit=300).lower()
+    note = clean_text(row.get("requester_note"), limit=300).lower()
+    return (
+        topic.startswith("live test")
+        or "safe to ignore" in note
+        or "formatting live test" in note
+        or "live content test" in note
+        or "연결 검증" in topic
+        or "표시 검증" in topic
+    )
+
+
+def _stale_pending_hours() -> float:
+    raw = os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "24").strip()
+    try:
+        hours = float(raw)
+    except ValueError:
+        return 24.0
+    return max(0.0, min(hours, 24 * 14))
+
+
+def _created_at_utc(row: dict[str, Any]) -> datetime | None:
+    value = clean_text(row.get("created_at"), limit=80)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _pending_scout_topic_ids(path: Path, *, now: datetime | None = None) -> tuple[set[str], set[str]]:
     topic_ids: set[str] = set()
+    stale_topic_ids: set[str] = set()
+    stale_after_hours = _stale_pending_hours()
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     for row in _read_jsonl_rows(path):
+        if _is_test_research_request(row):
+            continue
         if row.get("status") != "pending_deep_research":
             continue
         if row.get("discovery_mode") != "autonomous_scout":
             continue
         topic_id = clean_text(row.get("scout_topic_id"), limit=120)
-        if topic_id:
-            topic_ids.add(topic_id)
-    return topic_ids
+        if not topic_id:
+            continue
+        created_at = _created_at_utc(row)
+        age_hours = ((now_utc - created_at).total_seconds() / 3600) if created_at else 0.0
+        if stale_after_hours and created_at and age_hours > stale_after_hours:
+            stale_topic_ids.add(topic_id)
+            continue
+        topic_ids.add(topic_id)
+    return topic_ids, stale_topic_ids
 
 
 def create_scout_requests(
@@ -196,7 +242,12 @@ def create_scout_requests(
         selected = selected[: max(0, max_topics)]
     created: list[dict[str, Any]] = []
     skipped_existing: list[str] = []
-    pending_topic_ids = _pending_scout_topic_ids(research_queue) if skip_existing_pending else set()
+    stale_pending: list[str] = []
+    if skip_existing_pending:
+        pending_topic_ids, stale_pending_topic_ids = _pending_scout_topic_ids(research_queue)
+        stale_pending = sorted(stale_pending_topic_ids)
+    else:
+        pending_topic_ids = set()
     planned_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for topic in selected:
         if topic.topic_id in pending_topic_ids:
@@ -239,6 +290,8 @@ def create_scout_requests(
         "scout_queue_path": str(scout_queue),
         "topics": [topic.topic_id for topic in selected],
         "skipped_existing_topics": skipped_existing,
+        "stale_pending_topics": stale_pending,
+        "stale_pending_hours": _stale_pending_hours(),
         "request_ids": [str(record.get("request_id")) for record in created if record.get("request_id")],
     }
     if status_path is not None and not dry_run:

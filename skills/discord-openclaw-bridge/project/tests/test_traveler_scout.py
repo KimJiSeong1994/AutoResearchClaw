@@ -95,8 +95,84 @@ def test_scout_skips_existing_pending_topic(tmp_path: Path) -> None:
     assert len(rows) == 1
 
 
+def test_scout_ignores_stale_live_test_rows_when_checking_pending_topics(tmp_path: Path) -> None:
+    topics = load_scout_topics(None)[:1]
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    research.write_text(
+        json.dumps(
+            {
+                "request_id": "traveler_request_test",
+                "status": "pending_deep_research",
+                "topic": "LIVE TEST - 집현전 여행자 연결 검증",
+                "requester_note": "safe to ignore",
+                "discovery_mode": "autonomous_scout",
+                "scout_topic_id": topics[0].topic_id,
+                "candidate_queue_path": str(scout),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = create_scout_requests(topics=topics, research_queue_path=research, scout_queue_path=scout, dry_run=False)
+
+    rows = _jsonl(research)
+    assert result["status"]["requests_created"] == 1
+    assert result["status"]["requests_skipped_existing"] == 0
+    assert [row["request_id"] for row in rows if row.get("request_id") != "traveler_request_test"]
+    assert rows[-1]["discovery_mode"] == "autonomous_scout"
+    assert rows[-1]["scout_topic_id"] == topics[0].topic_id
+
+
+def test_scout_requeues_stale_non_test_pending_topic(tmp_path: Path, monkeypatch: Any) -> None:
+    topics = load_scout_topics(None)[:1]
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "1")
+    research.write_text(
+        json.dumps(
+            {
+                "request_id": "traveler_request_stale",
+                "status": "pending_deep_research",
+                "topic": topics[0].query,
+                "created_at": "2026-01-01T00:00:00Z",
+                "discovery_mode": "autonomous_scout",
+                "scout_topic_id": topics[0].topic_id,
+                "candidate_queue_path": str(scout),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = create_scout_requests(topics=topics, research_queue_path=research, scout_queue_path=scout, dry_run=False)
+
+    rows = _jsonl(research)
+    assert result["status"]["requests_created"] == 1
+    assert result["status"]["requests_skipped_existing"] == 0
+    assert result["status"]["stale_pending_topics"] == [topics[0].topic_id]
+    assert len(rows) == 2
+    assert rows[-1]["request_id"] != "traveler_request_stale"
+    assert rows[-1]["scout_topic_id"] == topics[0].topic_id
+
+
 def test_default_scout_queue_path_uses_env(monkeypatch: Any, tmp_path: Path) -> None:
     target = tmp_path / "custom-scout.jsonl"
     monkeypatch.setenv("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", str(target))
 
     assert default_scout_queue_path() == target
+
+
+def test_scout_can_write_autonomous_requests_to_canonical_source_queue(tmp_path: Path) -> None:
+    topics = load_scout_topics(None)[:1]
+    research = tmp_path / "research.jsonl"
+    source_queue = tmp_path / "source-candidates.jsonl"
+
+    result = create_scout_requests(topics=topics, research_queue_path=research, scout_queue_path=source_queue)
+
+    rows = _jsonl(research)
+    assert result["status"]["scout_queue_path"] == str(source_queue)
+    assert rows[0]["candidate_queue_path"] == str(source_queue)

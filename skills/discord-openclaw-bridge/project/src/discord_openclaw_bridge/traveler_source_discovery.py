@@ -671,9 +671,25 @@ async def discover_sources(
                         fetcher=evidence_fetcher,
                     )
                     evidence_count += 1
+                    decision = evidence_record.get("decision", {}) if isinstance(evidence_record, dict) else {}
+                    if (
+                        decision.get("candidate_state") != "accepted"
+                        and decision.get("rejection_class") == "low_relevance"
+                        and request.discovery_mode == "autonomous_scout"
+                        and candidate.provider == "static-technical-sources"
+                        and candidate.source_type in {"research_lab_blog", "article_hub", "conference_feed", "archive_page"}
+                        and (evidence_record.get("fetch", {}) if isinstance(evidence_record, dict) else {}).get("status") == "ok"
+                    ):
+                        decision = {
+                            **decision,
+                            "candidate_state": "accepted",
+                            "reason": "curated_static_source_surface_requires_review",
+                            "rejection_class": "",
+                            "confidence_score": 0.55,
+                        }
+                        evidence_record["decision"] = decision
                     if not dry_run:
                         append_evidence(evidence_queue, evidence_record)
-                    decision = evidence_record.get("decision", {}) if isinstance(evidence_record, dict) else {}
                     if decision.get("candidate_state") != "accepted":
                         evidence_rejected_count += 1
                         rejected += 1

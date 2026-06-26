@@ -47,7 +47,7 @@ service_dir="$HOME/.config/systemd/user"
 for entry in discord-jiphyeonjeon-miner discord-jiphyeonjeon-traveler discord-jiphyeonjeon-reporter; do
   [ -x "$project/.venv/bin/$entry" ] || { echo "FAIL: missing Hermes entrypoint $entry" >&2; exit 1; }
 done
-mkdir -p "$service_dir" "$HOME/.hermes/state" "$HOME/.hermes/workspace/blog-drafts"
+mkdir -p "$service_dir" "$HOME/.hermes/state" "$workspace/blog-drafts" "$workspace/review/jiphyeonjeon-traveler" "$workspace/review/jiphyeonjeon-claw" "$workspace/intake/jiphyeonjeon-miner" "$workspace/manual_links" "$workspace/state"
 install_unit() {
   local unit="$1" desc="$2" entry="$3" extra_rw="$4"
   cat > "$service_dir/$unit" <<SERVICE
@@ -67,6 +67,16 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
+Environment=JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH=$workspace/review/jiphyeonjeon-traveler/research-requests.jsonl
+Environment=JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH=$workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl
+Environment=JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH=$workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl
+Environment=JIPHYEONJEON_TRAVELER_EVIDENCE_PATH=$workspace/review/jiphyeonjeon-traveler/evidence.jsonl
+Environment=JIPHYEONJEON_TRAVELER_DISCOVERY_STATUS_PATH=$workspace/state/traveler-source-discovery-last-status.json
+Environment=JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH=$workspace/state/traveler-scout-last-status.json
+Environment=JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH=$workspace/state/traveler-collection-report-last-status.json
+Environment=JIPHYEONJEON_MINER_INTAKE_PATH=$workspace/intake/jiphyeonjeon-miner/links.jsonl
+Environment=JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH=$workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+Environment=JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH=$workspace/manual_links/approved-manual-links.jsonl
 ReadWritePaths=$project $workspace $HOME/.hermes/state $extra_rw
 
 [Install]
@@ -75,7 +85,7 @@ SERVICE
 }
 install_unit discord-hermes-jiphyeonjeon-miner.service "Discord bot for Jiphyeonjeon-Miner via Hermes" discord-jiphyeonjeon-miner ""
 install_unit discord-hermes-jiphyeonjeon-traveler.service "Discord bot for Jiphyeonjeon-Traveler via Hermes" discord-jiphyeonjeon-traveler ""
-install_unit discord-hermes-jiphyeonjeon-reporter.service "Discord app for Jiphyeonjeon-Reporter via Hermes" discord-jiphyeonjeon-reporter "$HOME/.hermes/workspace/blog-drafts"
+install_unit discord-hermes-jiphyeonjeon-reporter.service "Discord app for Jiphyeonjeon-Reporter via Hermes" discord-jiphyeonjeon-reporter "$workspace/blog-drafts"
 systemctl --user daemon-reload
 cutover_one() {
   local old="$1" new="$2" label="$3" pattern="$4"
