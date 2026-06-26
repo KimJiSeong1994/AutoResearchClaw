@@ -213,6 +213,9 @@ agents:
     source_refs:
       - skills/discord-openclaw-bridge/README.md#집현전-여행자-source-discovery-path
       - workspace/PROMPT_REGISTRY.json
+      - scripts/paperwiki_kg.py
+      - runtime/traveler-scout-topics.json
+      - .omx/context/paperwiki-traveler-integration-20260626T000000Z.md
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
       - jiphyeonjeon-traveler-daily-collection-report
@@ -231,11 +234,13 @@ agents:
       - score sources for reliability, technical relevance, update cadence, and collection feasibility
       - propose source URLs and newsletter/article feeds for Miner seed expansion or Claw review
       - record evidence-backed source recommendations without deciding newsletter inclusion
+      - optionally use PaperWiki KG active interests to prioritize autonomous scout topics
     boundaries:
       - does not scrape private, paywalled, login-only, or terms-hostile sources
       - does not approve newsletter inclusion or mutate approved manual links
       - stores source-level metadata and public evidence only, never raw private content
       - hands collection candidates to 집현전-광부 and review decisions to 집현전-클로
+      - treats PaperWiki KG as advisory only and never bypasses public-source evidence collection or Claw review
 
   - id: jiphyeonjeon-guard
     name: 집현전-경비원 operations issue guard

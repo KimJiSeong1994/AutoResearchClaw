@@ -739,6 +739,132 @@ class PaperWikiRecommendTest(unittest.TestCase):
                      "--snippet-date", "2026-06-20")
         self.assertEqual(cp.stdout.strip(), "")
 
+    def test_scout_topics_returns_base_only_when_db_missing(self) -> None:
+        base = self.work / "base-topics.json"
+        base.write_text(
+            json.dumps({"topics": [{"id": "llm_agents", "query": "LLM agents", "priority": "high"}]}),
+            encoding="utf-8",
+        )
+
+        out = json.loads(run_cmd("scout-topics", "--base", str(base), "--db", str(self.work / "missing.sqlite")).stdout)
+
+        self.assertEqual(out["generated_from"]["base_topics"], 1)
+        self.assertEqual(out["generated_from"]["interests"], 0)
+        self.assertEqual(out["topics"][0]["id"], "llm_agents")
+
+    def test_scout_topics_active_interest_overrides_base_by_normalized_id_preserving_id(self) -> None:
+        write_note(
+            self.vault, "pages/interests/private-llm-agents.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.8,
+             "related_tags": ["kg"], "seed_keywords": ["private", "planning"], "source": "user"},
+            "# Private LLM Agents\n\nPrivate note must not export.\n",
+        )
+        write_note(
+            self.vault, "pages/interests/llm-agents.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.8,
+             "related_tags": ["kg"], "seed_keywords": ["private", "planning"], "source": "user",
+             "traveler_scout": "true", "privacy": "public", "traveler_topic_id": "llm_agents",
+             "traveler_query": "agent planning public research", "traveler_related_tags": ["agent-planning"]},
+            "# LLM Agents\n\nPublic Traveler export fields are safe.\n",
+        )
+        self.build()
+        base = self.work / "base-topics.json"
+        base.write_text(
+            json.dumps({"topics": [{"id": "llm_agents", "query": "old query", "priority": "low"}]}),
+            encoding="utf-8",
+        )
+
+        out = json.loads(run_cmd("scout-topics", "--base", str(base), "--db", str(self.db)).stdout)
+
+        topics = out["topics"]
+        self.assertEqual(len([t for t in topics if t["id"] in {"llm_agents", "llm-agents"}]), 1)
+        topic = topics[0]
+        self.assertEqual(topic["id"], "llm_agents")
+        self.assertEqual(topic["query"], "agent planning public research")
+        self.assertEqual(topic["priority"], "high")
+        self.assertEqual(topic["source"], "interest-note")
+        self.assertTrue(topic["paperwiki_interest_slug"].startswith("paperwiki_interest_"))
+        self.assertNotIn("private", json.dumps(topic))
+
+    def test_scout_topics_appends_new_active_interest(self) -> None:
+        write_note(
+            self.vault, "pages/interests/new-topic.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.6,
+             "related_tags": ["retrieval"], "seed_keywords": ["private", "retrieval"], "source": "user",
+             "traveler_scout": "true", "export_scope": "traveler_public",
+             "traveler_topic_id": "new_public_topic", "traveler_query": "new retrieval public research"},
+            "# New Topic\n\nInterest note.\n",
+        )
+        self.build()
+        base = self.work / "base-topics.json"
+        base.write_text(json.dumps({"topics": [{"id": "llm_agents", "query": "LLM agents"}]}), encoding="utf-8")
+
+        out = json.loads(run_cmd("scout-topics", "--base", str(base), "--db", str(self.db)).stdout)
+        by_id = {topic["id"]: topic for topic in out["topics"]}
+
+        self.assertIn("new-public-topic", by_id)
+        self.assertEqual(by_id["new-public-topic"]["query"], "new retrieval public research")
+        self.assertEqual(by_id["new-public-topic"]["source"], "interest-note")
+        self.assertEqual(by_id["new-public-topic"]["priority"], "medium")
+        self.assertNotIn("private", json.dumps(by_id["new-public-topic"]))
+
+    def test_scout_topics_ignores_inactive_interest_without_crash(self) -> None:
+        write_note(
+            self.vault, "pages/interests/muted-topic.md",
+            {"type": "interest", "interest_status": "muted", "interest_weight": 0.9,
+             "related_tags": ["muted"], "seed_keywords": ["muted"], "source": "user",
+             "traveler_scout": "true", "privacy": "public",
+             "traveler_topic_id": "muted_topic", "traveler_query": "muted public query"},
+            "# Muted Topic\n\nMuted interest note.\n",
+        )
+        self.build()
+        base = self.work / "base-topics.json"
+        base.write_text(json.dumps({"topics": [{"id": "llm_agents", "query": "LLM agents"}]}), encoding="utf-8")
+
+        out = json.loads(run_cmd("scout-topics", "--base", str(base), "--db", str(self.db)).stdout)
+
+        self.assertNotIn("muted-topic", {topic["id"] for topic in out["topics"]})
+
+    def test_scout_topics_requires_explicit_public_traveler_export(self) -> None:
+        write_note(
+            self.vault, "pages/interests/private-topic.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.9,
+             "related_tags": ["secret"], "seed_keywords": ["secret-lab-keyword"], "source": "user"},
+            "# Private Topic\n\nMust stay local.\n",
+        )
+        self.build()
+        base = self.work / "base-topics.json"
+        base.write_text(json.dumps({"topics": [{"id": "llm_agents", "query": "LLM agents"}]}), encoding="utf-8")
+
+        out = json.loads(run_cmd("scout-topics", "--base", str(base), "--db", str(self.db)).stdout)
+        body = json.dumps(out, ensure_ascii=False)
+
+        self.assertEqual(out["generated_from"]["interests"], 0)
+        self.assertNotIn("private-topic", body)
+        self.assertNotIn("secret-lab-keyword", body)
+
+    def test_scout_topics_unhealthy_db_falls_back_to_base_only(self) -> None:
+        write_note(
+            self.vault, "pages/interests/public-topic.md",
+            {"type": "interest", "interest_status": "active", "interest_weight": 0.9,
+             "traveler_scout": "true", "privacy": "public",
+             "traveler_topic_id": "public_topic", "traveler_query": "public research query"},
+            "# Public Topic\n\nSafe export if KG is healthy.\n",
+        )
+        self.build()
+        con = sqlite3.connect(self.db)
+        con.execute("DELETE FROM kg_events WHERE event_id=(SELECT event_id FROM kg_events LIMIT 1)")
+        con.commit()
+        con.close()
+        base = self.work / "base-topics.json"
+        base.write_text(json.dumps({"topics": [{"id": "llm_agents", "query": "LLM agents"}]}), encoding="utf-8")
+
+        out = json.loads(run_cmd("scout-topics", "--base", str(base), "--db", str(self.db)).stdout)
+
+        self.assertEqual(out["generated_from"]["interests"], 0)
+        self.assertEqual([topic["id"] for topic in out["topics"]], ["llm_agents"])
+        self.assertEqual(out["diagnostics"][0]["code"], "paperwiki_kg_unhealthy")
+
 
 if __name__ == "__main__":
     unittest.main()

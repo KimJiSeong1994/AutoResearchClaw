@@ -185,6 +185,17 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("HERMES_WORKSPACE", runner_text)
         self.assertIn("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", runner_text)
         self.assertIn("${JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH}", runner_text)
+        self.assertIn("scripts/paperwiki_kg.py", runner_text)
+        self.assertIn("scout-topics", runner_text)
+        self.assertIn("mktemp", runner_text)
+        self.assertIn("traveler-scout-topics.paperwiki.json", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_TOPICS_GENERATED_FROM", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS", runner_text)
+        self.assertIn("--max-topics", runner_text)
+        self.assertIn("paperwiki_interests_used", runner_text)
+        self.assertIn("PaperWiki KG merge failed; using baseline topics", runner_text)
         self.assertIn("HERMES_WORKSPACE", wrapper_text)
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
         self.assertTrue(stable_entrypoint.exists())
@@ -194,6 +205,19 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("HERMES_WORKSPACE=$WORKSPACE $WRAPPER", installer_text)
         self.assertIn("bash -n \"$WRAPPER\"", installer_text)
         self.assertIn("bash -n \"$RUNNER\"", installer_text)
+
+    def test_traveler_runtime_manifests_declare_optional_paperwiki_kg(self) -> None:
+        jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("python3 scripts/paperwiki_kg.py scout-topics --base runtime/traveler-scout-topics.json", jobs)
+        self.assertIn("PAPERWIKI_KG_DB", jobs)
+        self.assertIn("optional PaperWiki KG DB path PAPERWIKI_KG_DB", jobs)
+        self.assertIn("missing or unhealthy KG falls back to committed scout topics", jobs)
+        self.assertIn("never bypasses evidence collection or Claw review", jobs)
+        self.assertIn("scripts/paperwiki_kg.py", agents)
+        self.assertIn("optionally use PaperWiki KG active interests", agents)
+        self.assertIn("PaperWiki KG as advisory only", agents)
 
     def test_traveler_cron_installer_rejects_unsafe_workspace(self) -> None:
         installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"

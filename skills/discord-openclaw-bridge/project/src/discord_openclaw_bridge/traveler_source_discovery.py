@@ -59,6 +59,8 @@ class ResearchRequest:
     discovery_mode: str = "requested"
     scout_topic_id: str = ""
     scout_priority: str = ""
+    topic_source: str = ""
+    paperwiki_interest_slug: str = ""
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,8 @@ def _request_from_row(row: dict[str, Any], *, default_candidate_queue: Path) -> 
         discovery_mode=clean_text(row.get("discovery_mode") or "requested", limit=80),
         scout_topic_id=clean_text(row.get("scout_topic_id"), limit=120),
         scout_priority=clean_text(row.get("scout_priority"), limit=40),
+        topic_source=clean_text(row.get("topic_source"), limit=80),
+        paperwiki_interest_slug=clean_text(row.get("paperwiki_interest_slug"), limit=120),
     )
 
 
@@ -717,6 +721,8 @@ async def discover_sources(
                     discovery_mode=request.discovery_mode,
                     scout_topic_id=request.scout_topic_id,
                     scout_priority=request.scout_priority,
+                    topic_source=request.topic_source,
+                    paperwiki_interest_slug=request.paperwiki_interest_slug,
                 )
                 try:
                     build_source_candidate_record(source, queue_path=request.candidate_queue_path)

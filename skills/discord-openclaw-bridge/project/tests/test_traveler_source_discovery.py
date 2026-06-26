@@ -957,6 +957,68 @@ def test_discovery_propagates_autonomous_scout_metadata_to_candidate(tmp_path: P
     assert "autonomous-scout" in rows[0]["tags"]
 
 
+def test_discovery_propagates_paperwiki_provenance_to_candidate(tmp_path: Path) -> None:
+    topics_config = tmp_path / "topics.json"
+    topics_config.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {
+                        "id": "llm_agents",
+                        "query": "LLM agents research engineering",
+                        "priority": "high",
+                        "source": "interest-note",
+                        "paperwiki_interest_slug": "llm-agents",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    research = tmp_path / "research.jsonl"
+    scout_candidates = tmp_path / "source-candidates.jsonl"
+    evidence = tmp_path / "evidence.jsonl"
+    create_scout_requests(
+        topics=load_scout_topics(topics_config),
+        research_queue_path=research,
+        scout_queue_path=scout_candidates,
+    )
+    provider = FakeProvider([
+        DiscoveryCandidate(
+            url="https://example.com/agents",
+            title="Agent Research",
+            source_type="research_lab_blog",
+            reliability_note="Official public page.",
+            cadence_note="Updated.",
+            topic_fit="LLM agents.",
+            collection_hint="poll_public_blog",
+            provider="fake-provider",
+        )
+    ])
+
+    summary = asyncio.run(discover_sources(
+        research_queue_path=research,
+        default_candidate_queue_path=scout_candidates,
+        providers=[provider],
+        deep_research=True,
+        evidence_path=evidence,
+        evidence_fetcher=lambda url: FetchResult(
+            status="ok",
+            url=url,
+            canonical_url=url,
+            content_type="text/html",
+            bytes_read=120,
+            body='<html><head><title>LLM Agents Research</title><meta name="description" content="LLM agents research updates"></head></html>',
+        ),
+    ))
+
+    rows = _jsonl(scout_candidates)
+    assert summary.accepted_count == 1
+    assert rows[0]["topic_source"] == "interest-note"
+    assert rows[0]["paperwiki_interest_slug"] == "llm-agents"
+    assert "paperwiki-influenced" in rows[0]["tags"]
+
+
 def test_static_curated_source_with_low_keyword_match_still_reaches_review_queue(tmp_path: Path) -> None:
     research = tmp_path / "research.jsonl"
     candidates = tmp_path / "source-candidates.jsonl"

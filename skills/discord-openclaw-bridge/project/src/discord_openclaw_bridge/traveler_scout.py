@@ -63,6 +63,8 @@ class ScoutTopic:
     min_sources_to_review: int = 10
     max_candidates: int = 4
     priority: str = "medium"
+    source: str = "configured"
+    paperwiki_interest_slug: str = ""
 
 
 def default_scout_queue_path() -> Path:
@@ -106,6 +108,10 @@ def _topic_from_row(row: dict[str, Any]) -> ScoutTopic:
     priority = clean_text(row.get("priority") or "medium", limit=40).lower()
     if priority not in {"high", "medium", "low"}:
         priority = "medium"
+    source = clean_text(row.get("source") or row.get("topic_source") or "configured", limit=80).lower()
+    if source not in {"configured", "interest-note", "paperwiki-kg", "runtime"}:
+        source = "configured"
+    interest_slug = clean_text(row.get("paperwiki_interest_slug"), limit=120)
     return ScoutTopic(
         topic_id=topic_id,
         query=query,
@@ -113,6 +119,8 @@ def _topic_from_row(row: dict[str, Any]) -> ScoutTopic:
         min_sources_to_review=max(10, min(min_sources, 80)),
         max_candidates=max(1, min(max_candidates, 20)),
         priority=priority,
+        source=source,
+        paperwiki_interest_slug=interest_slug,
     )
 
 
@@ -224,6 +232,37 @@ def _pending_scout_topic_ids(path: Path, *, now: datetime | None = None) -> tupl
     return topic_ids, stale_topic_ids
 
 
+def _topics_status_metadata() -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    mode = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE"), limit=80)
+    path = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_PATH"), limit=500)
+    fallback_reason = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON"), limit=160)
+    trust_policy = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_TRUST_POLICY"), limit=120)
+    generated_from_raw = os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_GENERATED_FROM", "").strip()
+    if mode:
+        metadata["topics_source_mode"] = mode
+    if path:
+        metadata["topics_source_path"] = path
+    if fallback_reason:
+        metadata["topics_fallback_reason"] = fallback_reason
+    if trust_policy:
+        metadata["topics_trust_policy"] = trust_policy
+    if generated_from_raw:
+        try:
+            generated_from = json.loads(generated_from_raw)
+        except json.JSONDecodeError:
+            generated_from = {}
+        if isinstance(generated_from, dict):
+            safe_generated_from: dict[str, int] = {}
+            for key in ("base_topics", "interests"):
+                try:
+                    safe_generated_from[key] = int(generated_from.get(key, 0))
+                except (TypeError, ValueError):
+                    safe_generated_from[key] = 0
+            metadata["topics_generated_from"] = safe_generated_from
+    return metadata
+
+
 def create_scout_requests(
     *,
     topics: list[ScoutTopic],
@@ -253,15 +292,18 @@ def create_scout_requests(
         if topic.topic_id in pending_topic_ids:
             skipped_existing.append(topic.topic_id)
             continue
+        source_note = f" source={topic.source}" if topic.source != "configured" else ""
         request = TravelerResearchRequest(
             topic=topic.query,
             scope=topic.scope,
             min_sources_to_review=topic.min_sources_to_review,
             max_candidates=topic.max_candidates,
-            requester_note=f"autonomous scout topic={topic.topic_id} priority={topic.priority}",
+            requester_note=f"autonomous scout topic={topic.topic_id} priority={topic.priority}{source_note}",
             discovery_mode="autonomous_scout",
             scout_topic_id=topic.topic_id,
             scout_priority=topic.priority,
+            topic_source=topic.source,
+            paperwiki_interest_slug=topic.paperwiki_interest_slug,
         )
         if dry_run:
             record = {
@@ -274,6 +316,8 @@ def create_scout_requests(
                 "discovery_mode": request.discovery_mode,
                 "scout_topic_id": request.scout_topic_id,
                 "scout_priority": request.scout_priority,
+                "topic_source": topic.source,
+                "paperwiki_interest_slug": topic.paperwiki_interest_slug,
             }
         else:
             record = record_research_request(request, queue_path=research_queue, candidate_queue_path=scout_queue)
@@ -289,11 +333,14 @@ def create_scout_requests(
         "research_queue_path": str(research_queue),
         "scout_queue_path": str(scout_queue),
         "topics": [topic.topic_id for topic in selected],
+        "topic_sources": {topic.topic_id: topic.source for topic in selected},
+        "paperwiki_interest_slugs": {topic.topic_id: topic.paperwiki_interest_slug for topic in selected if topic.paperwiki_interest_slug},
         "skipped_existing_topics": skipped_existing,
         "stale_pending_topics": stale_pending,
         "stale_pending_hours": _stale_pending_hours(),
         "request_ids": [str(record.get("request_id")) for record in created if record.get("request_id")],
     }
+    status.update(_topics_status_metadata())
     if status_path is not None and not dry_run:
         _write_status(status_path.expanduser(), status)
     return {"status": status, "requests": created}

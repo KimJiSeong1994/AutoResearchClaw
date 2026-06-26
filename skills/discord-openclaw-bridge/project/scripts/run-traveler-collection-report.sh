@@ -35,11 +35,18 @@ mkdir -p "${TRAVELER_REVIEW_DIR}" "${TRAVELER_STATE_DIR}" "${MINER_INTAKE_DIR}" 
 LOG_FILE="${LOG_DIR}/traveler-collection-report.log"
 REPO_DIR="$(cd "${PROJECT_DIR}/../../.." && pwd)"
 DEFAULT_SCOUT_TOPICS_PATH="${REPO_DIR}/runtime/traveler-scout-topics.json"
+PAPERWIKI_KG_DB="${PAPERWIKI_KG_DB:-${REPO_DIR}/.omx/reports/paperwiki-kg/persistent/paperwiki_kg.sqlite}"
+PAPERWIKI_SCOUT_TOPICS_PATH="${JIPHYEONJEON_TRAVELER_PAPERWIKI_SCOUT_TOPICS_PATH:-${TRAVELER_STATE_DIR}/traveler-scout-topics.paperwiki.json}"
+TRAVELER_SCOUT_MAX_TOPICS="${JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS:-4}"
 SCOUT_TOPICS_ARGS=()
 if [ -n "${JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH:-}" ]; then
   SCOUT_TOPICS_ARGS=(--topics-path "${JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH}")
+  export JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE="override"
+  export JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_PATH="${JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH}"
 elif [ -f "${DEFAULT_SCOUT_TOPICS_PATH}" ]; then
   SCOUT_TOPICS_ARGS=(--topics-path "${DEFAULT_SCOUT_TOPICS_PATH}")
+  export JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE="baseline"
+  export JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_PATH="${DEFAULT_SCOUT_TOPICS_PATH}"
 fi
 
 mkdir -p "${LOG_DIR}"
@@ -50,12 +57,103 @@ timestamp() {
   date +"%Y-%m-%dT%H:%M:%S%z"
 }
 
+prepare_scout_topics() {
+  if [ -n "${JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH:-}" ]; then
+    echo "traveler scout topics override configured: ${JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH}"
+    return 0
+  fi
+  if [ "${JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG:-0}" != "1" ]; then
+    echo "traveler scout topics: optional PaperWiki KG merge disabled; using baseline topics"
+    export JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON="paperwiki_kg_disabled"
+    return 0
+  fi
+  local kg_script="${REPO_DIR}/scripts/paperwiki_kg.py"
+  if [ ! -f "${kg_script}" ] || [ ! -f "${DEFAULT_SCOUT_TOPICS_PATH}" ]; then
+    echo "traveler scout topics: PaperWiki KG helper or base topics missing; using baseline topics"
+    export JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON="paperwiki_helper_or_base_missing"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp "${TRAVELER_STATE_DIR}/traveler-scout-topics.paperwiki.XXXXXX.json")"
+  if .venv/bin/python "${kg_script}" scout-topics --base "${DEFAULT_SCOUT_TOPICS_PATH}" --db "${PAPERWIKI_KG_DB}" >"${tmp}" 2>>"${LOG_FILE}"; then
+    if .venv/bin/python - "${tmp}" <<'PY'
+from pathlib import Path
+import sys
+from discord_openclaw_bridge.traveler_scout import load_scout_topics
+path = Path(sys.argv[1])
+try:
+    topics = load_scout_topics(path)
+except Exception:
+    raise SystemExit(1)
+if not topics:
+    raise SystemExit(1)
+PY
+    then
+      local paperwiki_status
+      local paperwiki_interests_used
+      paperwiki_status="$(
+        .venv/bin/python - "${tmp}" <<'PY'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(payload.get("paperwiki_status", "")))
+PY
+      )"
+      paperwiki_interests_used="$(
+        .venv/bin/python - "${tmp}" <<'PY'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(int(payload.get("paperwiki_interests_used", 0) or 0))
+PY
+      )"
+      if [ "${paperwiki_status}" = "healthy" ] && [ "${paperwiki_interests_used}" -gt 0 ]; then
+        mv "${tmp}" "${PAPERWIKI_SCOUT_TOPICS_PATH}"
+        SCOUT_TOPICS_ARGS=(--topics-path "${PAPERWIKI_SCOUT_TOPICS_PATH}")
+        export JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE="paperwiki_kg"
+        export JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_PATH="${PAPERWIKI_SCOUT_TOPICS_PATH}"
+        export JIPHYEONJEON_TRAVELER_TOPICS_GENERATED_FROM="$(
+          .venv/bin/python - "${PAPERWIKI_SCOUT_TOPICS_PATH}" <<'PY'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps(payload.get("generated_from", {}), ensure_ascii=False, sort_keys=True))
+PY
+        )"
+        export JIPHYEONJEON_TRAVELER_TOPICS_TRUST_POLICY="$(
+          .venv/bin/python - "${PAPERWIKI_SCOUT_TOPICS_PATH}" <<'PY'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(str(payload.get("trust_policy", "")))
+PY
+        )"
+        unset JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON
+        echo "traveler scout topics: using optional PaperWiki KG merge at ${PAPERWIKI_SCOUT_TOPICS_PATH}"
+      else
+        rm -f "${tmp}"
+        export JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON="paperwiki_no_exported_interests_or_unhealthy"
+        echo "traveler scout topics: PaperWiki KG had no public exported interests or was unhealthy; using baseline topics"
+      fi
+    else
+      rm -f "${tmp}"
+      export JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON="paperwiki_output_invalid"
+      echo "traveler scout topics: PaperWiki KG output invalid; using baseline topics"
+    fi
+  else
+    rm -f "${tmp}"
+    export JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON="paperwiki_merge_failed"
+    echo "traveler scout topics: PaperWiki KG merge failed; using baseline topics"
+  fi
+}
+
 printf "\n[%s] traveler-collection-report start\n" "$(timestamp)"
 cd "${PROJECT_DIR}"
+prepare_scout_topics
 
 if [ "${TRAVELER_COLLECTION_REPORT_DRY_RUN:-0}" = "1" ]; then
   echo "dry-run: running traveler scout, source discovery, and report dry-runs"
-  .venv/bin/python -m discord_openclaw_bridge.traveler_scout "${SCOUT_TOPICS_ARGS[@]}" --dry-run
+  .venv/bin/python -m discord_openclaw_bridge.traveler_scout "${SCOUT_TOPICS_ARGS[@]}" --max-topics "${TRAVELER_SCOUT_MAX_TOPICS}" --dry-run
   .venv/bin/python -m discord_openclaw_bridge.traveler_source_discovery --dry-run
   .venv/bin/python -m discord_openclaw_bridge.post_traveler_collection_report --dry-run
   printf "[%s] traveler-collection-report dry-run complete\n" "$(timestamp)"
@@ -63,7 +161,7 @@ if [ "${TRAVELER_COLLECTION_REPORT_DRY_RUN:-0}" = "1" ]; then
 fi
 
 SCOUT_EXIT=0
-.venv/bin/python -m discord_openclaw_bridge.traveler_scout "${SCOUT_TOPICS_ARGS[@]}" || SCOUT_EXIT=$?
+.venv/bin/python -m discord_openclaw_bridge.traveler_scout "${SCOUT_TOPICS_ARGS[@]}" --max-topics "${TRAVELER_SCOUT_MAX_TOPICS}" || SCOUT_EXIT=$?
 printf "[%s] traveler-scout done (exit=%s)\n" "$(timestamp)" "${SCOUT_EXIT}"
 if [ "${SCOUT_EXIT}" != "0" ] && [ "${ALLOW_STALE_TRAVELER_REPORT:-0}" != "1" ]; then
   printf "[%s] traveler-collection-report blocked because scout failed; set ALLOW_STALE_TRAVELER_REPORT=1 to continue\n" "$(timestamp)"

@@ -40,6 +40,32 @@ def test_load_scout_topics_from_json_config(tmp_path: Path) -> None:
     assert topics[0].priority == "high"
 
 
+def test_load_scout_topics_preserves_paperwiki_topic_metadata(tmp_path: Path) -> None:
+    config = tmp_path / "topics.json"
+    config.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {
+                        "id": "llm_agents",
+                        "query": "agent planning retrieval",
+                        "scope": "public research sources for agent planning",
+                        "priority": "high",
+                        "source": "interest-note",
+                        "paperwiki_interest_slug": "llm-agents",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    topics = load_scout_topics(config)
+
+    assert topics[0].source == "interest-note"
+    assert topics[0].paperwiki_interest_slug == "llm-agents"
+
+
 def test_scout_dry_run_plans_without_queue_mutation(tmp_path: Path) -> None:
     topics = load_scout_topics(None)[:1]
     research = tmp_path / "research.jsonl"
@@ -77,6 +103,59 @@ def test_scout_run_appends_autonomous_research_request(tmp_path: Path) -> None:
     assert rows[0]["max_candidates"] == topics[0].max_candidates
     assert rows[0]["candidate_queue_path"] == str(scout)
     assert json.loads(status.read_text(encoding="utf-8"))["scout_queue_path"] == str(scout)
+
+
+def test_scout_records_paperwiki_topic_provenance(tmp_path: Path) -> None:
+    config = tmp_path / "topics.json"
+    config.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {
+                        "id": "llm_agents",
+                        "query": "agent planning retrieval",
+                        "priority": "high",
+                        "source": "interest-note",
+                        "paperwiki_interest_slug": "llm-agents",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    topics = load_scout_topics(config)
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    status = tmp_path / "status.json"
+
+    result = create_scout_requests(topics=topics, research_queue_path=research, scout_queue_path=scout, status_path=status)
+
+    rows = _jsonl(research)
+    assert result["status"]["topic_sources"] == {"llm_agents": "interest-note"}
+    assert result["status"]["paperwiki_interest_slugs"] == {"llm_agents": "llm-agents"}
+    assert rows[0]["topic_source"] == "interest-note"
+    assert rows[0]["paperwiki_interest_slug"] == "llm-agents"
+    assert "source=interest-note" in rows[0]["requester_note"]
+    assert json.loads(status.read_text(encoding="utf-8"))["topic_sources"] == {"llm_agents": "interest-note"}
+
+
+def test_scout_status_records_topics_manifest_provenance(tmp_path: Path, monkeypatch: Any) -> None:
+    topics = load_scout_topics(None)[:1]
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    status = tmp_path / "status.json"
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE", "paperwiki_kg")
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_PATH", str(tmp_path / "traveler-scout-topics.paperwiki.json"))
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_TOPICS_GENERATED_FROM", json.dumps({"base_topics": 4, "interests": 2}))
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_TOPICS_TRUST_POLICY", "trust-policy-1.0")
+
+    create_scout_requests(topics=topics, research_queue_path=research, scout_queue_path=scout, status_path=status)
+
+    payload = json.loads(status.read_text(encoding="utf-8"))
+    assert payload["topics_source_mode"] == "paperwiki_kg"
+    assert payload["topics_source_path"].endswith("traveler-scout-topics.paperwiki.json")
+    assert payload["topics_generated_from"] == {"base_topics": 4, "interests": 2}
+    assert payload["topics_trust_policy"] == "trust-policy-1.0"
 
 
 def test_scout_skips_existing_pending_topic(tmp_path: Path) -> None:

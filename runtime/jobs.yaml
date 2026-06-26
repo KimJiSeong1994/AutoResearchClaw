@@ -417,6 +417,7 @@ jobs:
       - uv run discord-openclaw-traveler-scout --dry-run
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-traveler-discover-sources --dry-run
+      - python3 scripts/paperwiki_kg.py scout-topics --base runtime/traveler-scout-topics.json
       - web research over public metadata/source/newsletter/article endpoints
       - update JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH with requested or autonomous scout deep-research requests
       - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH and JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH with evidence-backed candidate source records
@@ -429,6 +430,10 @@ jobs:
       - public web search results
       - existing Miner seed status and source yield summaries
       - 집현전-Claw technical relevance criteria
+      - optional PaperWiki KG active-interest scout topics via PAPERWIKI_KG_DB
+      - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
+      - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
+      - committed fallback runtime/traveler-scout-topics.json
     outputs:
       - deep-research request queue requiring many-source comparison
       - source candidate queue with reliability, cadence, feasibility, rejected-source evidence, and next-action fields
@@ -436,6 +441,7 @@ jobs:
     safety:
       side_effects: source recommendations only; no automatic scraping, approval, or Discord posting
       secrets: public source metadata only; do not store private newsletters, login content, or tokens
+      paperwiki_boundary: PaperWiki KG is advisory, opt-in, and optional; only public traveler_scout/export_scope interests can influence scout topics; missing or unhealthy KG falls back to committed scout topics and never bypasses evidence collection or Claw review
 
   - id: jiphyeonjeon-traveler-daily-collection-report
     name: Daily Traveler additional-collection report
@@ -444,6 +450,7 @@ jobs:
     command_refs:
       - bash skills/discord-openclaw-bridge/install-traveler-collection-report-cron.sh
       - bash skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh
+      - python3 scripts/paperwiki_kg.py scout-topics --base runtime/traveler-scout-topics.json
       - uv run discord-openclaw-traveler-scout
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-post-traveler-collection-report
@@ -457,15 +464,20 @@ jobs:
       - JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
       - JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH
       - optional runtime/traveler-scout-topics.json or JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH
+      - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
+      - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
+      - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
       - current Miner seed/intake/review/approved surfaces
     outputs:
       - Discord Traveler forum collection-gap report
       - traveler-scout-last-status.json
       - traveler-source-discovery-last-status.json
       - traveler-collection-report-last-status.json
+      - optional traveler-scout-topics.paperwiki.json generated topic artifact
     safety:
       side_effects: public Discord report posting; candidate discovery writes pending review records only
       secrets: Discord bot token remains in remote .env only; report/status must not contain tokens
+      paperwiki_boundary: cron must not fail solely because PaperWiki KG is disabled, absent, or unhealthy; KG influence remains explicit opt-in/advisory and candidates still require evidence and review
 
   - id: discord-miner-seeds-expand
     name: Expand configured Miner seed sources
