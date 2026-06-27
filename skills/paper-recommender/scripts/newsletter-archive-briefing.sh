@@ -4,17 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ -f "$HOME/.openclaw/workspace/.env" ]]; then
+WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}}"
+if [[ -f "$WORKSPACE/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$WORKSPACE/.env"
+  set +a
+elif [[ -z "${HERMES_WORKSPACE:-}" && -f "$HOME/.openclaw/workspace/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
   . "$HOME/.openclaw/workspace/.env"
   set +a
 fi
 
-NEWSLETTER_EXPORT_PATH="${NEWSLETTER_EXPORT_PATH:-$HOME/.openclaw/workspace/newsletters/gmail-export.mbox}"
+NEWSLETTER_EXPORT_PATH="${NEWSLETTER_EXPORT_PATH:-$WORKSPACE/newsletters/gmail-export.mbox}"
 NEWSLETTER_SOURCE_MODE="${NEWSLETTER_SOURCE_MODE:-export}"
-NEWSLETTER_WIKI_ROOT="${NEWSLETTER_WIKI_ROOT:-$HOME/.openclaw/workspace/wiki}"
-NEWSLETTER_REPORT_PATH="${NEWSLETTER_REPORT_PATH:-$HOME/.openclaw/workspace/reports/newsletter-briefing-latest.md}"
+NEWSLETTER_WIKI_ROOT="${NEWSLETTER_WIKI_ROOT:-$WORKSPACE/wiki}"
+NEWSLETTER_REPORT_PATH="${NEWSLETTER_REPORT_PATH:-$WORKSPACE/reports/newsletter-briefing-latest.md}"
 NEWSLETTER_SENDER_ALLOWLIST="${NEWSLETTER_SENDER_ALLOWLIST:-newsletter,research,arxiv,substack,medium,openai,deepmind,google research,anthropic,semanticscholar,paperswithcode,hugging face,huggingface,nvidia,the gradient,interconnects,ahead of ai,alpha signal,import ai,the batch,latent space}"
 NEWSLETTER_MAX_MESSAGES="${NEWSLETTER_MAX_MESSAGES:-500}"
 NEWSLETTER_MAX_SOURCE_BYTES="${NEWSLETTER_MAX_SOURCE_BYTES:-52428800}"
