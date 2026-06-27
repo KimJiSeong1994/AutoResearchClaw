@@ -9,7 +9,7 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export TZ="${TZ:-Asia/Seoul}"
 
-WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}"
+WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}}"
 BRIDGE_PROJECT="$WORKSPACE/skills/discord-openclaw-bridge/project"
 PAPER_SKILL="$WORKSPACE/skills/paper-recommender"
 LOG_DIR="$WORKSPACE/logs"
