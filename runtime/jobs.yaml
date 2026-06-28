@@ -581,6 +581,34 @@ jobs:
       - reviewer-gated and critic-gated proposal evidence; no automatic skill mutation
     safety: local deterministic proposal generation only; no skill mutation, no automatic accept, reviewer and critic gates required, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, live accepted-lineage writes are Phase 4-only
 
+
+  - id: skillopt-controlled-apply
+    name: SkillOpt controlled apply
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_apply.py select --candidate-dir .omx/reports/skillopt/patch-candidates --out .omx/reports/skillopt/apply-runs/<timestamp>-selection.json
+      - python3 scripts/skillopt_apply.py dry-run .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --selection-report .omx/reports/skillopt/apply-runs/<timestamp>-selection.json --out .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json
+      - python3 scripts/skillopt_apply.py apply .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --selection-report .omx/reports/skillopt/apply-runs/<timestamp>-selection.json --dry-run-report .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json --reviewer-verdict APPROVE --critic-verdict APPROVE --eval-before .omx/reports/skillopt/skillopt-eval-before.json --eval-after .omx/reports/skillopt/skillopt-eval-after.json --lineage .omx/reports/skillopt/accepted-lineage.jsonl --out .omx/reports/skillopt/apply-runs/<timestamp>-apply.json
+      - python3 scripts/skillopt_apply.py reject .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --reason <reason> --buffer .omx/reports/skillopt/rejected-edits.jsonl
+    triggers:
+      - after reviewer and critic approve exactly one SkillOpt proposal
+      - after dry-run diff is reviewed
+      - manual
+    outputs:
+      - .omx/reports/skillopt/apply-runs/<timestamp>-selection.json
+      - .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json
+      - .omx/reports/skillopt/apply-runs/<timestamp>-apply.json
+      - .omx/reports/skillopt/accepted-lineage.jsonl
+      - optional .omx/reports/skillopt/rejected-edits.jsonl
+    checks:
+      - one proposal at a time
+      - dry-run first
+      - reviewer and critic approval required for apply
+      - rollback on failed eval-after or pre-lineage failure
+      - accepted lineage append-only and final-side-effect crash consistency
+    safety: local controlled skill mutation only after explicit reviewer and critic gates; no batch apply, no automatic accept, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, accepted lineage append is Phase 4 final side effect
+
   - id: jiphyeonjeon-audit-team-digest
     name: Jiphyeonjeon Audit Team integrated operations digest
     type: health-check

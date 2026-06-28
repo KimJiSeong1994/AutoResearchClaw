@@ -163,3 +163,43 @@ Synced local output root:
 ```text
 <LOCAL_AUTORESEARCHCLAW_SYNC_DIR>
 ```
+
+## Apply one SkillOpt proposal under controlled gates
+
+Phase 4 controlled apply is the first SkillOpt step allowed to mutate a skill
+file, and only for one selected proposal at a time. Start with deterministic
+selection and a no-mutation dry-run:
+
+```bash
+python3 scripts/skillopt_apply.py select \
+  --candidate-dir .omx/reports/skillopt/patch-candidates \
+  --out .omx/reports/skillopt/apply-runs/<timestamp>-selection.json
+
+python3 scripts/skillopt_apply.py dry-run \
+  .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json \
+  --selection-report .omx/reports/skillopt/apply-runs/<timestamp>-selection.json \
+  --out .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json
+```
+
+Apply only after the dry-run diff is reviewed and both reviewer and critic
+verdicts are `APPROVE`:
+
+```bash
+python3 scripts/skillopt_apply.py apply \
+  .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json \
+  --selection-report .omx/reports/skillopt/apply-runs/<timestamp>-selection.json \
+  --dry-run-report .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json \
+  --reviewer-verdict APPROVE \
+  --critic-verdict APPROVE \
+  --eval-before .omx/reports/skillopt/skillopt-eval-before.json \
+  --eval-after .omx/reports/skillopt/skillopt-eval-after.json \
+  --lineage .omx/reports/skillopt/accepted-lineage.jsonl \
+  --out .omx/reports/skillopt/apply-runs/<timestamp>-apply.json
+```
+
+The apply gate rejects stale baselines, selection-report or dry-run-report
+mismatches, missing approvals, privacy-risk text, ambiguous sections, failed
+eval-after reports, and protected runtime paths. If post-apply validation fails, the script restores the
+original skill content and leaves accepted lineage unchanged. `accepted-lineage.jsonl`
+is append-only and written only as the final side effect after apply evidence is
+complete. Do not batch-apply candidates.

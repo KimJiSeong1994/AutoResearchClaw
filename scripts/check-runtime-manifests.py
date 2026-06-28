@@ -51,6 +51,7 @@ REQUIRED_JOB_IDS = {
     "skillopt-readiness-audit",
     "skillopt-evaluation-harness",
     "skillopt-patch-proposal",
+    "skillopt-controlled-apply",
 }
 
 REQUIRED_AGENT_IDS = {
