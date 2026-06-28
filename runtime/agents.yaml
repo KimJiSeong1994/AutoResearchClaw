@@ -216,7 +216,7 @@ agents:
       - workspace/PROMPT_REGISTRY.json
       - scripts/paperwiki_kg.py
       - runtime/traveler-scout-topics.json
-      - .omx/context/paperwiki-traveler-integration-20260626T000000Z.md
+      - docs/ops/traveler-new-discovery-blocked-analysis-2026-06-26.md
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
       - jiphyeonjeon-traveler-daily-collection-report
@@ -283,7 +283,7 @@ agents:
       - .codex/skills/academic-technical-filter/SKILL.md
       - .codex/skills/blog-research-post/SKILL.md
       - .codex/skills/jiphyeonjeon-reporter-article-post/SKILL.md
-      - .omx/plans/ralplan-handoff-skillopt-agent-skill-strengthening.md
+      - docs/plans/skillopt-agent-skill-strengthening.md
     owns_jobs:
       - skillopt-readiness-audit
       - skillopt-evaluation-harness
