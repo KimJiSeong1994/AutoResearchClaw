@@ -57,3 +57,7 @@ For non-trivial work, include:
 - files changed
 - verification evidence
 - remaining risks or intentionally deferred adjacent cleanup
+
+## Input contract
+
+Before running the workflow, identify the user request, source material, required metadata, and any missing facts that must stay marked as unknown.
