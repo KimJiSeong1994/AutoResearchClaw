@@ -68,6 +68,8 @@ class TravelerSourceInput:
     discovery_mode: str | None = None
     scout_topic_id: str | None = None
     scout_priority: str | None = None
+    topic_source: str | None = None
+    paperwiki_interest_slug: str | None = None
 
 
 def _candidate_id(url: str) -> str:
@@ -144,7 +146,9 @@ def build_source_candidate_record(
         "discovery_mode": clean_text(source.discovery_mode or "requested", limit=80),
         "scout_topic_id": clean_text(source.scout_topic_id, limit=120),
         "scout_priority": clean_text(source.scout_priority, limit=40),
-        "tags": [tag for tag in ["source-discovery", AGENT_ID, PENDING_STATUS, source_type, "autonomous-scout" if source.discovery_mode == "autonomous_scout" else "requested-research"] if tag],
+        "topic_source": clean_text(source.topic_source, limit=80),
+        "paperwiki_interest_slug": clean_text(source.paperwiki_interest_slug, limit=120),
+        "tags": [tag for tag in ["source-discovery", AGENT_ID, PENDING_STATUS, source_type, "autonomous-scout" if source.discovery_mode == "autonomous_scout" else "requested-research", "paperwiki-influenced" if source.topic_source == "interest-note" else ""] if tag],
         "review": {
             "owner": REVIEWER_ID,
             "required": True,
@@ -217,6 +221,8 @@ class TravelerResearchRequest:
     discovery_mode: str = "requested"
     scout_topic_id: str | None = None
     scout_priority: str | None = None
+    topic_source: str | None = None
+    paperwiki_interest_slug: str | None = None
 
 
 def default_research_queue_path() -> Path:
@@ -264,6 +270,8 @@ def record_research_request(
         "discovery_mode": clean_text(request.discovery_mode or "requested", limit=80),
         "scout_topic_id": clean_text(request.scout_topic_id, limit=120),
         "scout_priority": clean_text(request.scout_priority, limit=40),
+        "topic_source": clean_text(request.topic_source, limit=80),
+        "paperwiki_interest_slug": clean_text(request.paperwiki_interest_slug, limit=120),
         "acceptance_criteria": {
             "review_many_sources": True,
             "minimum_sources_to_review": min_sources,

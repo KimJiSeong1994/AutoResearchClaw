@@ -10,7 +10,7 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export TZ="${TZ:-Asia/Seoul}"
 
-WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}"
+WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}}"
 BRIDGE_PROJECT="$WORKSPACE/skills/discord-openclaw-bridge/project"
 PAPER_SKILL="$WORKSPACE/skills/paper-recommender"
 LOG_DIR="$WORKSPACE/logs"
@@ -213,6 +213,33 @@ def display_summary(item: dict[str, object]) -> str:
     return item_summary(item)
 
 
+def technical_intro(item: dict[str, object]) -> str:
+    title = display_title(item)
+    summary = display_summary(item)
+    return f"`{title}`는 {summary} 이 항목은 단순 링크 공유가 아니라 기술 개념·적용 맥락·후속 검토 지점을 함께 읽어야 하는 후보입니다."
+
+
+def context_note(item: dict[str, object]) -> str:
+    source = source_label(item)
+    if item.get("_semantic_key") == "graph_representation_learning" or semantic_family(item) == "graph_representation_learning":
+        return "그래프 표현학습은 추천·검색·지식그래프·이상탐지에서 데이터 구조를 어떻게 벡터화할지 다루는 기반 기술입니다."
+    return f"`{source}`에서 포착된 공개 신호로, 연구 결과·제품 업데이트·인프라 변화가 실제 워크플로에 어떤 영향을 주는지 확인할 필요가 있습니다."
+
+
+def practice_note(item: dict[str, object]) -> str:
+    text = " ".join(
+        clean(item.get(key), limit=240).lower()
+        for key in ("article_title", "title", "public_excerpt", "article_description", "summary", "description")
+    )
+    if "rag" in text or "retrieval" in text:
+        return "검색 품질, 평가셋, 인용 가능성, 운영 모니터링 지표를 분리해 읽어야 합니다."
+    if "agent" in text or "copilot" in text:
+        return "자동화 범위, 실패 복구, 권한 경계, 사람 검토 지점을 함께 설계해야 합니다."
+    if "graph" in text:
+        return "데이터 스키마, 시간 변화, 벤치마크 재현성, downstream task 적합성을 확인해야 합니다."
+    return "기술 소개는 가능성보다 제약을 함께 봐야 하며, 실제 도입 전 데이터·비용·운영 리스크를 분리해 점검해야 합니다."
+
+
 def source_label(item: dict[str, object]) -> str:
     for key in ("source", "sender", "newsletter", "source_name", "venue"):
         value = clean(item.get(key), limit=70)
@@ -273,7 +300,7 @@ for raw in items:
 selected = unique[:7]
 lead = selected[:3]
 lines = [
-    "**집현전 데일리 뉴스레터**",
+    "**집현전 데일리 뉴스레터 — 기술 블로그 브리핑**",
     f"작성일: `{run_date}`",
     f"기반 아카이브: `{archive_path.name}` · 전체 {len(all_items)}개 / 당일 {len(items)}개 / 이전 날짜 제외 {stale_count}개 / 주제 기준 핵심 묶음 {len(unique)}개",
     "개인정보 경계: 메일 본문/비밀값 없이 데일리 아카이브의 공개 제목·요약·출처 링크만 사용",
@@ -289,7 +316,14 @@ else:
         "> 2. 이전 날짜 누적 항목은 반복 방지를 위해 제외했습니다.",
         "> 3. 다음 실행에서 신규 수집분을 다시 점검합니다.",
     ]
-lines += ["", "## 오늘의 핵심 항목"]
+lines += [
+    "",
+    "## 읽는 법",
+    "- 오늘의 항목은 블로그 포스팅처럼 `기술 소개 → 왜 중요한가 → 실무/연구 포인트 → 원문` 순서로 정리합니다.",
+    "- 각 설명은 공개 제목·요약·출처 링크에 근거한 소개이며, 원문 확인 전 과도한 결론을 내리지 않습니다.",
+    "",
+    "## 오늘의 핵심 항목 — 기술 블로그형 소개",
+]
 if not selected:
     lines.append("- 공개 링크 후보 없음")
 for idx, item in enumerate(selected, start=1):
@@ -301,9 +335,10 @@ for idx, item in enumerate(selected, start=1):
     extra_count = max(0, len(related_urls) - 1) if isinstance(related_urls, list) else 0
     lines += [
         f"### {idx}. {title}",
-        f"- 핵심 내용: {summary}",
-        f"- 왜 중요한가: 오늘 아카이브에서 확인된 `{source}` 기반 변화 신호입니다.",
-        f"- 확인 링크: {url or '공개 링크 없음'}",
+        f"- 기술 소개: {technical_intro(item)}",
+        f"- 왜 중요한가: {context_note(item)}",
+        f"- 실무/연구 포인트: {practice_note(item)}",
+        f"- 원문 링크: {url or '공개 링크 없음'}",
     ]
     if extra_count:
         lines.append(f"- 관련 링크: 같은 제목으로 수집된 추가 공개 링크 {extra_count}개")

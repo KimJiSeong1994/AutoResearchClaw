@@ -4,24 +4,49 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ -f "$HOME/.openclaw/workspace/.env" ]]; then
+WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}}"
+if [[ -f "$WORKSPACE/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$WORKSPACE/.env"
+  set +a
+fi
+if [[ -n "${HERMES_WORKSPACE:-}" && -f "$HOME/.openclaw/workspace/.env" ]]; then
+  # Reuse legacy relay/API source configuration during Hermes cutover, but
+  # force all generated artifacts back under the active Hermes workspace below.
+  set -a
+  # shellcheck disable=SC1091
+  . "$HOME/.openclaw/workspace/.env"
+  set +a
+elif [[ -z "${HERMES_WORKSPACE:-}" && -f "$HOME/.openclaw/workspace/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
   . "$HOME/.openclaw/workspace/.env"
   set +a
 fi
 
-NEWSLETTER_EXPORT_PATH="${NEWSLETTER_EXPORT_PATH:-$HOME/.openclaw/workspace/newsletters/gmail-export.mbox}"
+NEWSLETTER_EXPORT_PATH="${NEWSLETTER_EXPORT_PATH:-$WORKSPACE/newsletters/gmail-export.mbox}"
 NEWSLETTER_SOURCE_MODE="${NEWSLETTER_SOURCE_MODE:-export}"
-NEWSLETTER_WIKI_ROOT="${NEWSLETTER_WIKI_ROOT:-$HOME/.openclaw/workspace/wiki}"
-NEWSLETTER_REPORT_PATH="${NEWSLETTER_REPORT_PATH:-$HOME/.openclaw/workspace/reports/newsletter-briefing-latest.md}"
+if [[ -n "${HERMES_WORKSPACE:-}" ]]; then
+  NEWSLETTER_WIKI_ROOT="$WORKSPACE/wiki"
+  NEWSLETTER_REPORT_PATH="$WORKSPACE/reports/newsletter-briefing-latest.md"
+else
+  NEWSLETTER_WIKI_ROOT="${NEWSLETTER_WIKI_ROOT:-$WORKSPACE/wiki}"
+  NEWSLETTER_REPORT_PATH="${NEWSLETTER_REPORT_PATH:-$WORKSPACE/reports/newsletter-briefing-latest.md}"
+fi
 NEWSLETTER_SENDER_ALLOWLIST="${NEWSLETTER_SENDER_ALLOWLIST:-newsletter,research,arxiv,substack,medium,openai,deepmind,google research,anthropic,semanticscholar,paperswithcode,hugging face,huggingface,nvidia,the gradient,interconnects,ahead of ai,alpha signal,import ai,the batch,latent space}"
 NEWSLETTER_MAX_MESSAGES="${NEWSLETTER_MAX_MESSAGES:-500}"
 NEWSLETTER_MAX_SOURCE_BYTES="${NEWSLETTER_MAX_SOURCE_BYTES:-52428800}"
 NEWSLETTER_DATE="${NEWSLETTER_DATE:-$(TZ=Asia/Seoul date +%F)}"
-JIPHYEONJEON_MINER_INTAKE_PATH="${JIPHYEONJEON_MINER_INTAKE_PATH:-$HOME/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl}"
-JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH:-$HOME/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl}"
-JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-$HOME/.openclaw/workspace/manual_links/approved-manual-links.jsonl}"
+if [[ -n "${HERMES_WORKSPACE:-}" ]]; then
+  JIPHYEONJEON_MINER_INTAKE_PATH="$WORKSPACE/intake/jiphyeonjeon-miner/links.jsonl"
+  JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="$WORKSPACE/review/jiphyeonjeon-claw/link-review-queue.jsonl"
+  JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="$WORKSPACE/manual_links/approved-manual-links.jsonl"
+else
+  JIPHYEONJEON_MINER_INTAKE_PATH="${JIPHYEONJEON_MINER_INTAKE_PATH:-$HOME/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl}"
+  JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH:-$HOME/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl}"
+  JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-$HOME/.openclaw/workspace/manual_links/approved-manual-links.jsonl}"
+fi
 
 mkdir -p "$(dirname "$NEWSLETTER_REPORT_PATH")"
 PYTHON_BIN="${PYTHON_BIN:-python3}"

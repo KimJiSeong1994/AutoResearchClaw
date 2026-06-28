@@ -9,6 +9,10 @@ REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.openclaw/workspace}"
 TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE="${TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE:-0 13 * * *}"
 
 case "$REMOTE_WORKSPACE" in
+  *[[:space:]]*|*%*)
+    echo "ERROR: REMOTE_WORKSPACE contains unsafe shell characters" >&2
+    exit 2
+    ;;
   *[\'\"\$\\\;\&\|\<\>\`\(\)]*)
     echo "ERROR: REMOTE_WORKSPACE contains unsafe shell characters" >&2
     exit 2
@@ -83,7 +87,7 @@ crontab -l 2>/dev/null | awk '
 cat >> "$TMP" <<EOF_CRON
 # BEGIN JIPHYEONJEON TRAVELER COLLECTION REPORT
 # EC2 cron runs in UTC. 13:00 UTC = 22:00 Asia/Seoul (KST).
-$TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE $WRAPPER
+$TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE HERMES_WORKSPACE=$WORKSPACE $WRAPPER
 # END JIPHYEONJEON TRAVELER COLLECTION REPORT
 EOF_CRON
 crontab "$TMP"

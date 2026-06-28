@@ -1177,14 +1177,33 @@ def _quality_thresholds(config: CardNewsQualityGateConfig) -> dict[str, int | fl
     }
 
 
+def _gateway_env_value(name: str) -> str:
+    return os.environ.get(name, "").strip()
+
+
 def _openclaw_gateway_token_from_env() -> str:
-    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
-    token_file = os.environ.get("OPENCLAW_GATEWAY_TOKEN_FILE", "").strip()
-    if not token and token_file:
+    token = _gateway_env_value("HERMES_GATEWAY_TOKEN")
+    if token:
+        return token
+    token = _gateway_env_value("OPENCLAW_GATEWAY_TOKEN")
+    if token:
+        return token
+    for name in ("HERMES_GATEWAY_TOKEN_FILE", "OPENCLAW_GATEWAY_TOKEN_FILE"):
+        token_file = _gateway_env_value(name)
+        if not token_file:
+            continue
         path = Path(token_file).expanduser()
         if path.exists():
-            token = path.read_text(encoding="utf-8").strip()
-    return token
+            return path.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def _agent_gateway_base_url_from_env() -> str:
+    return (_gateway_env_value("HERMES_BASE_URL") or _gateway_env_value("OPENCLAW_BASE_URL") or "http://127.0.0.1:18789/v1").rstrip("/")
+
+
+def _agent_gateway_model_from_env() -> str:
+    return _gateway_env_value("HERMES_MODEL") or _gateway_env_value("OPENCLAW_MODEL") or "openclaw/clawbridge"
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -1212,10 +1231,10 @@ async def _agent_duplicate_indices(
     token = _openclaw_gateway_token_from_env()
     if not token:
         return set()
-    base_url = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1").strip().rstrip("/")
+    base_url = _agent_gateway_base_url_from_env()
     if not is_loopback_base_url(base_url):
         return set()
-    model = os.environ.get("OPENCLAW_MODEL", "openclaw/clawbridge").strip() or "openclaw/clawbridge"
+    model = _agent_gateway_model_from_env()
     current = [
         {"index": index, **_agent_context(card)}
         for index, card in enumerate(cards)

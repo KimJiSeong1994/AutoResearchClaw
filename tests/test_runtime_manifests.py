@@ -84,6 +84,58 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("jiphyeonjeon-blog-publish", job_ids)
         self.assertIn("jiphyeonjeon-blog-publisher", agent_ids)
         self.assertIn("집현전-기자", agents_text)
+        self.assertIn("skillopt-readiness-audit", job_ids)
+        self.assertIn("skillopt-evaluation-harness", job_ids)
+        self.assertIn("skillopt-patch-proposal", job_ids)
+        self.assertIn("skillopt-auditor", agent_ids)
+        self.assertIn(".codex/skills/*/SKILL.md", jobs_text)
+        self.assertIn(".codex/skills/*/SKILL.md", agents_text)
+
+    def test_skillopt_auditor_is_read_only_and_sanitized(self) -> None:
+        checker = load_checker()
+        jobs_text = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        agents_text = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
+        jobs = entries_by_id(checker, jobs_text)
+        agents = entries_by_id(checker, agents_text)
+        job = jobs["skillopt-readiness-audit"]
+        eval_job = jobs["skillopt-evaluation-harness"]
+        proposal_job = jobs["skillopt-patch-proposal"]
+        agent = agents["skillopt-auditor"]
+        self.assertEqual("skillopt-auditor", job.fields["owner_agent"])
+        self.assertEqual("skillopt-auditor", eval_job.fields["owner_agent"])
+        self.assertEqual("skillopt-auditor", proposal_job.fields["owner_agent"])
+        self.assertEqual("local-check", job.fields["type"])
+        self.assertEqual("local-check", eval_job.fields["type"])
+        self.assertEqual("local-check", proposal_job.fields["type"])
+        command_refs = " ".join(job.lists.get("command_refs", [])).lower()
+        eval_command_refs = " ".join(eval_job.lists.get("command_refs", [])).lower()
+        proposal_command_refs = " ".join(proposal_job.lists.get("command_refs", [])).lower()
+        safety = " ".join([*job.fields.values(), *job.lists.get("outputs", [])]).lower()
+        eval_safety = " ".join([*eval_job.fields.values(), *eval_job.lists.get("outputs", [])]).lower()
+        proposal_safety = " ".join([*proposal_job.fields.values(), *proposal_job.lists.get("outputs", [])]).lower()
+        source_refs = " ".join(agent.lists.get("source_refs", [])).lower()
+        owns_jobs = " ".join(agent.lists.get("owns_jobs", [])).lower()
+        boundaries = " ".join(agent.lists.get("boundaries", [])).lower()
+        self.assertIn("scripts/skillopt_audit.py", command_refs)
+        self.assertIn("--markdown", command_refs)
+        self.assertIn("scripts/skillopt_eval.py", eval_command_refs)
+        self.assertIn("tests/fixtures/skillopt", eval_command_refs)
+        self.assertIn("scripts/skillopt_propose.py", proposal_command_refs)
+        self.assertIn("scripts/skillopt_propose.py", source_refs)
+        self.assertIn("skillopt-patch-proposal", owns_jobs)
+        self.assertIn("read-only", safety + boundaries)
+        self.assertIn("no skill mutation", safety)
+        self.assertIn("no skill mutation", eval_safety)
+        self.assertIn("no skill mutation", proposal_safety + boundaries)
+        self.assertIn("no automatic accept", eval_safety)
+        self.assertIn("no automatic accept", proposal_safety)
+        self.assertIn("reviewer and critic gates", eval_safety + boundaries)
+        self.assertIn("reviewer and critic gates", proposal_safety)
+        self.assertIn("phase 4-only", proposal_safety + boundaries)
+        self.assertIn("wiki-relative", boundaries)
+        self.assertIn("absolute local vault paths", boundaries)
+        self.assertIn("never prints tokens", boundaries)
+        self.assertNotIn("discord.com/api/webhooks", command_refs + eval_command_refs + proposal_command_refs + safety + eval_safety + proposal_safety + boundaries)
 
     def test_audit_team_is_read_only_and_scoped(self) -> None:
         checker = load_checker()
@@ -179,14 +231,66 @@ class RuntimeManifestTest(unittest.TestCase):
         installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"
         stable_entrypoint = ROOT / "scripts" / "traveler-collection-report.sh"
 
-        self.assertIn("runtime/traveler-scout-topics.json", runner.read_text(encoding="utf-8"))
+        runner_text = runner.read_text(encoding="utf-8")
+        wrapper_text = stable_entrypoint.read_text(encoding="utf-8")
+        self.assertIn("runtime/traveler-scout-topics.json", runner_text)
+        self.assertIn("HERMES_WORKSPACE", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", runner_text)
+        self.assertIn("${JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH}", runner_text)
+        self.assertIn("scripts/paperwiki_kg.py", runner_text)
+        self.assertIn("scout-topics", runner_text)
+        self.assertIn("mktemp", runner_text)
+        self.assertIn("traveler-scout-topics.paperwiki.json", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_TOPICS_GENERATED_FROM", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS", runner_text)
+        self.assertIn("--max-topics", runner_text)
+        self.assertIn("paperwiki_interests_used", runner_text)
+        self.assertIn("PaperWiki KG merge failed; using baseline topics", runner_text)
+        self.assertIn("HERMES_WORKSPACE", wrapper_text)
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
         self.assertTrue(stable_entrypoint.exists())
-        self.assertIn("run-traveler-collection-report.sh", stable_entrypoint.read_text(encoding="utf-8"))
+        self.assertIn("run-traveler-collection-report.sh", wrapper_text)
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("scripts/traveler-collection-report.sh", installer_text)
+        self.assertIn("HERMES_WORKSPACE=$WORKSPACE $WRAPPER", installer_text)
         self.assertIn("bash -n \"$WRAPPER\"", installer_text)
         self.assertIn("bash -n \"$RUNNER\"", installer_text)
+
+    def test_traveler_runtime_manifests_declare_optional_paperwiki_kg(self) -> None:
+        jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("python3 scripts/paperwiki_kg.py scout-topics --base runtime/traveler-scout-topics.json", jobs)
+        self.assertIn("PAPERWIKI_KG_DB", jobs)
+        self.assertIn("optional PaperWiki KG DB path PAPERWIKI_KG_DB", jobs)
+        self.assertIn("missing or unhealthy KG falls back to committed scout topics", jobs)
+        self.assertIn("never bypasses evidence collection or Claw review", jobs)
+        self.assertIn("scripts/paperwiki_kg.py", agents)
+        self.assertIn("optionally use PaperWiki KG active interests", agents)
+        self.assertIn("PaperWiki KG as advisory only", agents)
+
+    def test_traveler_cron_installer_rejects_unsafe_workspace(self) -> None:
+        installer = ROOT / "skills" / "discord-openclaw-bridge" / "install-traveler-collection-report-cron.sh"
+        for workspace in ("~/.hermes/work space", "~/.hermes/work%space"):
+            with self.subTest(workspace=workspace):
+                result = subprocess.run(
+                    ["bash", str(installer)],
+                    cwd=ROOT,
+                    env={
+                        **os.environ,
+                        "REMOTE_HOST": "example.invalid",
+                        "KEY_FILE": "/tmp/nonexistent-jiphyeonjeon-key",
+                        "REMOTE_WORKSPACE": workspace,
+                    },
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(2, result.returncode)
+                self.assertIn("unsafe shell characters", result.stderr)
 
     def test_newsletter_cron_uses_committed_runners(self) -> None:
         skill_root = ROOT / "skills" / "discord-openclaw-bridge"
@@ -202,7 +306,13 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertTrue(stable_briefing_entrypoint.exists())
         self.assertIn("run-newsletter-archive-and-cardnews.sh", stable_newsletter_entrypoint.read_text(encoding="utf-8"))
         briefing_text = briefing_runner.read_text(encoding="utf-8")
-        self.assertIn("run-daily-jiphyeonjeon-briefing.sh", stable_briefing_entrypoint.read_text(encoding="utf-8"))
+        stable_newsletter_text = stable_newsletter_entrypoint.read_text(encoding="utf-8")
+        stable_briefing_text = stable_briefing_entrypoint.read_text(encoding="utf-8")
+        self.assertIn("run-daily-jiphyeonjeon-briefing.sh", stable_briefing_text)
+        self.assertIn("HERMES_WORKSPACE", stable_newsletter_text)
+        self.assertIn("HERMES_WORKSPACE", stable_briefing_text)
+        self.assertIn("HERMES_WORKSPACE", (newsletter_runner.read_text(encoding="utf-8")))
+        self.assertIn("HERMES_WORKSPACE", briefing_text)
         self.assertNotIn("weekly-report --force", briefing_text)
         self.assertIn("newsletter-archive-briefing.sh", briefing_text)
         self.assertIn("NEWSLETTER_DATE", briefing_text)
@@ -212,8 +322,12 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("wait_for_archive_runner", briefing_text)
         self.assertIn('grep -Fqx -- "작성일: \`$NEWSLETTER_DATE\`"', briefing_text)
         self.assertIn('RUN_DATE="${NEWSLETTER_DATE:-$(date +%F)}"', briefing_text)
-        self.assertIn("집현전 데일리 뉴스레터", briefing_text)
-        self.assertIn("오늘의 핵심 항목", briefing_text)
+        self.assertIn("집현전 데일리 뉴스레터 — 기술 블로그 브리핑", briefing_text)
+        self.assertIn("오늘의 핵심 항목 — 기술 블로그형 소개", briefing_text)
+        self.assertIn("기술 소개 → 왜 중요한가 → 실무/연구 포인트 → 원문", briefing_text)
+        self.assertIn("technical_intro", briefing_text)
+        self.assertIn("context_note", briefing_text)
+        self.assertIn("practice_note", briefing_text)
         self.assertIn("canonical_url", briefing_text)
         self.assertIn("normalized_title", briefing_text)
         self.assertIn("semantic_family", briefing_text)
@@ -265,6 +379,12 @@ printf '**집현전-Claw 기술 블로그 브리핑**\n작성일: `%s`\n' "$NEWS
             rendered = (workspace / "reports" / "daily-trends-latest.md").read_text(encoding="utf-8")
             lower = rendered.lower()
             self.assertIn("전체 5개 / 당일 4개 / 이전 날짜 제외 1개 / 주제 기준 핵심 묶음 2개", rendered)
+            self.assertIn("집현전 데일리 뉴스레터 — 기술 블로그 브리핑", rendered)
+            self.assertIn("## 읽는 법", rendered)
+            self.assertIn("기술 소개 → 왜 중요한가 → 실무/연구 포인트 → 원문", rendered)
+            self.assertIn("- 기술 소개:", rendered)
+            self.assertIn("- 실무/연구 포인트:", rendered)
+            self.assertIn("- 원문 링크:", rendered)
             self.assertIn("그래프 표현학습 최신 벤치마크 묶음", rendered)
             self.assertIn("관련 링크: 같은 제목으로 수집된 추가 공개 링크 2개", rendered)
             self.assertIn("RAG evaluation benchmark", rendered)

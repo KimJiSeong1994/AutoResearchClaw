@@ -727,6 +727,7 @@ def load_active_interests(con: sqlite3.Connection, only_slug: str | None = None)
         neighbor_node_ids -= anchor_node_ids
         interests.append({
             "slug": slug, "node_id": row["node_id"], "source_id": source_id, "weight": weight,
+            "frontmatter": fm,
             "seed_keywords": seed_keywords, "related_tags": related_tags,
             "anchor_node_ids": anchor_node_ids, "neighbor_node_ids": neighbor_node_ids,
             "kw_token_set": set(tokenize(" ".join(seed_keywords))), "tag_set": set(related_tags),
@@ -1208,28 +1209,50 @@ def normalize_topic_id(value: Any) -> str:
 def interest_to_topic_row(interest: dict[str, Any]) -> dict[str, Any]:
     """Map an active interest note to a Traveler scout-topic row.
 
-    Reverses the bootstrap weight mapping (high=0.8 / medium=0.6 / low=0.4) back
-    into a scout priority. Query/scope are synthesized from the curated seed
-    keywords and related tags; min_sources/max_candidates fall back to Traveler
-    defaults so curation stays minimal.
+    Export to Traveler is deliberately stricter than PaperWiki KG recommendation:
+    the note must opt in with public Traveler fields so private/local interest
+    labels or seed keywords are not sent to external search providers.
     """
-    slug = interest["slug"]
-    keywords = interest.get("seed_keywords") or []
-    query = " ".join(keywords).strip() or slug.replace("-", " ").replace("_", " ")
-    related = interest.get("related_tags") or []
+    slug = str(interest.get("traveler_topic_id") or "").strip()
+    query = str(interest.get("traveler_query") or "").strip()
+    related = as_list(interest.get("traveler_related_tags")) or []
     try:
         weight = float(interest.get("weight", 0.6))
     except (TypeError, ValueError):
         weight = 0.6
     priority = "high" if weight >= 0.7 else ("medium" if weight >= 0.5 else "low")
     scope_basis = ", ".join(related) if related else query
+    interest_digest = hashlib.sha256(str(interest["slug"]).encode("utf-8")).hexdigest()[:12]
     return {
         "id": slug,
         "query": query[:200],
         "scope": f"public research and engineering sources for {scope_basis}"[:300],
         "priority": priority,
         "source": "interest-note",
+        "paperwiki_interest_slug": f"paperwiki_interest_{interest_digest}",
     }
+
+
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _interest_exportable_to_traveler(interest: dict[str, Any]) -> bool:
+    fm = interest.get("frontmatter") if isinstance(interest.get("frontmatter"), dict) else {}
+    privacy = str(fm.get("privacy", "")).strip().lower()
+    export_scope = str(fm.get("export_scope", "")).strip().lower()
+    traveler_query = str(fm.get("traveler_query", "")).strip()
+    traveler_topic_id = normalize_topic_id(fm.get("traveler_topic_id"))
+    if not _truthy(fm.get("traveler_scout")):
+        return False
+    if privacy != "public" and export_scope != "traveler_public":
+        return False
+    if not traveler_query or not traveler_topic_id:
+        return False
+    interest["traveler_query"] = traveler_query
+    interest["traveler_topic_id"] = traveler_topic_id
+    interest["traveler_related_tags"] = as_list(fm.get("traveler_related_tags")) or as_list(fm.get("related_tags"))
+    return True
 
 
 def cmd_scout_topics(args: argparse.Namespace) -> int:
@@ -1251,12 +1274,29 @@ def cmd_scout_topics(args: argparse.Namespace) -> int:
             elif isinstance(payload, list):
                 base_rows = [r for r in payload if isinstance(r, dict)]
     interests: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
+    paperwiki_status = "absent"
     if db.exists():
         try:
-            con = connect(db)
-            init_schema(con)
-            interests = load_active_interests(con, only_slug=None)
+            vault = None
+            try:
+                hv = read_health(connect(db)).get("vault")
+                if hv:
+                    vault = Path(hv).expanduser().resolve()
+            except sqlite3.Error:
+                vault = None
+            code, status = validate_db(db, vault)
+            if code == 0:
+                paperwiki_status = "healthy"
+                con = connect(db)
+                init_schema(con)
+                interests = [interest for interest in load_active_interests(con, only_slug=None) if _interest_exportable_to_traveler(interest)]
+            else:
+                paperwiki_status = "unhealthy"
+                diagnostics.append({"code": "paperwiki_kg_unhealthy", "status": status})
         except sqlite3.Error:
+            paperwiki_status = "unhealthy"
+            diagnostics.append({"code": "paperwiki_kg_sqlite_error"})
             interests = []
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -1274,11 +1314,21 @@ def cmd_scout_topics(args: argparse.Namespace) -> int:
             continue
         if rid not in merged:
             order.append(rid)
-        merged[rid] = row  # curated interest note wins over a base topic of the same id
+        else:
+            # Preserve the committed/runtime topic id spelling (for example
+            # ``llm_agents``) so pending-topic de-dupe remains stable while
+            # PaperWiki interest notes still refresh query/scope/priority.
+            existing_id = str(merged[rid].get("id") or "").strip()
+            if existing_id:
+                row["id"] = existing_id
+        merged[rid] = row  # curated interest note wins over a base topic of the same normalized id
     out = {
         "topics": [merged[rid] for rid in order],
         "generated_from": {"base_topics": len(base_rows), "interests": len(interests)},
+        "paperwiki_status": paperwiki_status,
+        "paperwiki_interests_used": len(interests),
         "trust_policy": TRUST_POLICY_VERSION,
+        "diagnostics": diagnostics,
     }
     print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

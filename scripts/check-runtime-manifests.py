@@ -48,6 +48,9 @@ REQUIRED_JOB_IDS = {
     "jiphyeonjeon-traveler-source-discovery",
     "discord-card-news-publish",
     "jiphyeonjeon-blog-publish",
+    "skillopt-readiness-audit",
+    "skillopt-evaluation-harness",
+    "skillopt-patch-proposal",
 }
 
 REQUIRED_AGENT_IDS = {
@@ -67,6 +70,7 @@ REQUIRED_AGENT_IDS = {
     "jiphyeonjeon-claw",
     "card-news-publisher",
     "jiphyeonjeon-blog-publisher",
+    "skillopt-auditor",
 }
 
 

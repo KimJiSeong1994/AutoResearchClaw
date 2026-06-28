@@ -108,3 +108,117 @@ def test_main_bridge_allows_reporter_forum_and_threads(tmp_path: Path) -> None:
 
     assert bot.channel_allowed(direct)
     assert bot.channel_allowed(thread)
+
+
+def _set_minimal_bridge_env(monkeypatch, tmp_path):
+    for name in (
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_GUILD_ID",
+        "DISCORD_ALLOWED_CHANNEL_ID",
+        "DISCORD_MINER_CHANNEL_ID",
+        "OPENCLAW_BASE_URL",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_TOKEN_FILE",
+        "OPENCLAW_MODEL",
+        "OPENCLAW_TIMEOUT_SEC",
+        "HERMES_BASE_URL",
+        "HERMES_GATEWAY_TOKEN",
+        "HERMES_GATEWAY_TOKEN_FILE",
+        "HERMES_MODEL",
+        "HERMES_TIMEOUT_SEC",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord-token")
+    monkeypatch.setenv("DISCORD_GUILD_ID", "1")
+    monkeypatch.setenv("DISCORD_ALLOWED_CHANNEL_ID", "20")
+    monkeypatch.setenv("DISCORD_MINER_CHANNEL_ID", "30")
+    monkeypatch.setenv("DISCORD_BRIEFING_SOURCE", str(tmp_path / "briefing.md"))
+    monkeypatch.setenv("JIPHYEONJEON_MINER_INTAKE_PATH", str(tmp_path / "intake.jsonl"))
+    monkeypatch.setenv("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", str(tmp_path / "review.jsonl"))
+
+
+def test_load_config_prefers_hermes_gateway_aliases(monkeypatch, tmp_path):
+    from discord_openclaw_bridge.config import load_config
+
+    _set_minimal_bridge_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "openclaw-token")
+    monkeypatch.setenv("OPENCLAW_MODEL", "openclaw/clawbridge")
+    monkeypatch.setenv("OPENCLAW_TIMEOUT_SEC", "120")
+    monkeypatch.setenv("HERMES_BASE_URL", "http://127.0.0.1:28789/v1")
+    monkeypatch.setenv("HERMES_GATEWAY_TOKEN", "hermes-token")
+    monkeypatch.setenv("HERMES_MODEL", "nous/hermes-agent")
+    monkeypatch.setenv("HERMES_TIMEOUT_SEC", "45")
+
+    config = load_config()
+
+    assert config.openclaw_base_url == "http://127.0.0.1:28789/v1"
+    assert config.openclaw_gateway_token == "hermes-token"
+    assert config.openclaw_model == "nous/hermes-agent"
+    assert config.timeout_sec == 45
+
+
+def test_load_config_reads_hermes_token_file_before_openclaw_file(monkeypatch, tmp_path):
+    from discord_openclaw_bridge.config import load_config
+
+    _set_minimal_bridge_env(monkeypatch, tmp_path)
+    hermes_token = tmp_path / "hermes-token"
+    openclaw_token = tmp_path / "openclaw-token"
+    hermes_token.write_text("hermes-file-token\n", encoding="utf-8")
+    openclaw_token.write_text("openclaw-file-token\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_GATEWAY_TOKEN_FILE", str(hermes_token))
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN_FILE", str(openclaw_token))
+
+    config = load_config()
+
+    assert config.openclaw_gateway_token == "hermes-file-token"
+
+
+def test_load_config_keeps_openclaw_fallback_when_hermes_absent(monkeypatch, tmp_path):
+    from discord_openclaw_bridge.config import load_config
+
+    _set_minimal_bridge_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "openclaw-token")
+    monkeypatch.setenv("OPENCLAW_MODEL", "openclaw/clawbridge")
+    monkeypatch.setenv("OPENCLAW_TIMEOUT_SEC", "120")
+
+    config = load_config()
+
+    assert config.openclaw_base_url == "http://127.0.0.1:18789/v1"
+    assert config.openclaw_gateway_token == "openclaw-token"
+    assert config.openclaw_model == "openclaw/clawbridge"
+    assert config.timeout_sec == 120
+
+
+def test_load_config_ignores_blank_hermes_aliases(monkeypatch, tmp_path):
+    from discord_openclaw_bridge.config import load_config
+
+    _set_minimal_bridge_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("HERMES_BASE_URL", "   ")
+    monkeypatch.setenv("HERMES_GATEWAY_TOKEN", "   ")
+    monkeypatch.setenv("HERMES_MODEL", "   ")
+    monkeypatch.setenv("HERMES_TIMEOUT_SEC", "   ")
+    monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789/v1")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "openclaw-token")
+    monkeypatch.setenv("OPENCLAW_MODEL", "openclaw/clawbridge")
+    monkeypatch.setenv("OPENCLAW_TIMEOUT_SEC", "120")
+
+    config = load_config()
+
+    assert config.openclaw_base_url == "http://127.0.0.1:18789/v1"
+    assert config.openclaw_gateway_token == "openclaw-token"
+    assert config.openclaw_model == "openclaw/clawbridge"
+    assert config.timeout_sec == 120
+
+
+def test_load_config_rejects_non_loopback_hermes_base_url(monkeypatch, tmp_path):
+    import pytest
+    from discord_openclaw_bridge.config import ConfigError, load_config
+
+    _set_minimal_bridge_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("HERMES_BASE_URL", "https://hermes.example/v1")
+    monkeypatch.setenv("HERMES_GATEWAY_TOKEN", "hermes-token")
+
+    with pytest.raises(ConfigError, match="HERMES_BASE_URL must remain loopback"):
+        load_config()

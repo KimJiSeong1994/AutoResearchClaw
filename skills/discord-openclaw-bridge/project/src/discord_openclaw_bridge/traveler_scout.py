@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .miner import clean_text
-from .traveler import TravelerResearchRequest, default_research_queue_path, default_source_queue_path, record_research_request
+from .traveler import TravelerResearchRequest, default_research_queue_path, record_research_request
 
 DEFAULT_SCOUT_QUEUE_PATH = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
 DEFAULT_SCOUT_STATUS_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-scout-last-status.json"
@@ -63,6 +63,8 @@ class ScoutTopic:
     min_sources_to_review: int = 10
     max_candidates: int = 4
     priority: str = "medium"
+    source: str = "configured"
+    paperwiki_interest_slug: str = ""
 
 
 def default_scout_queue_path() -> Path:
@@ -106,6 +108,10 @@ def _topic_from_row(row: dict[str, Any]) -> ScoutTopic:
     priority = clean_text(row.get("priority") or "medium", limit=40).lower()
     if priority not in {"high", "medium", "low"}:
         priority = "medium"
+    source = clean_text(row.get("source") or row.get("topic_source") or "configured", limit=80).lower()
+    if source not in {"configured", "interest-note", "paperwiki-kg", "runtime"}:
+        source = "configured"
+    interest_slug = clean_text(row.get("paperwiki_interest_slug"), limit=120)
     return ScoutTopic(
         topic_id=topic_id,
         query=query,
@@ -113,6 +119,8 @@ def _topic_from_row(row: dict[str, Any]) -> ScoutTopic:
         min_sources_to_review=max(10, min(min_sources, 80)),
         max_candidates=max(1, min(max_candidates, 20)),
         priority=priority,
+        source=source,
+        paperwiki_interest_slug=interest_slug,
     )
 
 
@@ -165,17 +173,94 @@ def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _pending_scout_topic_ids(path: Path) -> set[str]:
+def _is_test_research_request(row: dict[str, Any]) -> bool:
+    topic = clean_text(row.get("topic"), limit=300).lower()
+    note = clean_text(row.get("requester_note"), limit=300).lower()
+    return (
+        topic.startswith("live test")
+        or "safe to ignore" in note
+        or "formatting live test" in note
+        or "live content test" in note
+        or "연결 검증" in topic
+        or "표시 검증" in topic
+    )
+
+
+def _stale_pending_hours() -> float:
+    raw = os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "24").strip()
+    try:
+        hours = float(raw)
+    except ValueError:
+        return 24.0
+    return max(0.0, min(hours, 24 * 14))
+
+
+def _created_at_utc(row: dict[str, Any]) -> datetime | None:
+    value = clean_text(row.get("created_at"), limit=80)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _pending_scout_topic_ids(path: Path, *, now: datetime | None = None) -> tuple[set[str], set[str]]:
     topic_ids: set[str] = set()
+    stale_topic_ids: set[str] = set()
+    stale_after_hours = _stale_pending_hours()
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     for row in _read_jsonl_rows(path):
+        if _is_test_research_request(row):
+            continue
         if row.get("status") != "pending_deep_research":
             continue
         if row.get("discovery_mode") != "autonomous_scout":
             continue
         topic_id = clean_text(row.get("scout_topic_id"), limit=120)
-        if topic_id:
-            topic_ids.add(topic_id)
-    return topic_ids
+        if not topic_id:
+            continue
+        created_at = _created_at_utc(row)
+        age_hours = ((now_utc - created_at).total_seconds() / 3600) if created_at else 0.0
+        if stale_after_hours and created_at and age_hours > stale_after_hours:
+            stale_topic_ids.add(topic_id)
+            continue
+        topic_ids.add(topic_id)
+    return topic_ids, stale_topic_ids
+
+
+def _topics_status_metadata() -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    mode = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_MODE"), limit=80)
+    path = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_SOURCE_PATH"), limit=500)
+    fallback_reason = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_FALLBACK_REASON"), limit=160)
+    trust_policy = clean_text(os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_TRUST_POLICY"), limit=120)
+    generated_from_raw = os.environ.get("JIPHYEONJEON_TRAVELER_TOPICS_GENERATED_FROM", "").strip()
+    if mode:
+        metadata["topics_source_mode"] = mode
+    if path:
+        metadata["topics_source_path"] = path
+    if fallback_reason:
+        metadata["topics_fallback_reason"] = fallback_reason
+    if trust_policy:
+        metadata["topics_trust_policy"] = trust_policy
+    if generated_from_raw:
+        try:
+            generated_from = json.loads(generated_from_raw)
+        except json.JSONDecodeError:
+            generated_from = {}
+        if isinstance(generated_from, dict):
+            safe_generated_from: dict[str, int] = {}
+            for key in ("base_topics", "interests"):
+                try:
+                    safe_generated_from[key] = int(generated_from.get(key, 0))
+                except (TypeError, ValueError):
+                    safe_generated_from[key] = 0
+            metadata["topics_generated_from"] = safe_generated_from
+    return metadata
 
 
 def create_scout_requests(
@@ -196,21 +281,29 @@ def create_scout_requests(
         selected = selected[: max(0, max_topics)]
     created: list[dict[str, Any]] = []
     skipped_existing: list[str] = []
-    pending_topic_ids = _pending_scout_topic_ids(research_queue) if skip_existing_pending else set()
+    stale_pending: list[str] = []
+    if skip_existing_pending:
+        pending_topic_ids, stale_pending_topic_ids = _pending_scout_topic_ids(research_queue)
+        stale_pending = sorted(stale_pending_topic_ids)
+    else:
+        pending_topic_ids = set()
     planned_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for topic in selected:
         if topic.topic_id in pending_topic_ids:
             skipped_existing.append(topic.topic_id)
             continue
+        source_note = f" source={topic.source}" if topic.source != "configured" else ""
         request = TravelerResearchRequest(
             topic=topic.query,
             scope=topic.scope,
             min_sources_to_review=topic.min_sources_to_review,
             max_candidates=topic.max_candidates,
-            requester_note=f"autonomous scout topic={topic.topic_id} priority={topic.priority}",
+            requester_note=f"autonomous scout topic={topic.topic_id} priority={topic.priority}{source_note}",
             discovery_mode="autonomous_scout",
             scout_topic_id=topic.topic_id,
             scout_priority=topic.priority,
+            topic_source=topic.source,
+            paperwiki_interest_slug=topic.paperwiki_interest_slug,
         )
         if dry_run:
             record = {
@@ -223,6 +316,8 @@ def create_scout_requests(
                 "discovery_mode": request.discovery_mode,
                 "scout_topic_id": request.scout_topic_id,
                 "scout_priority": request.scout_priority,
+                "topic_source": topic.source,
+                "paperwiki_interest_slug": topic.paperwiki_interest_slug,
             }
         else:
             record = record_research_request(request, queue_path=research_queue, candidate_queue_path=scout_queue)
@@ -238,9 +333,14 @@ def create_scout_requests(
         "research_queue_path": str(research_queue),
         "scout_queue_path": str(scout_queue),
         "topics": [topic.topic_id for topic in selected],
+        "topic_sources": {topic.topic_id: topic.source for topic in selected},
+        "paperwiki_interest_slugs": {topic.topic_id: topic.paperwiki_interest_slug for topic in selected if topic.paperwiki_interest_slug},
         "skipped_existing_topics": skipped_existing,
+        "stale_pending_topics": stale_pending,
+        "stale_pending_hours": _stale_pending_hours(),
         "request_ids": [str(record.get("request_id")) for record in created if record.get("request_id")],
     }
+    status.update(_topics_status_metadata())
     if status_path is not None and not dry_run:
         _write_status(status_path.expanduser(), status)
     return {"status": status, "requests": created}

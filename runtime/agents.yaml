@@ -4,6 +4,7 @@ metadata:
   name: autoresearchclaw-runtime-agents
   source_scope:
     - README.md
+    - .codex/skills/*/SKILL.md
     - workspace/PROMPT_REGISTRY.json
     - skills/*/SKILL.md
     - skills/*/README.md
@@ -52,6 +53,53 @@ agents:
     boundaries:
       - keep gateway on loopback unless explicitly changed
       - do not delete sessions, auth files, or agent state without approval
+
+  - id: hermes-ec2-ops
+    name: Hermes Agent EC2 canary operations agent
+    kind: ops-skill
+    source_refs:
+      - docs/plans/prd-openclaw-to-hermes-migration.md
+      - docs/plans/test-spec-openclaw-to-hermes-migration.md
+      - scripts/check-hermes-ops.sh
+      - scripts/check-hermes-bridge-smoke.sh
+      - scripts/deploy-hermes-workspace.sh
+      - scripts/install-hermes-bridge-canary-service.sh
+      - scripts/install-hermes-auxiliary-bot-services.sh
+    owns_jobs:
+      - hermes-workspace-deploy
+      - hermes-ops-readiness-check
+      - hermes-bridge-smoke-check
+      - hermes-bridge-canary-service-install
+      - hermes-auxiliary-bot-service-install
+    runtime:
+      profile: hermes-canary
+      workspace: ~/.hermes/workspace
+      gateway_endpoint: http://127.0.0.1:28789/v1
+      token_file: ~/.hermes_gateway_token
+      service: hermes-gateway.service
+      bridge_service: discord-hermes-bridge-canary.service
+      bridge_enable_guard: ~/.hermes/ENABLE_DISCORD_BRIDGE_CANARY
+      auxiliary_services:
+        - discord-hermes-jiphyeonjeon-miner.service
+        - discord-hermes-jiphyeonjeon-traveler.service
+        - discord-hermes-jiphyeonjeon-reporter.service
+      log_glob: ~/.hermes/logs/*.log
+      bridge_env: ~/.hermes/workspace/skills/discord-openclaw-bridge/project/.env
+    responsibilities:
+      - inspect Hermes canary gateway status without mutating OpenClaw production paths
+      - deploy side-by-side workspace files into the Hermes canary workspace
+      - verify loopback-only /v1 models health when a Hermes token file exists
+      - verify Discord bridge canary chat calls through Hermes before production cutover
+      - install the Hermes canary bridge service as disabled and guard-file gated
+      - install and optionally cut over Hermes auxiliary bot services with rollback checks
+      - report canary service, listener, bridge env, auxiliary services, and log signal without printing secrets
+    boundaries:
+      - keep Hermes canary gateway on loopback unless explicitly changed
+      - do not restart production services or mutate OpenClaw state
+      - do not print Hermes or OpenClaw token values
+      - do not start the Hermes Discord bridge while the OpenClaw bridge is active unless explicitly cutover-approved
+      - do not cut over auxiliary bots unless HERMES_AUX_CUTOVER=1 is explicitly set for a migration window
+      - canary deploy remains separate from OpenClaw workspace deploy
 
   - id: researchclaw
     name: ResearchClaw via OpenClaw
@@ -166,6 +214,9 @@ agents:
     source_refs:
       - skills/discord-openclaw-bridge/README.md#집현전-여행자-source-discovery-path
       - workspace/PROMPT_REGISTRY.json
+      - scripts/paperwiki_kg.py
+      - runtime/traveler-scout-topics.json
+      - docs/ops/traveler-new-discovery-blocked-analysis-2026-06-26.md
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
       - jiphyeonjeon-traveler-daily-collection-report
@@ -184,11 +235,13 @@ agents:
       - score sources for reliability, technical relevance, update cadence, and collection feasibility
       - propose source URLs and newsletter/article feeds for Miner seed expansion or Claw review
       - record evidence-backed source recommendations without deciding newsletter inclusion
+      - optionally use PaperWiki KG active interests to prioritize autonomous scout topics
     boundaries:
       - does not scrape private, paywalled, login-only, or terms-hostile sources
       - does not approve newsletter inclusion or mutate approved manual links
       - stores source-level metadata and public evidence only, never raw private content
       - hands collection candidates to 집현전-광부 and review decisions to 집현전-클로
+      - treats PaperWiki KG as advisory only and never bypasses public-source evidence collection or Claw review
 
   - id: jiphyeonjeon-guard
     name: 집현전-경비원 operations issue guard
@@ -218,6 +271,37 @@ agents:
       - does not reorder queues, append Claw content decisions, rewrite approved exports, or trigger newsletter/card-news publishing
       - guard issue queue writes must be append-only and separate from Jiphyeonjeon-Claw content review
       - Discord posting remains observability only and must not hide collection failures
+
+  - id: skillopt-auditor
+    name: SkillOpt readiness auditor
+    kind: control-plane-audit-agent
+    source_refs:
+      - scripts/skillopt_audit.py
+      - scripts/skillopt_eval.py
+      - scripts/skillopt_propose.py
+      - tests/fixtures/skillopt
+      - .codex/skills/academic-technical-filter/SKILL.md
+      - .codex/skills/blog-research-post/SKILL.md
+      - .codex/skills/jiphyeonjeon-reporter-article-post/SKILL.md
+      - docs/plans/skillopt-agent-skill-strengthening.md
+    owns_jobs:
+      - skillopt-readiness-audit
+      - skillopt-evaluation-harness
+      - skillopt-patch-proposal
+    responsibilities:
+      - inventory Codex and runtime skill surfaces
+      - map skill surfaces to runtime agents and jobs
+      - produce SkillOpt readiness gap matrices and sanitized PaperWiki evidence maps
+      - run held-out skill evaluation fixtures before accepting bounded skill edits
+      - generate bounded SkillOpt patch proposals from audit and evaluation evidence
+      - keep skill improvement proposals separate from automatic skill mutation
+    boundaries:
+      - read-only audit of skill and runtime control-plane files
+      - does not edit skills, PaperWiki vault notes, Discord state, EC2, or Hermes workspaces
+      - emits only wiki-relative PaperWiki paths and sanitized metadata
+      - never auto-accepts SkillOpt edits without reviewer and critic gates
+      - patch proposal generation is not skill mutation and live accepted-lineage writes remain Phase 4-only
+      - never prints tokens, webhook URLs, private note bodies, or absolute local vault paths
 
   - id: jiphyeonjeon-audit-team
     name: 집현전-감사팀 integrated operations auditor

@@ -4,6 +4,7 @@ metadata:
   name: autoresearchclaw-runtime-jobs
   source_scope:
     - README.md
+    - .codex/skills/*/SKILL.md
     - skills/*/SKILL.md
     - skills/*/README.md
   phase: 1-control-plane-manifest
@@ -76,6 +77,103 @@ jobs:
     safety:
       side_effects: read-only remote inspection
       secrets: never print gateway token values
+
+  - id: hermes-workspace-deploy
+    name: Deploy Hermes canary workspace control files
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/deploy-hermes-workspace.sh
+    triggers:
+      - manual canary only
+    depends_on:
+      - prompt-governance-validate
+    target:
+      host: openclaw-ec2
+      path: ~/.hermes/workspace
+    outputs:
+      - Hermes canary workspace control files
+      - prompt registry
+    safety:
+      side_effects: remote canary workspace file sync only
+      secrets: do not print Hermes or OpenClaw gateway tokens
+
+  - id: hermes-ops-readiness-check
+    name: Check remote Hermes canary ops readiness
+    type: health-check
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/check-hermes-ops.sh
+    triggers:
+      - manual canary only
+      - after Hermes canary deploy
+    checks:
+      - Hermes canary service state
+      - loopback listener
+      - /v1/models probe
+      - Discord bridge Hermes env aliases
+      - recent Hermes warning/error log signal
+    safety:
+      side_effects: read-only remote canary inspection
+      secrets: never print Hermes or OpenClaw gateway token values
+
+  - id: hermes-bridge-smoke-check
+    name: Check Discord bridge against Hermes canary chat API
+    type: health-check
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/check-hermes-bridge-smoke.sh
+    triggers:
+      - manual canary only
+      - after Hermes canary readiness passes
+      - before production cutover
+    depends_on:
+      - hermes-ops-readiness-check
+    checks:
+      - Discord bridge imports from the Hermes canary workspace
+      - Hermes env aliases select the canary loopback gateway
+      - canary OpenAI-compatible chat smoke returns the expected sentinel
+    safety:
+      side_effects: remote canary OpenAI-compatible chat smoke only
+      secrets: never print Hermes, OpenClaw, Discord, or provider token values
+
+  - id: hermes-bridge-canary-service-install
+    name: Install guarded Hermes canary Discord bridge service
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/install-hermes-bridge-canary-service.sh
+    triggers:
+      - manual canary only
+      - after Hermes bridge smoke passes
+      - before production cutover
+    depends_on:
+      - hermes-bridge-smoke-check
+    outputs:
+      - guarded disabled service unit
+      - Hermes canary bridge .env with loopback Hermes aliases
+    safety:
+      side_effects: installs a disabled user service unit and canary .env only
+      secrets: copies existing remote Discord/provider tokens on-host but never prints token values
+
+  - id: hermes-auxiliary-bot-service-install
+    name: Install or cut over Hermes auxiliary Discord bot services
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/install-hermes-auxiliary-bot-services.sh
+    triggers:
+      - manual canary only
+      - after Hermes bridge cutover is stable
+      - before OpenClaw gateway decommission
+    depends_on:
+      - hermes-bridge-canary-service-install
+    outputs:
+      - guarded auxiliary bot service units
+      - optional reversible cutover when HERMES_AUX_CUTOVER=1
+    safety:
+      side_effects: installs Hermes auxiliary user units by default; stops old and starts new only when HERMES_AUX_CUTOVER=1
+      secrets: copies existing remote Discord/provider env on-host but never prints token values
 
   - id: openclaw-dashboard-tunnel
     name: Open dashboard over SSH tunnel
@@ -320,6 +418,7 @@ jobs:
       - uv run discord-openclaw-traveler-scout --dry-run
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-traveler-discover-sources --dry-run
+      - python3 scripts/paperwiki_kg.py scout-topics --base runtime/traveler-scout-topics.json
       - web research over public metadata/source/newsletter/article endpoints
       - update JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH with requested or autonomous scout deep-research requests
       - update JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH and JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH with evidence-backed candidate source records
@@ -332,6 +431,10 @@ jobs:
       - public web search results
       - existing Miner seed status and source yield summaries
       - 집현전-Claw technical relevance criteria
+      - optional PaperWiki KG active-interest scout topics via PAPERWIKI_KG_DB
+      - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
+      - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
+      - committed fallback runtime/traveler-scout-topics.json
     outputs:
       - deep-research request queue requiring many-source comparison
       - source candidate queue with reliability, cadence, feasibility, rejected-source evidence, and next-action fields
@@ -339,6 +442,7 @@ jobs:
     safety:
       side_effects: source recommendations only; no automatic scraping, approval, or Discord posting
       secrets: public source metadata only; do not store private newsletters, login content, or tokens
+      paperwiki_boundary: PaperWiki KG is advisory, opt-in, and optional; only public traveler_scout/export_scope interests can influence scout topics; missing or unhealthy KG falls back to committed scout topics and never bypasses evidence collection or Claw review
 
   - id: jiphyeonjeon-traveler-daily-collection-report
     name: Daily Traveler additional-collection report
@@ -347,6 +451,7 @@ jobs:
     command_refs:
       - bash skills/discord-openclaw-bridge/install-traveler-collection-report-cron.sh
       - bash skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh
+      - python3 scripts/paperwiki_kg.py scout-topics --base runtime/traveler-scout-topics.json
       - uv run discord-openclaw-traveler-scout
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-post-traveler-collection-report
@@ -360,15 +465,20 @@ jobs:
       - JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
       - JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH
       - optional runtime/traveler-scout-topics.json or JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH
+      - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
+      - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
+      - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
       - current Miner seed/intake/review/approved surfaces
     outputs:
       - Discord Traveler forum collection-gap report
       - traveler-scout-last-status.json
       - traveler-source-discovery-last-status.json
       - traveler-collection-report-last-status.json
+      - optional traveler-scout-topics.paperwiki.json generated topic artifact
     safety:
       side_effects: public Discord report posting; candidate discovery writes pending review records only
       secrets: Discord bot token remains in remote .env only; report/status must not contain tokens
+      paperwiki_boundary: cron must not fail solely because PaperWiki KG is disabled, absent, or unhealthy; KG influence remains explicit opt-in/advisory and candidates still require evidence and review
 
   - id: discord-miner-seeds-expand
     name: Expand configured Miner seed sources
@@ -420,6 +530,56 @@ jobs:
     safety:
       side_effects: read-only digest, optional append-only Guard issue queue write, and optional Discord report posting
       secrets: never print Discord bot token values
+
+  - id: skillopt-readiness-audit
+    name: SkillOpt readiness audit
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_audit.py --codex-skills .codex/skills --runtime-skills skills --agents runtime/agents.yaml --jobs runtime/jobs.yaml --out .omx/reports/skillopt/skillopt-audit-latest.json --markdown
+    triggers:
+      - before skill optimization changes
+      - manual
+    outputs:
+      - .omx/reports/skillopt/skillopt-audit-latest.json
+      - .omx/reports/skillopt/skillopt-audit-latest.md
+      - skill inventory, gap matrix, runtime mapping, and sanitized PaperWiki evidence map
+    safety: local read-only audit; no skill mutation, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output
+
+  - id: skillopt-evaluation-harness
+    name: SkillOpt evaluation harness
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_eval.py --fixtures tests/fixtures/skillopt --out .omx/reports/skillopt/skillopt-eval-latest.json
+    triggers:
+      - before accepting SkillOpt bounded skill edits
+      - after skill optimization proposals are generated
+      - manual
+    outputs:
+      - .omx/reports/skillopt/skillopt-eval-latest.json
+      - held-out verdicts for academic-technical-filter, blog-research-post, and jiphyeonjeon-reporter-article-post
+      - reviewer-gated acceptance evidence; no automatic skill mutation
+    safety: local deterministic evaluation only; no skill mutation, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, no automatic accept without reviewer and critic gates
+
+  - id: skillopt-patch-proposal
+    name: SkillOpt patch proposal queue
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_propose.py --audit .omx/reports/skillopt/skillopt-audit-latest.json --eval .omx/reports/skillopt/skillopt-eval-latest.json --out-dir .omx/reports/skillopt/patch-candidates
+      - python3 scripts/skillopt_propose.py reject .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --reason <reason> --buffer .omx/reports/skillopt/rejected-edits.jsonl
+      - python3 scripts/skillopt_propose.py validate-lineage <accepted-lineage-fixture-or-temp-jsonl>
+    triggers:
+      - after skillopt readiness audit and evaluation harness pass
+      - before controlled apply of SkillOpt bounded edits
+      - manual
+    outputs:
+      - .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json
+      - .omx/reports/skillopt/rejected-edits.jsonl
+      - schema validation for Phase 4 accepted-lineage records
+      - reviewer-gated and critic-gated proposal evidence; no automatic skill mutation
+    safety: local deterministic proposal generation only; no skill mutation, no automatic accept, reviewer and critic gates required, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, live accepted-lineage writes are Phase 4-only
 
   - id: jiphyeonjeon-audit-team-digest
     name: Jiphyeonjeon Audit Team integrated operations digest
