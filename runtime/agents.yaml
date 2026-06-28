@@ -4,6 +4,7 @@ metadata:
   name: autoresearchclaw-runtime-agents
   source_scope:
     - README.md
+    - .codex/skills/*/SKILL.md
     - workspace/PROMPT_REGISTRY.json
     - skills/*/SKILL.md
     - skills/*/README.md
@@ -270,6 +271,37 @@ agents:
       - does not reorder queues, append Claw content decisions, rewrite approved exports, or trigger newsletter/card-news publishing
       - guard issue queue writes must be append-only and separate from Jiphyeonjeon-Claw content review
       - Discord posting remains observability only and must not hide collection failures
+
+  - id: skillopt-auditor
+    name: SkillOpt readiness auditor
+    kind: control-plane-audit-agent
+    source_refs:
+      - scripts/skillopt_audit.py
+      - scripts/skillopt_eval.py
+      - scripts/skillopt_propose.py
+      - tests/fixtures/skillopt
+      - .codex/skills/academic-technical-filter/SKILL.md
+      - .codex/skills/blog-research-post/SKILL.md
+      - .codex/skills/jiphyeonjeon-reporter-article-post/SKILL.md
+      - .omx/plans/ralplan-handoff-skillopt-agent-skill-strengthening.md
+    owns_jobs:
+      - skillopt-readiness-audit
+      - skillopt-evaluation-harness
+      - skillopt-patch-proposal
+    responsibilities:
+      - inventory Codex and runtime skill surfaces
+      - map skill surfaces to runtime agents and jobs
+      - produce SkillOpt readiness gap matrices and sanitized PaperWiki evidence maps
+      - run held-out skill evaluation fixtures before accepting bounded skill edits
+      - generate bounded SkillOpt patch proposals from audit and evaluation evidence
+      - keep skill improvement proposals separate from automatic skill mutation
+    boundaries:
+      - read-only audit of skill and runtime control-plane files
+      - does not edit skills, PaperWiki vault notes, Discord state, EC2, or Hermes workspaces
+      - emits only wiki-relative PaperWiki paths and sanitized metadata
+      - never auto-accepts SkillOpt edits without reviewer and critic gates
+      - patch proposal generation is not skill mutation and live accepted-lineage writes remain Phase 4-only
+      - never prints tokens, webhook URLs, private note bodies, or absolute local vault paths
 
   - id: jiphyeonjeon-audit-team
     name: 집현전-감사팀 integrated operations auditor

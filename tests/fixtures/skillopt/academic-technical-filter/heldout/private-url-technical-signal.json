@@ -1,0 +1,13 @@
+{
+  "id": "private-url-technical-signal",
+  "input": {
+    "title": "Interesting note",
+    "url": "https://example.com/post private email body says arxiv RAG benchmark",
+    "summary": "Public summary is too weak."
+  },
+  "expected": {
+    "verdict": "needs_review",
+    "bucket": "out_of_scope",
+    "forbid_private_evidence": true
+  }
+}

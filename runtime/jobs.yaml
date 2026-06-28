@@ -4,6 +4,7 @@ metadata:
   name: autoresearchclaw-runtime-jobs
   source_scope:
     - README.md
+    - .codex/skills/*/SKILL.md
     - skills/*/SKILL.md
     - skills/*/README.md
   phase: 1-control-plane-manifest
@@ -529,6 +530,56 @@ jobs:
     safety:
       side_effects: read-only digest, optional append-only Guard issue queue write, and optional Discord report posting
       secrets: never print Discord bot token values
+
+  - id: skillopt-readiness-audit
+    name: SkillOpt readiness audit
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_audit.py --codex-skills .codex/skills --runtime-skills skills --agents runtime/agents.yaml --jobs runtime/jobs.yaml --out .omx/reports/skillopt/skillopt-audit-latest.json --markdown
+    triggers:
+      - before skill optimization changes
+      - manual
+    outputs:
+      - .omx/reports/skillopt/skillopt-audit-latest.json
+      - .omx/reports/skillopt/skillopt-audit-latest.md
+      - skill inventory, gap matrix, runtime mapping, and sanitized PaperWiki evidence map
+    safety: local read-only audit; no skill mutation, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output
+
+  - id: skillopt-evaluation-harness
+    name: SkillOpt evaluation harness
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_eval.py --fixtures tests/fixtures/skillopt --out .omx/reports/skillopt/skillopt-eval-latest.json
+    triggers:
+      - before accepting SkillOpt bounded skill edits
+      - after skill optimization proposals are generated
+      - manual
+    outputs:
+      - .omx/reports/skillopt/skillopt-eval-latest.json
+      - held-out verdicts for academic-technical-filter, blog-research-post, and jiphyeonjeon-reporter-article-post
+      - reviewer-gated acceptance evidence; no automatic skill mutation
+    safety: local deterministic evaluation only; no skill mutation, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, no automatic accept without reviewer and critic gates
+
+  - id: skillopt-patch-proposal
+    name: SkillOpt patch proposal queue
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_propose.py --audit .omx/reports/skillopt/skillopt-audit-latest.json --eval .omx/reports/skillopt/skillopt-eval-latest.json --out-dir .omx/reports/skillopt/patch-candidates
+      - python3 scripts/skillopt_propose.py reject .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --reason <reason> --buffer .omx/reports/skillopt/rejected-edits.jsonl
+      - python3 scripts/skillopt_propose.py validate-lineage <accepted-lineage-fixture-or-temp-jsonl>
+    triggers:
+      - after skillopt readiness audit and evaluation harness pass
+      - before controlled apply of SkillOpt bounded edits
+      - manual
+    outputs:
+      - .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json
+      - .omx/reports/skillopt/rejected-edits.jsonl
+      - schema validation for Phase 4 accepted-lineage records
+      - reviewer-gated and critic-gated proposal evidence; no automatic skill mutation
+    safety: local deterministic proposal generation only; no skill mutation, no automatic accept, reviewer and critic gates required, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, live accepted-lineage writes are Phase 4-only
 
   - id: jiphyeonjeon-audit-team-digest
     name: Jiphyeonjeon Audit Team integrated operations digest

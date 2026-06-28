@@ -1,0 +1,13 @@
+{
+  "id": "private-only-technical-signal",
+  "input": {
+    "title": "Interesting AI note",
+    "url": "https://example.com/post",
+    "summary": "Public summary is too weak. Private email body says this is an arxiv RAG benchmark and should not influence classification."
+  },
+  "expected": {
+    "verdict": "needs_review",
+    "bucket": "out_of_scope",
+    "forbid_private_evidence": true
+  }
+}

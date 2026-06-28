@@ -64,6 +64,66 @@ The validators enforce the Jiphyeonjeon-Claw prompt inventory, lifecycle,
 reporting status schema, runtime job/agent manifest cross-references,
 source-file references, and secret-value guardrails.
 
+## Run SkillOpt readiness audit
+
+```bash
+python3 scripts/skillopt_audit.py \
+  --codex-skills .codex/skills \
+  --runtime-skills skills \
+  --agents runtime/agents.yaml \
+  --jobs runtime/jobs.yaml \
+  --out .omx/reports/skillopt/skillopt-audit-latest.json \
+  --markdown
+```
+
+The audit is a local read-only control-plane check for SkillOpt-style skill
+improvement. It inventories `.codex/skills/*/SKILL.md`, `skills/*/SKILL.md`,
+and `skills/*/README.md`, maps them to runtime agents/jobs, and emits stable
+`gap_code` findings plus a Markdown gap matrix. PaperWiki evidence imports must
+use wiki-relative paths only; generated reports must not contain absolute local
+vault paths, note bodies, tokens, or webhook URLs.
+
+## Run SkillOpt evaluation harness
+
+```bash
+python3 scripts/skillopt_eval.py \
+  --fixtures tests/fixtures/skillopt \
+  --out .omx/reports/skillopt/skillopt-eval-latest.json
+```
+
+The evaluation harness is the Phase 2 gate before SkillOpt bounded edits can be
+accepted. It runs deterministic held-out fixtures for `academic-technical-filter`,
+`blog-research-post`, and `jiphyeonjeon-reporter-article-post`, preserves a JSON
+acceptance record, and keeps automatic skill mutation disabled until reviewer and
+critic gates approve a proposed patch.
+
+## Generate SkillOpt patch proposals
+
+```bash
+python3 scripts/skillopt_propose.py \
+  --audit .omx/reports/skillopt/skillopt-audit-latest.json \
+  --eval .omx/reports/skillopt/skillopt-eval-latest.json \
+  --out-dir .omx/reports/skillopt/patch-candidates \
+  --as-of 2026-06-27T00:00:00+09:00
+```
+
+Reject a candidate without editing any skill file:
+
+```bash
+python3 scripts/skillopt_propose.py reject \
+  .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json \
+  --reason "weak evidence" \
+  --buffer .omx/reports/skillopt/rejected-edits.jsonl
+```
+
+Phase 3 proposal generation is deterministic and read-only for skill/runtime
+surfaces. Use `--as-of` for reproducible timestamps; when omitted, proposal
+timestamps are inherited from the audit/eval input report where available. The
+script creates reviewer-gated JSON candidates, suppresses repeated rejected
+fingerprints, and validates accepted-lineage schemas for Phase 4. Actual skill
+mutation and live `accepted-lineage.jsonl` writes remain a separate controlled
+apply step after reviewer and critic gates.
+
 ## Deploy Discord OpenClaw bridge
 
 ```bash

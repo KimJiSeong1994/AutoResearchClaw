@@ -1,0 +1,13 @@
+{
+  "id": "reject-career-notice",
+  "input": {
+    "title": "Senior AI PM hiring update",
+    "url": "https://example.com/jobs/senior-ai-pm",
+    "summary": "Career ladder and recruiting notice for a new AI team."
+  },
+  "expected": {
+    "verdict": "reject",
+    "bucket": "out_of_scope",
+    "forbid_private_evidence": true
+  }
+}

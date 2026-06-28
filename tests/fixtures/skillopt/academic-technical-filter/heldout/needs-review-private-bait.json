@@ -1,0 +1,13 @@
+{
+  "id": "needs-review-private-bait",
+  "input": {
+    "title": "Interesting AI note",
+    "url": "https://example.com/post",
+    "summary": "Public summary is too weak. Private email body says sk-abcdefghijklmnopqrstuvwxyz and should not be evidence."
+  },
+  "expected": {
+    "verdict": "needs_review",
+    "bucket": "out_of_scope",
+    "forbid_private_evidence": true
+  }
+}
