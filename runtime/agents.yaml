@@ -280,6 +280,7 @@ agents:
       - scripts/skillopt_eval.py
       - scripts/skillopt_propose.py
       - scripts/skillopt_apply.py
+      - scripts/skillopt_reward.py
       - tests/fixtures/skillopt
       - .codex/skills/academic-technical-filter/SKILL.md
       - .codex/skills/blog-research-post/SKILL.md
@@ -289,6 +290,7 @@ agents:
       - skillopt-readiness-audit
       - skillopt-evaluation-harness
       - skillopt-patch-proposal
+      - skillopt-reward-evaluator
       - skillopt-controlled-apply
     responsibilities:
       - inventory Codex and runtime skill surfaces
@@ -296,10 +298,12 @@ agents:
       - produce SkillOpt readiness gap matrices and sanitized PaperWiki evidence maps
       - run held-out skill evaluation fixtures before accepting bounded skill edits
       - generate bounded SkillOpt patch proposals from audit and evaluation evidence
+      - emit advisory score-bearing reward reports for eligible proposal ranking and diagnostics
       - run controlled one-proposal select and dry-run/apply handoffs after explicit approvals
       - keep skill improvement proposals separate from automatic skill mutation
     boundaries:
       - read-only audit of skill and runtime control-plane files except the explicitly gated skillopt-controlled-apply job
+      - reward scoring is advisory only and never auto-accepts, applies, or mutates skills
       - skill edits are limited to one selected proposal after matching dry-run evidence plus reviewer and critic APPROVE gates
       - does not edit PaperWiki vault notes, Discord state, EC2, Hermes workspaces, or runtime control-plane files during controlled apply
       - emits only wiki-relative PaperWiki paths and sanitized metadata
