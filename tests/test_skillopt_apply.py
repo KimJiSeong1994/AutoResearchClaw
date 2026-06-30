@@ -147,6 +147,149 @@ def test_select_records_deterministic_rationale_and_excludes_unsafe() -> None:
     assert "rejection" in reasons
 
 
+
+
+def test_select_uses_reward_only_after_hard_exclusions_and_falls_back() -> None:
+    root = fixture_root()
+    first = proposal(root, "missing_input_contract", patch="## Input contract\n\n- First safe candidate.\n")
+    second = proposal(root, "missing_input_contract", patch="## Input contract\n\n- Second safe candidate.\n")
+    runtime = proposal(root, "runtime_unmapped")
+    first_path = write_proposal(root, first, "1-first.json")
+    second_path = write_proposal(root, second, "2-second.json")
+    write_proposal(root, runtime, "3-runtime.json")
+    reward = {
+        "schema_version": "skillopt-reward.v1",
+        "records": [
+            {
+                "report_type": "proposal_reward",
+                "proposal_id": first["proposal_id"],
+                "fingerprint": first["fingerprint"],
+                "skill_path": first["skill_path"],
+                "reward_rank_eligible": True,
+                "score_bp": 1000,
+                "confidence_bp": 9000,
+                "coverage_bp": 9000,
+                "run_id": "reward-low",
+                "warnings": [],
+            },
+            {
+                "report_type": "proposal_reward",
+                "proposal_id": second["proposal_id"],
+                "fingerprint": second["fingerprint"],
+                "skill_path": second["skill_path"],
+                "reward_rank_eligible": True,
+                "score_bp": 8000,
+                "confidence_bp": 9000,
+                "coverage_bp": 9000,
+                "run_id": "reward-high",
+                "warnings": [],
+            },
+            {
+                "report_type": "proposal_reward",
+                "proposal_id": runtime["proposal_id"],
+                "fingerprint": runtime["fingerprint"],
+                "skill_path": runtime["skill_path"],
+                "reward_rank_eligible": True,
+                "score_bp": 10000,
+                "confidence_bp": 10000,
+                "coverage_bp": 10000,
+                "run_id": "reward-unsafe",
+                "warnings": [],
+            },
+        ],
+    }
+    reward_path = root / ".omx/reports/skillopt/reward.json"
+    write(reward_path, json.dumps(reward))
+    out = root / ".omx/reports/skillopt/apply-runs/selection-reward.json"
+    proc = run(
+        root,
+        "select",
+        "--candidate-dir",
+        str(root / ".omx/reports/skillopt/patch-candidates"),
+        "--reward-report",
+        str(reward_path),
+        "--out",
+        str(out),
+        "--root",
+        str(root),
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["chosen"]["proposal_id"] == second["proposal_id"]
+    assert report["chosen"]["rank_basis"] == "reward"
+    assert report["chosen"]["reward"]["score_bp"] == 8000
+    rejected_ids = {item.get("proposal_id") for item in report["rejected"]}
+    assert runtime["proposal_id"] in rejected_ids
+
+    # Low confidence must ignore reward and fall back to legacy deterministic rank.
+    reward["records"][1]["confidence_bp"] = 1000
+    write(reward_path, json.dumps(reward))
+    out2 = root / ".omx/reports/skillopt/apply-runs/selection-fallback.json"
+    proc = run(
+        root,
+        "select",
+        "--candidate-dir",
+        str(root / ".omx/reports/skillopt/patch-candidates"),
+        "--reward-report",
+        str(reward_path),
+        "--out",
+        str(out2),
+        "--root",
+        str(root),
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    fallback = json.loads(out2.read_text(encoding="utf-8"))
+    assert fallback["chosen"]["proposal_id"] == first["proposal_id"]
+    assert fallback["chosen"]["rank_basis"] == "reward"
+    assert any(item["proposal_id"] == second["proposal_id"] and item["rank_basis"] == "legacy_rank" for item in fallback["eligible"])
+
+
+
+def test_select_rejects_reward_report_private_signals_before_copying_warnings() -> None:
+    root = fixture_root()
+    payload = proposal(root)
+    write_proposal(root, payload)
+    reward = {
+        "schema_version": "skillopt-reward.v1",
+        "records": [
+            {
+                "report_type": "proposal_reward",
+                "proposal_id": payload["proposal_id"],
+                "fingerprint": payload["fingerprint"],
+                "skill_path": payload["skill_path"],
+                "reward_rank_eligible": True,
+                "score_bp": 10000,
+                "confidence_bp": 10000,
+                "coverage_bp": 10000,
+                "run_id": "reward-leaky",
+                "warnings": [
+                    {
+                        "severity": "info",
+                        "message": "do not copy https://hooks.slack.com/services/T000/B000/SECRET or raw email body or raw private body",
+                    }
+                ],
+            }
+        ],
+    }
+    reward_path = root / ".omx/reports/skillopt/reward-leaky.json"
+    write(reward_path, json.dumps(reward))
+    out = root / ".omx/reports/skillopt/apply-runs/selection-leaky.json"
+    proc = run(
+        root,
+        "select",
+        "--candidate-dir",
+        str(root / ".omx/reports/skillopt/patch-candidates"),
+        "--reward-report",
+        str(reward_path),
+        "--out",
+        str(out),
+        "--root",
+        str(root),
+    )
+    assert proc.returncode != 0
+    assert "reward report contains private path/secret-like data" in proc.stderr
+    assert not out.exists()
+
 def test_dry_run_requires_matching_selection_and_does_not_mutate() -> None:
     root = fixture_root()
     payload = proposal(root)

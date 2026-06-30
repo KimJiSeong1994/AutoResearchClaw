@@ -35,8 +35,9 @@ UNSAFE_GAPS = {"runtime_unmapped"}
 SIDE_EFFECT_PATH_RE = re.compile(r"(?i)(hermes|paperwiki|discord|ec2|runtime/jobs\.yaml|runtime/agents\.yaml)")
 SECRET_RE = re.compile(
     r"(?i)(/Users/|(?:^|\s)~/|Mobile Documents|discord(?:app)?\.com/api/webhooks/|"
-    r"sk-[A-Za-z0-9_-]{20,}|xox[baprs]-|api[_ -]?key|bot[_ -]?token|"
-    r"relay[_ -]?read[_ -]?token|private email body|mailbox-only)"
+    r"https://hooks\.slack\.com/services/|sk-[A-Za-z0-9_-]{20,}|xox[baprs]-|"
+    r"api[_ -]?key|bot[_ -]?token|relay[_ -]?read[_ -]?token|"
+    r"private email body|mailbox-only|private mailbox|raw email body|raw private body|private body)"
 )
 
 
@@ -295,6 +296,77 @@ def sanitize_chosen(chosen: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def load_reward_records(path_value: str, root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    if not path_value:
+        return {}, []
+    path = Path(path_value)
+    guard = validate_report_output_path(path, root, "--reward-report")
+    # Reward reports are expected under .omx/reports/skillopt or temp. They are read-only here.
+    if not guard.ok:
+        return {}, guard.errors
+    if not path.exists():
+        return {}, ["--reward-report does not exist"]
+    try:
+        report = read_json(path)
+    except Exception as exc:
+        return {}, [f"invalid reward report json: {exc}"]
+    if contains_secret(report):
+        return {}, ["reward report contains private path/secret-like data"]
+    if report.get("schema_version") != "skillopt-reward.v1":
+        return {}, ["reward report schema_version must be skillopt-reward.v1"]
+    records: dict[str, dict[str, Any]] = {}
+    for record in report.get("records") or []:
+        if not isinstance(record, dict) or record.get("report_type") != "proposal_reward":
+            continue
+        proposal_id = str(record.get("proposal_id", ""))
+        if proposal_id:
+            records[proposal_id] = record
+    return records, []
+
+
+def attach_reward_to_eligible(eligible: list[dict[str, Any]], reward_records: dict[str, dict[str, Any]]) -> None:
+    for item in eligible:
+        record = reward_records.get(str(item.get("proposal_id", "")))
+        if not record:
+            item["reward_rank_eligible"] = False
+            item["rank_basis"] = "legacy_rank"
+            continue
+        if record.get("fingerprint") != item.get("fingerprint") or record.get("skill_path") != item.get("skill_path"):
+            item["reward_rank_eligible"] = False
+            item["rank_basis"] = "legacy_rank"
+            item["reward_warning"] = "reward record does not match candidate fingerprint/skill_path"
+            continue
+        reward_ok = (
+            record.get("reward_rank_eligible") is True
+            and int(record.get("confidence_bp", 0) or 0) >= 6000
+            and int(record.get("coverage_bp", 0) or 0) >= 5000
+            and not any((w or {}).get("severity") == "hard_gate" for w in record.get("warnings") or [] if isinstance(w, dict))
+        )
+        item["reward_rank_eligible"] = bool(reward_ok)
+        item["rank_basis"] = "reward" if reward_ok else "legacy_rank"
+        item["reward"] = {
+            "score_bp": int(record.get("score_bp", 0) or 0),
+            "confidence_bp": int(record.get("confidence_bp", 0) or 0),
+            "coverage_bp": int(record.get("coverage_bp", 0) or 0),
+            "run_id": record.get("run_id"),
+            "warnings": record.get("warnings", []),
+        }
+
+
+def selection_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    if item.get("reward_rank_eligible") is True:
+        reward = item.get("reward") or {}
+        return (
+            0,
+            -int(reward.get("score_bp", 0) or 0),
+            -int(reward.get("confidence_bp", 0) or 0),
+            -int(reward.get("coverage_bp", 0) or 0),
+            tuple(item.get("rank", [])),
+            str(item.get("proposal_id", "")),
+        )
+    return (1, 0, 0, 0, tuple(item.get("rank", [])), str(item.get("proposal_id", "")))
+
+
 def assert_selection_matches(selection: dict[str, Any], proposal: dict[str, Any]) -> None:
     if contains_secret(selection):
         raise ValueError("selection report contains private path/secret-like data")
@@ -338,16 +410,25 @@ def cmd_select(args: argparse.Namespace) -> int:
             eligible.append(item)
         if reject:
             rejected.append(reject)
-    eligible.sort(key=lambda item: tuple(item["rank"]))
+    reward_records, reward_errors = load_reward_records(getattr(args, "reward_report", ""), root)
+    if reward_errors:
+        for error in reward_errors:
+            print(f"FAIL: {error}", file=sys.stderr)
+        return 1
+    attach_reward_to_eligible(eligible, reward_records)
+    eligible.sort(key=selection_sort_key)
     chosen = eligible[0] if eligible else None
     report = {
         "schema_version": SELECTION_SCHEMA,
         "generated_at": args.as_of or now_iso(),
         "candidate_dir": str(candidate_dir),
+        "reward_report": getattr(args, "reward_report", "") or "",
         "policy": [
             "exclude delete/runtime_unmapped/stale/invalid/ambiguous/privacy/explicit-reject/side-effect candidates",
             "prefer missing_verification/missing_input_contract/weak_output_contract",
             "prefer non-critical covered skill and smallest changed-line count",
+            "use reward report only after hard exclusions and only for reward_rank_eligible candidates",
+            "fallback to legacy rank when reward confidence/coverage is low or hard-gate warnings exist",
             "tie-break by deterministic proposal id",
         ],
         "rejected": rejected,
@@ -603,6 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
     select = sub.add_parser("select")
     select.add_argument("--candidate-dir", required=True)
     select.add_argument("--out", required=True)
+    select.add_argument("--reward-report", default="")
     select.add_argument("--root", default=".")
     select.add_argument("--as-of", default="")
 

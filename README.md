@@ -164,6 +164,35 @@ Synced local output root:
 <LOCAL_AUTORESEARCHCLAW_SYNC_DIR>
 ```
 
+
+## Score SkillOpt rewards
+
+```bash
+python3 scripts/skillopt_reward.py score \
+  --audit .omx/reports/skillopt/skillopt-audit-latest.json \
+  --eval .omx/reports/skillopt/skillopt-eval-latest.json \
+  --candidate-dir .omx/reports/skillopt/patch-candidates \
+  --accepted-lineage .omx/reports/skillopt/accepted-lineage.jsonl \
+  --rejected-buffer .omx/reports/skillopt/rejected-edits.jsonl \
+  --out .omx/reports/skillopt/skillopt-reward-latest.json
+```
+
+The reward report is Phase 5 advisory evidence. It emits `skillopt-reward.v1`
+`eval_reward` and `proposal_reward` records with deterministic basis-point
+scores, confidence, coverage, explanations, penalties, and privacy guards.
+Reward may help rank candidates only after hard exclusions; it never approves,
+applies, or mutates skill files. Low-confidence or low-coverage proposal rewards
+fallback to the legacy deterministic rank tuple.
+
+Use reward-aware selection only as an ordering aid for eligible candidates:
+
+```bash
+python3 scripts/skillopt_apply.py select \
+  --candidate-dir .omx/reports/skillopt/patch-candidates \
+  --reward-report .omx/reports/skillopt/skillopt-reward-latest.json \
+  --out .omx/reports/skillopt/apply-runs/<timestamp>-selection.json
+```
+
 ## Apply one SkillOpt proposal under controlled gates
 
 Phase 4 controlled apply is the first SkillOpt step allowed to mutate a skill

@@ -582,12 +582,33 @@ jobs:
     safety: local deterministic proposal generation only; no skill mutation, no automatic accept, reviewer and critic gates required, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output, live accepted-lineage writes are Phase 4-only
 
 
+  - id: skillopt-reward-evaluator
+    name: SkillOpt reward evaluator
+    type: local-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_reward.py score --audit .omx/reports/skillopt/skillopt-audit-latest.json --eval .omx/reports/skillopt/skillopt-eval-latest.json --candidate-dir .omx/reports/skillopt/patch-candidates --accepted-lineage .omx/reports/skillopt/accepted-lineage.jsonl --rejected-buffer .omx/reports/skillopt/rejected-edits.jsonl --out .omx/reports/skillopt/skillopt-reward-latest.json
+    triggers:
+      - after skillopt readiness audit, evaluation harness, and patch proposal generation
+      - before reward-aware controlled apply selection
+      - manual
+    outputs:
+      - .omx/reports/skillopt/skillopt-reward-latest.json
+      - skillopt-reward.v1 eval_reward and proposal_reward records
+      - advisory score, confidence, coverage, explanations, penalties, and rank eligibility
+    checks:
+      - reward is advisory only and cannot approve or apply proposals
+      - hard-gate exclusions remain authoritative before reward ranking
+      - low-confidence or low-coverage proposals fallback to legacy deterministic rank
+      - lineage is read-only; no adaptive training state is written
+    safety: local deterministic reward scoring only; no skill mutation, no automatic accept, no batch apply, no PaperWiki vault writes, no Discord/EC2/Hermes side effects, no absolute vault path output
+
   - id: skillopt-controlled-apply
     name: SkillOpt controlled apply
     type: local-check
     owner_agent: skillopt-auditor
     command_refs:
-      - python3 scripts/skillopt_apply.py select --candidate-dir .omx/reports/skillopt/patch-candidates --out .omx/reports/skillopt/apply-runs/<timestamp>-selection.json
+      - python3 scripts/skillopt_apply.py select --candidate-dir .omx/reports/skillopt/patch-candidates --reward-report .omx/reports/skillopt/skillopt-reward-latest.json --out .omx/reports/skillopt/apply-runs/<timestamp>-selection.json
       - python3 scripts/skillopt_apply.py dry-run .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --selection-report .omx/reports/skillopt/apply-runs/<timestamp>-selection.json --out .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json
       - python3 scripts/skillopt_apply.py apply .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --selection-report .omx/reports/skillopt/apply-runs/<timestamp>-selection.json --dry-run-report .omx/reports/skillopt/apply-runs/<timestamp>-dry-run.json --reviewer-verdict APPROVE --critic-verdict APPROVE --eval-before .omx/reports/skillopt/skillopt-eval-before.json --eval-after .omx/reports/skillopt/skillopt-eval-after.json --lineage .omx/reports/skillopt/accepted-lineage.jsonl --out .omx/reports/skillopt/apply-runs/<timestamp>-apply.json
       - python3 scripts/skillopt_apply.py reject .omx/reports/skillopt/patch-candidates/<skill>/<proposal>.json --reason <reason> --buffer .omx/reports/skillopt/rejected-edits.jsonl
@@ -603,6 +624,7 @@ jobs:
       - optional .omx/reports/skillopt/rejected-edits.jsonl
     checks:
       - one proposal at a time
+      - reward report can only reorder hard-gate-eligible candidates and low confidence falls back to legacy rank
       - dry-run first
       - reviewer and critic approval required for apply
       - rollback on failed eval-after or pre-lineage failure
