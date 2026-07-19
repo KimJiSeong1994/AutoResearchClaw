@@ -469,6 +469,7 @@ jobs:
       - optional runtime/traveler-scoring.json or JIPHYEONJEON_TRAVELER_SCORING_PATH; missing or malformed falls back to committed defaults
       - optional outcome ledger path JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH; append-only observation, adoption, and review events, advisory only and never auto-tunes scoring
       - source-review decisions JSONL beside the source-candidate queue; append-only 집현전-클로 verdicts, terminal approve/reject drop the candidate from the daily report while hold keeps it visible
+      - discord-openclaw-traveler-tune proposes dropping reviewer-rejected static sources; propose is read-only and apply requires an interactive --confirm, so it never runs on this cron
       - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
       - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
       - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
