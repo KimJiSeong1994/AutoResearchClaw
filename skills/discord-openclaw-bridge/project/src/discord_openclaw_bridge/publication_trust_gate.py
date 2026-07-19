@@ -13,6 +13,8 @@ from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
+from .config import _env_flag
+
 URL_RE = re.compile(r"https?://[^\s)\]}>'\"]+")
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 ARXIV_RE = re.compile(r"(?:arxiv:)?(\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
@@ -57,9 +59,6 @@ class PublicationTrustGateConfig:
     block_on_editor_duplicates: bool = True
     extra_identity_inputs: tuple[Path, ...] = ()
 
-
-def _env_flag(name: str, default: str = "1") -> bool:
-    return os.environ.get(name, default).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _env_int(name: str, default: int) -> int:

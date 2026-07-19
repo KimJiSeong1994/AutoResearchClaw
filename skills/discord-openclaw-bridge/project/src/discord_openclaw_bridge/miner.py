@@ -211,9 +211,9 @@ class MinerRecordResult:
         return self.status == "rejected"
 
 
-def clean_text(value: object, *, limit: int = 500) -> str:
+def clean_text(value: object, *, limit: int | None = None) -> str:
     text = " ".join(str(value or "").split()).strip()
-    if len(text) <= limit:
+    if limit is None or len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "…"
 

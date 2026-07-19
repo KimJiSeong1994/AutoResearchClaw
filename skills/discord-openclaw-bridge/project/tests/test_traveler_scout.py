@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -255,3 +256,148 @@ def test_scout_can_write_autonomous_requests_to_canonical_source_queue(tmp_path:
     rows = _jsonl(research)
     assert result["status"]["scout_queue_path"] == str(source_queue)
     assert rows[0]["candidate_queue_path"] == str(source_queue)
+
+
+def _pending_row(topic_id: str, query: str, scout_queue: Path, *, created_at: str) -> str:
+    return json.dumps(
+        {
+            "request_id": f"traveler_request_{topic_id}",
+            "status": "pending_deep_research",
+            "topic": query,
+            "created_at": created_at,
+            "discovery_mode": "autonomous_scout",
+            "scout_topic_id": topic_id,
+            "candidate_queue_path": str(scout_queue),
+        },
+        ensure_ascii=False,
+    ) + "\n"
+
+
+def test_fully_blocked_scout_run_is_distinguishable_from_having_no_work(tmp_path: Path, monkeypatch: Any) -> None:
+    """A run blocked on every topic must not look like a normal quiet run.
+
+    The 2026-06-26 incident was silent: every topic was held by a pending row,
+    the run reported candidate_count=0, and nothing in the output separated
+    "blocked" from "nothing to do". The status fields asserted here are what
+    make that distinction observable, so dropping them must fail a test.
+    """
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "24")
+    topics = load_scout_topics(None)[:3]
+    assert len(topics) == 3, "fixture needs at least three configured topics"
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    research.write_text(
+        "".join(_pending_row(topic.topic_id, topic.query, scout, created_at=fresh) for topic in topics),
+        encoding="utf-8",
+    )
+
+    result = create_scout_requests(topics=topics, research_queue_path=research, scout_queue_path=scout, dry_run=False)
+    status = result["status"]
+
+    assert status["requests_created"] == 0
+    # The blockage must be legible, not inferred from an absent number.
+    assert status["requests_skipped_existing"] == status["topics_selected"] == 3
+    assert sorted(status["skipped_existing_topics"]) == sorted(topic.topic_id for topic in topics)
+    assert status["stale_pending_topics"] == [], "fresh rows are not stale yet"
+    assert len(_jsonl(research)) == 3, "no new request rows should be appended"
+
+
+def test_stale_pending_threshold_boundary_releases_only_older_rows(tmp_path: Path, monkeypatch: Any) -> None:
+    """Pin the threshold: just-under stays blocked, just-over is released."""
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "10")
+    topics = load_scout_topics(None)[:2]
+    assert len(topics) == 2
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    now = datetime.now(timezone.utc)
+    just_under = (now - timedelta(hours=9)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    just_over = (now - timedelta(hours=11)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    research.write_text(
+        _pending_row(topics[0].topic_id, topics[0].query, scout, created_at=just_under)
+        + _pending_row(topics[1].topic_id, topics[1].query, scout, created_at=just_over),
+        encoding="utf-8",
+    )
+
+    status = create_scout_requests(
+        topics=topics, research_queue_path=research, scout_queue_path=scout, dry_run=False
+    )["status"]
+
+    assert status["skipped_existing_topics"] == [topics[0].topic_id], "9h-old row must still block"
+    assert status["stale_pending_topics"] == [topics[1].topic_id], "11h-old row must be released"
+    assert status["requests_created"] == 1
+    assert status["stale_pending_hours"] == 10.0
+
+
+def test_pending_row_without_created_at_does_not_block_forever(tmp_path: Path, monkeypatch: Any) -> None:
+    """A pending row with no timestamp must not outlive the stale window.
+
+    Regression for docs/ops/traveler-new-discovery-blocked-analysis-2026-06-26.md:33-40.
+    The stale-pending guard aged rows via `created_at`, but the condition
+    short-circuited when that field was missing, so an untimestamped row stayed
+    in the blocking set permanently and reported nothing — the exact silent
+    signature of the original incident. Rows lose the field through legacy
+    writes, manual queue recovery, or truncated JSONL.
+    """
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "1")
+    topics = load_scout_topics(None)[:1]
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    research.write_text(
+        json.dumps(
+            {
+                "request_id": "traveler_request_no_timestamp",
+                "status": "pending_deep_research",
+                "topic": topics[0].query,
+                "discovery_mode": "autonomous_scout",
+                "scout_topic_id": topics[0].topic_id,
+                "candidate_queue_path": str(scout),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = create_scout_requests(
+        topics=topics, research_queue_path=research, scout_queue_path=scout, dry_run=False
+    )["status"]
+
+    assert status["requests_created"] == 1, "untimestamped pending row blocked the topic indefinitely"
+    assert status["stale_pending_topics"] == [topics[0].topic_id], "eviction must be recorded, not silent"
+    assert status["skipped_existing_topics"] == []
+
+
+def test_pending_row_without_created_at_still_blocks_when_stale_window_disabled(tmp_path: Path, monkeypatch: Any) -> None:
+    """With the stale window off, missing timestamps must stay blocking.
+
+    Disabling the window is an explicit choice to never auto-requeue; the
+    missing-timestamp path must not become a backdoor around it.
+    """
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_SCOUT_STALE_PENDING_HOURS", "0")
+    topics = load_scout_topics(None)[:1]
+    research = tmp_path / "research.jsonl"
+    scout = tmp_path / "source-candidates.jsonl"
+    research.write_text(
+        json.dumps(
+            {
+                "request_id": "traveler_request_no_timestamp",
+                "status": "pending_deep_research",
+                "topic": topics[0].query,
+                "discovery_mode": "autonomous_scout",
+                "scout_topic_id": topics[0].topic_id,
+                "candidate_queue_path": str(scout),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = create_scout_requests(
+        topics=topics, research_queue_path=research, scout_queue_path=scout, dry_run=False
+    )["status"]
+
+    assert status["requests_created"] == 0
+    assert status["skipped_existing_topics"] == [topics[0].topic_id]
+    assert status["stale_pending_topics"] == []

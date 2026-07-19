@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ._shared import _read_jsonl_rows
+from .config import _load_dotenv
 from .miner import clean_text
 from .traveler import TravelerResearchRequest, default_research_queue_path, record_research_request
 
@@ -74,16 +76,6 @@ def default_scout_queue_path() -> Path:
 def default_scout_status_path() -> Path:
     return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH", str(DEFAULT_SCOUT_STATUS_PATH))).expanduser()
 
-
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _default_topics_path() -> Path | None:
@@ -156,23 +148,6 @@ def _write_status(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
-
-
 def _is_test_research_request(row: dict[str, Any]) -> bool:
     topic = clean_text(row.get("topic"), limit=300).lower()
     note = clean_text(row.get("requester_note"), limit=300).lower()
@@ -224,10 +199,17 @@ def _pending_scout_topic_ids(path: Path, *, now: datetime | None = None) -> tupl
         if not topic_id:
             continue
         created_at = _created_at_utc(row)
-        age_hours = ((now_utc - created_at).total_seconds() / 3600) if created_at else 0.0
-        if stale_after_hours and created_at and age_hours > stale_after_hours:
-            stale_topic_ids.add(topic_id)
-            continue
+        if stale_after_hours:
+            # A row with no parseable created_at cannot be aged, and treating it
+            # as fresh blocked its topic permanently while reporting nothing —
+            # the silent signature of the 2026-06-26 discovery outage. Rows lose
+            # the field through legacy writes, manual queue recovery, or
+            # truncated JSONL, so an unageable row is treated as stale. When the
+            # window is disabled, missing timestamps keep blocking as before.
+            age_hours = ((now_utc - created_at).total_seconds() / 3600) if created_at else None
+            if age_hours is None or age_hours > stale_after_hours:
+                stale_topic_ids.add(topic_id)
+                continue
         topic_ids.add(topic_id)
     return topic_ids, stale_topic_ids
 

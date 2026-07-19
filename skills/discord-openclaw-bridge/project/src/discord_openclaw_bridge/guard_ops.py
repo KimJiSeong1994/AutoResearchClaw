@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ._shared import _parse_utc, _severity_status
+from .config import _load_dotenv
 from .miner import _append_jsonl_unlocked, locked_jsonl_paths, read_jsonl, sanitize_url
 from .review import latest_decisions
 
@@ -35,17 +37,6 @@ DEFAULT_MAX_STATUS_AGE_HOURS = 26.0
 DEFAULT_MAX_PENDING_AGE_DAYS = 7.0
 DEFAULT_MAX_PENDING_COUNT = 20
 
-
-def _parse_utc(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _issue(
@@ -77,13 +68,6 @@ def _issue(
     }
 
 
-def _health_status(issues: list[dict[str, str]]) -> str:
-    if any(issue["severity"] == "error" for issue in issues):
-        return "error"
-    if issues:
-        return "warning"
-    return "ok"
-
 
 def _url_hash(url: str) -> str:
     safe_url = sanitize_url(url)
@@ -91,16 +75,6 @@ def _url_hash(url: str) -> str:
         return ""
     return hashlib.sha256(safe_url.encode("utf-8")).hexdigest()[:16]
 
-
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _guard_config_from_env(env: dict[str, str]) -> dict[str, bool | str]:
@@ -413,7 +387,7 @@ def build_ops_digest(
     digest = {
         "agent_id": "jiphyeonjeon-guard",
         "generated_at": current_time.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "health_status": _health_status(issues),
+        "health_status": _severity_status(issues),
         "summary": {
             "issue_count": len(issues),
             "pending_review_count": len(pending),

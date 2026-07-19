@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from ._shared import _parse_utc
 from .miner import read_jsonl, sanitize_url
 from .review import latest_decisions
 from .review_cli import DEFAULT_DECISIONS, DEFAULT_REVIEW_QUEUE
@@ -24,17 +25,6 @@ DEFAULT_MAX_AGE_DAYS = 7.0
 TRACKING_PREFIXES = ("utm_",)
 TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref"}
 
-
-def _parse_utc(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def normalize_url(url: str) -> str:

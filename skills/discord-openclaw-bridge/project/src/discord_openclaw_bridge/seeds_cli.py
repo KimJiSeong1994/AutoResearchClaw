@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from discord_openclaw_bridge.config import _load_dotenv
 from discord_openclaw_bridge.article_metadata import fetch_article_metadata
 from discord_openclaw_bridge.seeds import (
     DEFAULT_SEEDS_PATH,
@@ -43,21 +44,6 @@ logger = logging.getLogger(__name__)
 # operator to genuine network or parser failures.
 TRANSIENT_ERROR_TAGS: frozenset[str] = frozenset({"empty_expansion"})
 
-
-def _load_dotenv(path: Path) -> None:
-    """Best-effort dotenv loader (existing env wins via ``setdefault``).
-
-    Mirrors the parser used by ``config.py`` and ``post_miner_seeds_report``;
-    inlined to keep ``seeds_cli`` importable without a config dependency.
-    """
-    if not path.exists():
-        return
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _resolve_default_paths() -> dict[str, Path]:

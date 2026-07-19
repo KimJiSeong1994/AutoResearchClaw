@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ._shared import _write_jsonl_atomic
 from .miner import clean_text, read_jsonl, sanitize_url
 from .review import latest_decisions
 from .review_cli import DEFAULT_DECISIONS, DEFAULT_EXPORT, DEFAULT_REVIEW_QUEUE
@@ -28,16 +29,6 @@ DEFAULT_CANDIDATE_PATH = (
 def _row_hash(row: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
-
-def _write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-        tmp = Path(fh.name)
-    tmp.replace(path)
 
 
 def build_newsletter_candidates(

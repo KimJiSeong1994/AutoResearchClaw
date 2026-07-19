@@ -4,7 +4,6 @@ import asyncio
 import re
 import os
 import sys
-from collections import OrderedDict
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -12,15 +11,14 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from .miner import clean_text, sanitize_url
 from .post_card_news import (
     FORUM_CHANNEL_TYPES,
     GENERIC_TOPIC,
     TOPIC_PRIORITY,
-    _clean,
     _clean_title,
     _latest_archive_path,
     _load_archive,
-    _sanitize_public_url,
 )
 from .post_newsletter import (
     DISCORD_SUPPRESS_EMBEDS_FLAG,
@@ -44,7 +42,7 @@ _GRAPH_EMBEDDING_FAMILY_RE = re.compile(
 
 
 def _topic_label(item: dict[str, Any]) -> str:
-    return _clean(
+    return clean_text(
         item.get("primary_topic_display")
         or item.get("topic")
         or item.get("primary_topic")
@@ -57,11 +55,11 @@ def _description(item: dict[str, Any], *, limit: int = 180) -> str:
     raw_summary = item.get("summary_lines") or item.get("summaryLines") or []
     if isinstance(raw_summary, list):
         for line in raw_summary:
-            text = _clean(line, limit=limit)
+            text = clean_text(line, limit=limit)
             if text:
                 return text
     for key in ("public_excerpt", "article_description", "summary", "snippet", "description"):
-        text = _clean(item.get(key), limit=limit)
+        text = clean_text(item.get(key), limit=limit)
         if text:
             return text
     return "공개 요약이 부족해 원문 제목과 링크를 후속 검토 대상으로 보존합니다."
@@ -72,9 +70,9 @@ def _title(item: dict[str, Any]) -> str:
 
 
 def _source_meta(item: dict[str, Any]) -> str:
-    source = _clean(item.get("source_name") or item.get("sender") or "수집 경로 미상", limit=70)
-    kind = _clean(item.get("kind") or "post", limit=30)
-    received = _clean(item.get("received_at") or item.get("published_at") or "", limit=60)
+    source = clean_text(item.get("source_name") or item.get("sender") or "수집 경로 미상", limit=70)
+    kind = clean_text(item.get("kind") or "post", limit=30)
+    received = clean_text(item.get("received_at") or item.get("published_at") or "", limit=60)
     parts = [source, f"`{kind}`"]
     if received:
         parts.insert(1, received)
@@ -82,7 +80,7 @@ def _source_meta(item: dict[str, Any]) -> str:
 
 
 def _canonical_dedupe_url(url: str) -> str:
-    text = _sanitize_public_url(_clean(url))
+    text = sanitize_url(url)
     if not text:
         return ""
     try:
@@ -95,7 +93,7 @@ def _canonical_dedupe_url(url: str) -> str:
 
 def _semantic_family_key(item: dict[str, Any]) -> str:
     text = " ".join(
-        _clean(item.get(key), limit=240)
+        clean_text(item.get(key), limit=240)
         for key in ("article_title", "title", "public_excerpt", "article_description", "summary", "description")
     )
     if _GRAPH_EMBEDDING_FAMILY_RE.search(text):
@@ -119,7 +117,7 @@ def _dedupe_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
     seen_semantic: set[str] = set()
     duplicate_count = 0
     for item in items:
-        url_key = _canonical_dedupe_url(_clean(item.get("url")))
+        url_key = _canonical_dedupe_url(clean_text(item.get("url")))
         if not url_key:
             continue
         content_key = _canonical_content_key(item)
@@ -141,9 +139,9 @@ def _dedupe_items(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
 
 
 def _group_items_by_topic(items: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
-    grouped: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for item in items:
-        url = _sanitize_public_url(_clean(item.get("url")))
+        url = sanitize_url(item.get("url"))
         if not url:
             continue
         topic = _topic_label(item)
@@ -188,7 +186,7 @@ def render_newsletter_archive_messages(
     *,
     max_items_per_topic: int = 12,
 ) -> list[str]:
-    run_date = _clean(payload.get("date") or date.today().isoformat())
+    run_date = clean_text(payload.get("date") or date.today().isoformat())
     raw_items = [item for item in payload.get("items") or [] if isinstance(item, dict)]
     items, duplicate_count = _dedupe_items(raw_items)
     grouped = _group_items_by_topic(items)
@@ -220,7 +218,7 @@ def render_newsletter_archive_messages(
         lines += ["━━━━━━━━━━━━━━━━━━━━", f"### {topic} ({len(topic_items)}개)"]
         for item in topic_items[:max_items_per_topic]:
             title = _title(item)
-            url = _sanitize_public_url(_clean(item.get("url")))
+            url = sanitize_url(item.get("url"))
             description = _description(item)
             lines.append(f"- [{title}]({url}) — {description}")
             lines.append(f"  - 수집: {_source_meta(item)}")
@@ -269,7 +267,7 @@ async def _purge_previous_archive_threads(
     response = await client.get(active_threads_url, headers=headers)
     response.raise_for_status()
     purged = 0
-    target_name = _clean(thread_name, limit=90)
+    target_name = clean_text(thread_name, limit=90)
     for thread in response.json().get("threads") or []:
         name = str(thread.get("name") or "")
         if str(thread.get("parent_id") or "") != str(parent_channel_id):
@@ -301,7 +299,7 @@ async def _create_forum_archive_thread(
         f"{forum_url}/threads",
         headers=headers,
         json={
-            "name": _clean(name, limit=90),
+            "name": clean_text(name, limit=90),
             "auto_archive_duration": 1440,
             "message": {
                 "content": content,
@@ -346,7 +344,7 @@ async def run() -> None:
         target_channel_id = channel_id
         thread_id = ""
         if channel_type in FORUM_CHANNEL_TYPES:
-            thread_name = f"{_clean(payload.get('date') or date.today().isoformat())} 뉴스레타 아카이브"
+            thread_name = f"{clean_text(payload.get('date') or date.today().isoformat())} 뉴스레타 아카이브"
             if purge_previous and guild_id:
                 purged = await _purge_previous_archive_threads(
                     client,

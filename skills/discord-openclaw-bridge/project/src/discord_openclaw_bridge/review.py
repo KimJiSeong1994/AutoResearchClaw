@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
 
+from ._shared import _write_jsonl_atomic
 from .miner import AGENT_ID, PENDING_STATUS, REVIEWER_ID, clean_text, locked_jsonl_paths, read_jsonl, sanitize_url
 from .youtube_video import is_youtube_url, sanitize_content_analysis, sanitize_media
 
@@ -176,23 +177,6 @@ def _manual_link_row(item: ReviewQueueItem) -> dict[str, Any] | None:
         row["content_analysis"] = content_analysis
     return row
 
-
-def _write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-        tmp = Path(fh.name)
-    tmp.replace(path)
 
 
 def _enrich_manual_link_rows(

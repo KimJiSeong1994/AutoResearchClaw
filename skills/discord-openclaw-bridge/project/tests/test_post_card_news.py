@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import discord_openclaw_bridge.post_card_news as post_card_news  # noqa: E402
+from discord_openclaw_bridge.miner import sanitize_url  # noqa: E402
 from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     CARD_NEWS_TITLE,
     CARD_SEPARATOR,
@@ -39,7 +40,6 @@ from discord_openclaw_bridge.post_card_news import (  # noqa: E402
     _purge_previous_card_news_messages,
     _purge_previous_card_news_threads,
     _post_card_news_skip_ops_report,
-    _sanitize_public_url,
     _select_cards,
     _split_discord_content,
     enrich_public_metadata,
@@ -956,7 +956,7 @@ def test_sanitizer_strips_newsletter_tracking_query_params() -> None:
         "?midToken=secret&midSig=sig&trkEmail=mail&lipi=abc&id=7&utm_medium=email"
     )
 
-    assert _sanitize_public_url(url) == "https://www.linkedin.com/comm/pulse/post?id=7"
+    assert sanitize_url(url) == "https://www.linkedin.com/comm/pulse/post?id=7"
 
 
 def test_selection_prefers_substantive_article_over_tracking_profile_link() -> None:
