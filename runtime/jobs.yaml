@@ -456,6 +456,7 @@ jobs:
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-post-traveler-collection-report
       - uv run discord-openclaw-traveler-outcomes
+      - uv run discord-openclaw-traveler-tune propose
     schedule:
       cron_utc: "0 13 * * *"
       local_time: "22:00 Asia/Seoul"
@@ -469,7 +470,8 @@ jobs:
       - optional runtime/traveler-scoring.json or JIPHYEONJEON_TRAVELER_SCORING_PATH; missing or malformed falls back to committed defaults
       - optional outcome ledger path JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH; append-only observation, adoption, and review events, advisory only and never auto-tunes scoring
       - source-review decisions JSONL beside the source-candidate queue; append-only 집현전-클로 verdicts, terminal approve/reject drop the candidate from the daily report while hold keeps it visible
-      - discord-openclaw-traveler-tune proposes dropping reviewer-rejected static sources; propose is read-only and apply requires an interactive --confirm, so it never runs on this cron
+      - discord-openclaw-traveler-tune propose runs daily and is read-only, writing traveler-tuning-proposals.json for an operator to read; apply requires an interactive --confirm and is never invoked by cron
+      - the outcome and tuning steps are advisory: they run after the report and their failure never fails it
       - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
       - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
       - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
@@ -479,6 +481,9 @@ jobs:
       - traveler-scout-last-status.json
       - traveler-source-discovery-last-status.json
       - traveler-collection-report-last-status.json
+      - traveler-outcome-ledger.jsonl append-only observation, adoption, and review events
+      - traveler-calibration-latest.json advisory adoption/approval rates by confidence bucket
+      - traveler-tuning-proposals.json read-only proposals awaiting a human --confirm
       - optional traveler-scout-topics.paperwiki.json generated topic artifact
     safety:
       side_effects: public Discord report posting; candidate discovery writes pending review records only

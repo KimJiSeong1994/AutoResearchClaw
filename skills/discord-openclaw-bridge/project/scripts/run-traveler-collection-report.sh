@@ -179,4 +179,25 @@ fi
 CLI_EXIT=0
 .venv/bin/python -m discord_openclaw_bridge.post_traveler_collection_report || CLI_EXIT=$?
 printf "[%s] traveler-collection-report done (exit=%s scout_exit=%s discovery_exit=%s)\n" "$(timestamp)" "${CLI_EXIT}" "${SCOUT_EXIT}" "${DISCOVERY_EXIT}"
+
+# Advisory steps. These record and analyse outcomes; neither posts anything nor
+# changes config, so a failure here must never fail the daily report.
+OUTCOMES_EXIT=0
+.venv/bin/python -m discord_openclaw_bridge.traveler_outcomes \
+  --report "${TRAVELER_STATE_DIR}/traveler-calibration-latest.json" || OUTCOMES_EXIT=$?
+printf "[%s] traveler-outcomes done (exit=%s)\n" "$(timestamp)" "${OUTCOMES_EXIT}"
+
+# propose is read-only: it prints what a human could choose to apply. `apply`
+# needs an interactive --confirm and is deliberately never invoked here.
+TUNE_EXIT=0
+# Trailing X's: BSD mktemp does not substitute a template with a suffix after them.
+TUNE_TMP="$(mktemp "${TRAVELER_STATE_DIR}/traveler-tuning-proposals.XXXXXX")"
+if .venv/bin/python -m discord_openclaw_bridge.traveler_tuning propose >"${TUNE_TMP}" 2>>"${LOG_FILE}"; then
+  mv "${TUNE_TMP}" "${TRAVELER_STATE_DIR}/traveler-tuning-proposals.json"
+else
+  TUNE_EXIT=$?
+  rm -f "${TUNE_TMP}"
+fi
+printf "[%s] traveler-tune propose done (exit=%s)\n" "$(timestamp)" "${TUNE_EXIT}"
+
 exit "${CLI_EXIT}"
