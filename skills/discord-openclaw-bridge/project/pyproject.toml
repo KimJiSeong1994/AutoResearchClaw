@@ -29,6 +29,7 @@ discord-openclaw-post-traveler-collection-report = "discord_openclaw_bridge.post
 discord-openclaw-traveler-discover-sources = "discord_openclaw_bridge.traveler_source_discovery:main"
 discord-openclaw-traveler-scout = "discord_openclaw_bridge.traveler_scout:main"
 discord-openclaw-traveler-outcomes = "discord_openclaw_bridge.traveler_outcomes:main"
+discord-openclaw-traveler-review = "discord_openclaw_bridge.traveler_review:main"
 discord-openclaw-guard-ops-digest = "discord_openclaw_bridge.guard_ops:main"
 discord-openclaw-review-queue-optimizer = "discord_openclaw_bridge.review_queue_optimizer:main"
 discord-openclaw-newsletter-candidate-orchestrator = "discord_openclaw_bridge.newsletter_candidate_orchestrator:main"

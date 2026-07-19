@@ -148,7 +148,17 @@ def _is_test_candidate(row: dict[str, Any]) -> bool:
     return any(marker in f"{text} {tags}" for marker in ("live test", "safe to ignore", "completed_test", "rejected_test", "연결 검증", "표시 검증"))
 
 
-def _candidate_rows(path: Path) -> list[dict[str, Any]]:
+def _candidate_rows(path: Path, decisions_path: Path | None = None) -> list[dict[str, Any]]:
+    """Undecided candidates only.
+
+    Decisions live in their own append-only file and never mutate the queue row,
+    so the terminal ones must be filtered at read time. Without this an approved
+    candidate would reappear in every daily report forever and the operator would
+    learn to ignore the review.
+    """
+    from .traveler_review import decided_candidate_ids, default_source_decisions_path
+
+    decided = decided_candidate_ids(decisions_path or default_source_decisions_path())
     rows = _read_jsonl_rows(path)
     deduped: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -156,6 +166,8 @@ def _candidate_rows(path: Path) -> list[dict[str, Any]]:
         if not url:
             continue
         if row.get("status") not in {"pending_source_review", "accepted", "pending", None}:
+            continue
+        if str(row.get("candidate_id") or "") in decided:
             continue
         if _is_test_candidate(row):
             continue

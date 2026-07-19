@@ -56,6 +56,7 @@ LOG = logging.getLogger(__name__)
 DEFAULT_LEDGER_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-outcome-ledger.jsonl"
 EVENT_OBSERVED = "observed"
 EVENT_ADOPTED = "adopted"
+EVENT_REVIEWED = "reviewed"
 SCHEMA_VERSION = "traveler-outcome.v1"
 
 # Buckets are coarse on purpose: the scorer emits a handful of discrete values
@@ -131,16 +132,28 @@ def _ledger_index(rows: Iterable[dict[str, Any]]) -> tuple[set[str], set[str]]:
     return observed, adopted
 
 
+def _reviewed_index(rows: Iterable[dict[str, Any]]) -> set[tuple[str, str]]:
+    """(url_key, verdict) pairs already recorded, so a revised verdict still lands."""
+    return {
+        (str(row.get("url_key") or ""), str(row.get("verdict") or ""))
+        for row in rows
+        if row.get("event") == EVENT_REVIEWED
+    }
+
+
 def record_outcomes(
     *,
     evidence_path: Path,
     ledger_path: Path,
     collected_urls: set[str],
     collected_hosts: set[str],
+    decisions: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Append new observations, then adoption events for anything newly collected.
+    """Append new observations, adoption events, and any Claw verdicts.
 
-    Idempotent: re-running without new evidence or new adoptions writes nothing.
+    Idempotent: re-running without new evidence, adoptions, or verdicts writes
+    nothing. `decisions` maps candidate_id to the latest source-review decision;
+    a verdict is the strong label, whereas adoption is inferred.
     """
     ledger_rows = _read_jsonl_rows(ledger_path)
     seen, adopted = _ledger_index(ledger_rows)
@@ -177,11 +190,35 @@ def record_outcomes(
         adopted.add(key)
         new_adoptions += 1
 
+    new_verdicts = 0
+    if decisions:
+        already = _reviewed_index(ledger_rows)
+        by_url_key = {url_key(str(row.get("url") or "")): row for row in decisions.values() if row.get("url")}
+        for key, decision in by_url_key.items():
+            verdict = str(decision.get("decision") or "")
+            if not verdict or key not in seen or (key, verdict) in already:
+                continue
+            append_jsonl(
+                ledger_path,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "event": EVENT_REVIEWED,
+                    "url_key": key,
+                    "url": decision.get("url", ""),
+                    "verdict": verdict,
+                    "reviewer": decision.get("reviewer", ""),
+                    "decided_at": decision.get("decided_at", ""),
+                    "recorded_at": _utc_now(),
+                },
+            )
+            new_verdicts += 1
+
     return {
         "run_at": _utc_now(),
         "ledger_path": str(ledger_path),
         "new_observations": new_observations,
         "new_adoptions": new_adoptions,
+        "new_verdicts": new_verdicts,
         "total_observed": len(seen),
         "total_adopted": len(adopted),
         "host_overlap_only": sum(
@@ -204,9 +241,16 @@ def calibration_report(ledger_path: Path) -> dict[str, Any]:
     rows = _read_jsonl_rows(ledger_path)
     _, adopted = _ledger_index(rows)
     observations = [row for row in rows if row.get("event") == EVENT_OBSERVED]
+    # Latest verdict wins, so a revised review supersedes the earlier one.
+    verdicts: dict[str, str] = {
+        str(row.get("url_key") or ""): str(row.get("verdict") or "")
+        for row in rows
+        if row.get("event") == EVENT_REVIEWED
+    }
 
     by_bucket: dict[str, dict[str, int]] = {}
     by_state: dict[str, dict[str, int]] = {}
+    by_verdict: dict[str, dict[str, int]] = {}
     for row in observations:
         key = str(row.get("url_key") or "")
         was_adopted = key in adopted
@@ -216,6 +260,14 @@ def calibration_report(ledger_path: Path) -> dict[str, Any]:
             entry = table.setdefault(name, {"observed": 0, "adopted": 0})
             entry["observed"] += 1
             entry["adopted"] += int(was_adopted)
+        if key in verdicts:
+            entry = by_verdict.setdefault(bucket, {"observed": 0, "adopted": 0, "approved": 0, "rejected": 0})
+            entry["observed"] += 1
+            entry["adopted"] += int(was_adopted)
+            if verdicts[key] == "approve":
+                entry["approved"] += 1
+            elif verdicts[key] == "reject":
+                entry["rejected"] += 1
 
     def with_rate(table: dict[str, dict[str, int]]) -> dict[str, dict[str, Any]]:
         return {
@@ -229,14 +281,22 @@ def calibration_report(ledger_path: Path) -> dict[str, Any]:
         "generated_at": _utc_now(),
         "total_observed": len(observations),
         "total_adopted": len(adopted),
+        "total_reviewed": len(verdicts),
         "by_confidence_bucket": with_rate(by_bucket),
         "by_candidate_state": with_rate(by_state),
+        # The strong label: an explicit Claw verdict, not adoption inferred from
+        # the collection surface. Prefer this once enough reviews accumulate.
+        "reviewed_by_confidence_bucket": {
+            name: {**counts, "approval_rate_pct": round(100 * counts["approved"] / counts["observed"], 1) if counts["observed"] else 0.0}
+            for name, counts in sorted(by_verdict.items())
+        },
         "advisory_only": True,
         "limitations": [
             "unadopted candidates are right-censored, not confirmed negatives; recent discoveries have had less time to be adopted",
             "the operator sees the confidence score in the daily report before deciding, so adoption partly measures trust in the score rather than its accuracy",
             "adoption is URL-exact; host overlap is tracked separately and is not adoption",
             "no automatic tuning: runtime/traveler-scoring.json changes remain a human decision",
+            "reviewed_by_confidence_bucket covers only candidates a reviewer has actually ruled on, so it is a biased subset until review coverage is high",
         ],
     }
 
@@ -270,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.report_only:
         from .traveler_evidence import default_evidence_path
 
+        from .traveler_review import default_source_decisions_path, latest_source_decisions
+
         evidence = (args.evidence or default_evidence_path()).expanduser()
         collected_urls, collected_hosts = _load_collection_surface()
         summary = record_outcomes(
@@ -277,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger_path=ledger,
             collected_urls=collected_urls,
             collected_hosts=collected_hosts,
+            decisions=latest_source_decisions(default_source_decisions_path()),
         )
         LOG.info(json.dumps(summary, ensure_ascii=False, indent=2))
 
