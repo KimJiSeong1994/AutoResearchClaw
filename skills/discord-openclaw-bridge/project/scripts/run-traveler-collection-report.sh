@@ -182,8 +182,13 @@ printf "[%s] traveler-collection-report done (exit=%s scout_exit=%s discovery_ex
 
 # Advisory steps. These record and analyse outcomes; neither posts anything nor
 # changes config, so a failure here must never fail the daily report.
+# --ledger is explicit: its default is ~/.openclaw/workspace regardless of which
+# workspace is running, so without this the ledger lands beside a different
+# deployment's state while the report lands here.
+TRAVELER_LEDGER_PATH="${JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH:-${TRAVELER_STATE_DIR}/traveler-outcome-ledger.jsonl}"
 OUTCOMES_EXIT=0
 .venv/bin/python -m discord_openclaw_bridge.traveler_outcomes \
+  --ledger "${TRAVELER_LEDGER_PATH}" \
   --report "${TRAVELER_STATE_DIR}/traveler-calibration-latest.json" || OUTCOMES_EXIT=$?
 printf "[%s] traveler-outcomes done (exit=%s)\n" "$(timestamp)" "${OUTCOMES_EXIT}"
 
@@ -192,7 +197,9 @@ printf "[%s] traveler-outcomes done (exit=%s)\n" "$(timestamp)" "${OUTCOMES_EXIT
 TUNE_EXIT=0
 # Trailing X's: BSD mktemp does not substitute a template with a suffix after them.
 TUNE_TMP="$(mktemp "${TRAVELER_STATE_DIR}/traveler-tuning-proposals.XXXXXX")"
-if .venv/bin/python -m discord_openclaw_bridge.traveler_tuning propose >"${TUNE_TMP}" 2>>"${LOG_FILE}"; then
+# --ledger precedes the subcommand: it is a top-level argument, so `propose --ledger` fails.
+if .venv/bin/python -m discord_openclaw_bridge.traveler_tuning \
+  --ledger "${TRAVELER_LEDGER_PATH}" propose >"${TUNE_TMP}" 2>>"${LOG_FILE}"; then
   mv "${TUNE_TMP}" "${TRAVELER_STATE_DIR}/traveler-tuning-proposals.json"
 else
   TUNE_EXIT=$?
