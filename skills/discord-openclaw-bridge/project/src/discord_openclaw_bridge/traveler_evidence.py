@@ -325,6 +325,59 @@ def _extract_feed(root: ET.Element, *, topic: str) -> ExtractedEvidence:
     )
 
 
+DEFAULT_SCORING: dict[str, Any] = {
+    "evidence_scoring": {
+        "base_confidence": 0.6,
+        "keyword_bonus": 0.05,
+        "keyword_bonus_cap": 0.25,
+        "item_count_bonus": 0.1,
+        "date_bonus": 0.05,
+        "max_confidence": 0.95,
+    },
+    "curated_static_override": {
+        "confidence_score": 0.55,
+        "source_types": ["research_lab_blog", "article_hub", "conference_feed", "archive_page"],
+    },
+}
+
+
+def _scoring_path() -> Path:
+    raw = os.environ.get("JIPHYEONJEON_TRAVELER_SCORING_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    # src/discord_openclaw_bridge -> src -> project -> discord-openclaw-bridge -> skills -> repo root
+    return Path(__file__).resolve().parents[5] / "runtime/traveler-scoring.json"
+
+
+def read_scoring_config(path: Path | None = None) -> dict[str, Any]:
+    """Raw judgement config, or {} when it is missing or unreadable."""
+    try:
+        payload = json.loads((path or _scoring_path()).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_scoring(path: Path | None = None) -> dict[str, Any]:
+    """Judgement knobs, falling back to DEFAULT_SCORING section by section.
+
+    A missing, unreadable, or partial config must never change what the
+    traveler collects, so every key falls back individually rather than the
+    whole file being all-or-nothing. Callers get a complete dict either way.
+    """
+    merged = {section: dict(values) for section, values in DEFAULT_SCORING.items()}
+    payload = read_scoring_config(path)
+    for section, defaults in merged.items():
+        override = payload.get(section)
+        if not isinstance(override, dict):
+            continue
+        for key, default in defaults.items():
+            value = override.get(key)
+            if type(value) is type(default) or (isinstance(default, float) and isinstance(value, int)):
+                defaults[key] = value
+    return merged
+
+
 def decide_evidence(fetch: FetchResult, extracted: ExtractedEvidence, *, topic: str = "") -> EvidenceDecision:
     if fetch.status == "blocked":
         return EvidenceDecision(candidate_state="rejected", reason=fetch.reason or "blocked_by_policy", rejection_class="blocked")
@@ -334,14 +387,15 @@ def decide_evidence(fetch: FetchResult, extracted: ExtractedEvidence, *, topic: 
         return EvidenceDecision(candidate_state="rejected", reason="no_extractable_public_metadata", rejection_class="no_evidence")
     if _topic_terms(topic) and not extracted.matched_keywords:
         return EvidenceDecision(candidate_state="rejected", reason="no_topic_relevance_evidence", rejection_class="low_relevance")
-    score = 0.6
+    knobs = load_scoring()["evidence_scoring"]
+    score = knobs["base_confidence"]
     if extracted.matched_keywords:
-        score += min(0.25, len(extracted.matched_keywords) * 0.05)
+        score += min(knobs["keyword_bonus_cap"], len(extracted.matched_keywords) * knobs["keyword_bonus"])
     if extracted.item_count:
-        score += 0.1
+        score += knobs["item_count_bonus"]
     if extracted.published_or_updated:
-        score += 0.05
-    score = min(score, 0.95)
+        score += knobs["date_bonus"]
+    score = min(score, knobs["max_confidence"])
     return EvidenceDecision(candidate_state="accepted", reason="bounded_public_evidence_observed", confidence_score=round(score, 2))
 
 

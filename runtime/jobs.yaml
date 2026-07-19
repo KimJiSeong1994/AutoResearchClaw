@@ -465,6 +465,7 @@ jobs:
       - JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH
       - JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH
       - optional runtime/traveler-scout-topics.json or JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH
+      - optional runtime/traveler-scoring.json or JIPHYEONJEON_TRAVELER_SCORING_PATH; missing or malformed falls back to committed defaults
       - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
       - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
       - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS

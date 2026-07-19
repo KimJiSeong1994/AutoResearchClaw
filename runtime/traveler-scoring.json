@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "_comment": "집현전-여행자 judgement knobs. Values here are the shipped defaults, byte-identical to the constants they replaced. Changing them changes which papers the traveler collects. Override the path with JIPHYEONJEON_TRAVELER_SCORING_PATH; a missing or malformed file falls back to the same defaults compiled into traveler_evidence.py.",
+  "evidence_scoring": {
+    "base_confidence": 0.6,
+    "keyword_bonus": 0.05,
+    "keyword_bonus_cap": 0.25,
+    "item_count_bonus": 0.1,
+    "date_bonus": 0.05,
+    "max_confidence": 0.95
+  },
+  "curated_static_override": {
+    "confidence_score": 0.55,
+    "source_types": ["research_lab_blog", "article_hub", "conference_feed", "archive_page"]
+  },
+  "static_sources": [
+    ["arXiv cs.AI recent submissions", "https://arxiv.org/list/cs.AI/recent", "conference_feed", "arXiv official recent list for AI papers."],
+    ["arXiv cs.CL recent submissions", "https://arxiv.org/list/cs.CL/recent", "conference_feed", "arXiv official recent list for computational linguistics papers."],
+    ["OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research announcements and papers."],
+    ["Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public AI and systems research blog."],
+    ["Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."],
+    ["Hugging Face Papers", "https://huggingface.co/papers", "article_hub", "Public daily paper discovery hub."],
+    ["Papers with Code Latest", "https://paperswithcode.com/latest", "article_hub", "Public paper and code trend hub."],
+    ["OpenReview recent activity", "https://openreview.net/", "conference_feed", "Public conference and workshop paper review platform."],
+    ["Microsoft Research Blog", "https://www.microsoft.com/en-us/research/blog/", "research_lab_blog", "Official public research blog with recurring AI and systems posts."],
+    ["Meta AI Research", "https://ai.meta.com/research/", "research_lab_blog", "Official public AI research publication surface."],
+    ["T2-RAGBench", "https://aclanthology.org/2026.eacl-long.8/", "paper_page", "ACL Anthology paper page for text-and-table retrieval augmented generation evaluation benchmark."],
+    ["URAG benchmark", "https://arxiv.org/abs/2603.19281", "paper_page", "arXiv abstract page for uncertainty quantification in retrieval augmented generation evaluation."],
+    ["IBM RAG hyper-parameter optimization", "https://research.ibm.com/publications/an-analysis-of-hyper-parameter-optimization-methods-for-retrieval-augmented-generation", "paper_page", "IBM Research publication page for retrieval augmented generation hyper-parameter optimization analysis."],
+    ["DCTR graph RAG", "https://ojs.aaai.org/index.php/AAAI/article/view/40265", "paper_page", "AAAI paper page for knowledge graph and retrieval augmented generation subgraph optimization."],
+    ["Agent-as-a-Graph", "https://arxiv.org/abs/2511.18194", "paper_page", "arXiv abstract page for knowledge graph based LLM agent and tool retrieval."]
+  ]
+}

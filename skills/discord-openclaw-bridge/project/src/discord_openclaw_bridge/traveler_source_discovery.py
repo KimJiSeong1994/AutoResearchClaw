@@ -28,7 +28,8 @@ import httpx
 from .config import _load_dotenv
 from .miner import clean_text, read_jsonl, sanitize_url
 from ._shared import _read_jsonl_rows
-from .traveler_evidence import append_evidence, collect_evidence_for_url, default_evidence_path
+from .traveler_evidence import append_evidence, collect_evidence_for_url, default_evidence_path, load_scoring, read_scoring_config
+
 from .traveler import (
     TravelerRecordResult,
     TravelerSourceInput,
@@ -48,6 +49,46 @@ REQUEST_STATUS_COMPLETED_EMPTY = "completed_no_candidates"
 REQUEST_STATUS_FAILED = "failed_source_discovery"
 RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
 MIN_NETWORK_FAILURE_FALLBACK_REVIEWED = 10
+
+
+DEFAULT_STATIC_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+    ("arXiv cs.AI recent submissions", "https://arxiv.org/list/cs.AI/recent", "conference_feed", "arXiv official recent list for AI papers."),
+    ("arXiv cs.CL recent submissions", "https://arxiv.org/list/cs.CL/recent", "conference_feed", "arXiv official recent list for computational linguistics papers."),
+    ("OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research announcements and papers."),
+    ("Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public AI and systems research blog."),
+    ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."),
+    ("Hugging Face Papers", "https://huggingface.co/papers", "article_hub", "Public daily paper discovery hub."),
+    ("Papers with Code Latest", "https://paperswithcode.com/latest", "article_hub", "Public paper and code trend hub."),
+    ("OpenReview recent activity", "https://openreview.net/", "conference_feed", "Public conference and workshop paper review platform."),
+    ("Microsoft Research Blog", "https://www.microsoft.com/en-us/research/blog/", "research_lab_blog", "Official public research blog with recurring AI and systems posts."),
+    ("Meta AI Research", "https://ai.meta.com/research/", "research_lab_blog", "Official public AI research publication surface."),
+    ("T2-RAGBench", "https://aclanthology.org/2026.eacl-long.8/", "paper_page", "ACL Anthology paper page for text-and-table retrieval augmented generation evaluation benchmark."),
+    ("URAG benchmark", "https://arxiv.org/abs/2603.19281", "paper_page", "arXiv abstract page for uncertainty quantification in retrieval augmented generation evaluation."),
+    ("IBM RAG hyper-parameter optimization", "https://research.ibm.com/publications/an-analysis-of-hyper-parameter-optimization-methods-for-retrieval-augmented-generation", "paper_page", "IBM Research publication page for retrieval augmented generation hyper-parameter optimization analysis."),
+    ("DCTR graph RAG", "https://ojs.aaai.org/index.php/AAAI/article/view/40265", "paper_page", "AAAI paper page for knowledge graph and retrieval augmented generation subgraph optimization."),
+    ("Agent-as-a-Graph", "https://arxiv.org/abs/2511.18194", "paper_page", "arXiv abstract page for knowledge graph based LLM agent and tool retrieval."),
+)
+
+
+def load_static_sources() -> tuple[tuple[str, str, str, str], ...]:
+    """Curated portfolio from config, falling back to the committed defaults.
+
+    A row must be four non-empty strings with an https URL; anything else is
+    dropped rather than trusted, and an empty result falls back wholesale so a
+    bad edit cannot silently leave the traveler with no static fallback.
+    """
+    rows = read_scoring_config().get("static_sources")
+    if not isinstance(rows, list):
+        return DEFAULT_STATIC_SOURCES
+    parsed = [
+        (row[0], row[1], row[2], row[3])
+        for row in rows
+        if isinstance(row, list)
+        and len(row) == 4
+        and all(isinstance(cell, str) and cell.strip() for cell in row)
+        and row[1].startswith("https://")
+    ]
+    return tuple(parsed) or DEFAULT_STATIC_SOURCES
 
 
 @dataclass(frozen=True)
@@ -419,23 +460,10 @@ class StaticTechnicalSourceProvider:
     """
 
     name = "static-technical-sources"
-    _SOURCES = (
-        ("arXiv cs.AI recent submissions", "https://arxiv.org/list/cs.AI/recent", "conference_feed", "arXiv official recent list for AI papers."),
-        ("arXiv cs.CL recent submissions", "https://arxiv.org/list/cs.CL/recent", "conference_feed", "arXiv official recent list for computational linguistics papers."),
-        ("OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research announcements and papers."),
-        ("Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public AI and systems research blog."),
-        ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."),
-        ("Hugging Face Papers", "https://huggingface.co/papers", "article_hub", "Public daily paper discovery hub."),
-        ("Papers with Code Latest", "https://paperswithcode.com/latest", "article_hub", "Public paper and code trend hub."),
-        ("OpenReview recent activity", "https://openreview.net/", "conference_feed", "Public conference and workshop paper review platform."),
-        ("Microsoft Research Blog", "https://www.microsoft.com/en-us/research/blog/", "research_lab_blog", "Official public research blog with recurring AI and systems posts."),
-        ("Meta AI Research", "https://ai.meta.com/research/", "research_lab_blog", "Official public AI research publication surface."),
-        ("T2-RAGBench", "https://aclanthology.org/2026.eacl-long.8/", "paper_page", "ACL Anthology paper page for text-and-table retrieval augmented generation evaluation benchmark."),
-        ("URAG benchmark", "https://arxiv.org/abs/2603.19281", "paper_page", "arXiv abstract page for uncertainty quantification in retrieval augmented generation evaluation."),
-        ("IBM RAG hyper-parameter optimization", "https://research.ibm.com/publications/an-analysis-of-hyper-parameter-optimization-methods-for-retrieval-augmented-generation", "paper_page", "IBM Research publication page for retrieval augmented generation hyper-parameter optimization analysis."),
-        ("DCTR graph RAG", "https://ojs.aaai.org/index.php/AAAI/article/view/40265", "paper_page", "AAAI paper page for knowledge graph and retrieval augmented generation subgraph optimization."),
-        ("Agent-as-a-Graph", "https://arxiv.org/abs/2511.18194", "paper_page", "arXiv abstract page for knowledge graph based LLM agent and tool retrieval."),
-    )
+    # Portfolio lives in runtime/traveler-scoring.json so operators can add a
+    # source without a code deploy; load_static_sources falls back to the
+    # committed defaults when the file is missing or malformed.
+    _SOURCES = load_static_sources()
 
     def _candidate_rows(self, request: ResearchRequest) -> list[tuple[str, str, str, str]]:
         keys = _keywords(request.topic, limit=8)
@@ -655,12 +683,13 @@ async def discover_sources(
                     )
                     evidence_count += 1
                     decision = evidence_record.get("decision", {}) if isinstance(evidence_record, dict) else {}
+                    override = load_scoring()["curated_static_override"]
                     if (
                         decision.get("candidate_state") != "accepted"
                         and decision.get("rejection_class") == "low_relevance"
                         and request.discovery_mode == "autonomous_scout"
                         and candidate.provider == "static-technical-sources"
-                        and candidate.source_type in {"research_lab_blog", "article_hub", "conference_feed", "archive_page"}
+                        and candidate.source_type in set(override["source_types"])
                         and (evidence_record.get("fetch", {}) if isinstance(evidence_record, dict) else {}).get("status") == "ok"
                     ):
                         decision = {
@@ -668,7 +697,7 @@ async def discover_sources(
                             "candidate_state": "accepted",
                             "reason": "curated_static_source_surface_requires_review",
                             "rejection_class": "",
-                            "confidence_score": 0.55,
+                            "confidence_score": override["confidence_score"],
                         }
                         evidence_record["decision"] = decision
                     if not dry_run:

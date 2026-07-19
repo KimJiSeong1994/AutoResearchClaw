@@ -216,6 +216,7 @@ agents:
       - workspace/PROMPT_REGISTRY.json
       - scripts/paperwiki_kg.py
       - runtime/traveler-scout-topics.json
+      - runtime/traveler-scoring.json
       - docs/ops/traveler-new-discovery-blocked-analysis-2026-06-26.md
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
