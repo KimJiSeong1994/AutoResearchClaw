@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from skillopt_common import read_json
+except ModuleNotFoundError:  # pragma: no cover - direct path fallback in tests
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from skillopt_common import read_json
+
 SCHEMA_VERSION = "skillopt-eval.v1"
 
 SECRET_RE = re.compile(
@@ -30,6 +36,12 @@ PRIVATE_EVIDENCE_MARKER_RE = re.compile(
 ACADEMIC_SIGNALS = (
     "arxiv", "doi", "openreview", "semantic scholar", "acl anthology", "pmlr",
     "neurips", "icml", "papers with code",
+    # Hostname forms: the spaced display names above never match a bare URL such
+    # as aclanthology.org, so SKILL.md-eligible sources were scored needs_review
+    # whenever the title/summary did not spell the name out.
+    # Only the four whose display name is not already a substring of the host:
+    # neurips.cc/icml.cc/openreview.net already match via "neurips"/"icml"/"openreview".
+    "semanticscholar.org", "aclanthology.org", "paperswithcode.com", "proceedings.mlr.press",
 )
 TECHNICAL_SIGNALS = (
     "rag", "retrieval", "knowledge graph", "llm", "agent", "model", "machine learning",
@@ -59,8 +71,7 @@ class CaseResult:
     details: dict[str, Any]
 
 
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+# read_json imported from skillopt_common
 
 
 def has_secret(value: str) -> bool:
@@ -73,12 +84,17 @@ def classify_academic_case(item: dict[str, Any]) -> dict[str, Any]:
     url = public_only_text(str(item.get("url", "")))
     text = f"{title} {summary} {url}".lower()
     evidence: list[str] = []
-    if any(signal in text for signal in ACADEMIC_SIGNALS):
-        evidence.append("academic-search public signal")
-        return {"verdict": "eligible", "bucket": "academic_search", "reason": "academic_public_signal", "evidence": evidence}
+    # Reject wins over a bare academic mention. SKILL.md: "Reject even if a
+    # newsletter supplied it" — a job ad or profile notice that merely links to
+    # arxiv/aclanthology is still a job ad. The mirror already gives reject
+    # hints this precedence (newsletter_ingest.py, out_of_scope before signal
+    # scoring), so checking academic first also drifted the two apart.
     if any(signal in text for signal in REJECT_SIGNALS):
         evidence.append("out-of-scope public signal")
         return {"verdict": "reject", "bucket": "out_of_scope", "reason": "nontechnical_or_admin_signal", "evidence": evidence}
+    if any(signal in text for signal in ACADEMIC_SIGNALS):
+        evidence.append("academic-search public signal")
+        return {"verdict": "eligible", "bucket": "academic_search", "reason": "academic_public_signal", "evidence": evidence}
     if URL_RE.search(url) and any(signal in text for signal in TECHNICAL_SIGNALS):
         evidence.append("technical-report public signal")
         return {"verdict": "eligible", "bucket": "technical_report", "reason": "technical_public_signal", "evidence": evidence}

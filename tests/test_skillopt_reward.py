@@ -454,3 +454,33 @@ def test_proposal_eval_quality_follows_per_skill_pass_rate() -> None:
 
     assert by_id["skillopt-example-safe"]["components"]["eval_quality_bp"] == 7500
     assert by_id["skillopt-other-safe"]["components"]["eval_quality_bp"] == 10000
+
+
+def test_thin_per_skill_fixture_set_caps_proposal_confidence_and_coverage() -> None:
+    """A one-case skill must not borrow the aggregate report's breadth.
+
+    Per-skill eval quality alone is not enough: confidence and coverage were
+    still read straight off the global eval record, so a skill with a single
+    held-out case scored as confidently as one with eight.
+    """
+    def coverage_and_confidence(example_case_count: int) -> tuple[int, int, list[dict[str, Any]]]:
+        results = [{"skill": "example", "case_id": f"e{i}", "passed": True, "details": {}} for i in range(example_case_count)]
+        results += [{"skill": "filler", "case_id": f"f{i}", "passed": True, "details": {}} for i in range(6)]
+        report = load_report(fixture_root(eval_results_override=results), name=f"reward-{example_case_count}.json")
+        record = {r["proposal_id"]: r for r in records_by_type(report, "proposal_reward")}["skillopt-example-safe"]
+        assert record["components"]["eval_quality_bp"] == 10000, "all cases pass, so the rate is perfect either way"
+        return record["coverage_bp"], record["confidence_bp"], record["warnings"]
+
+    thin_coverage, thin_confidence, thin_warnings = coverage_and_confidence(1)
+    broad_coverage, broad_confidence, broad_warnings = coverage_and_confidence(8)
+
+    assert thin_confidence <= 5500, "single-case skill must not inherit aggregate confidence"
+    # Concrete ceiling, not just a relative comparison: without the per-skill
+    # coverage cap a one-case skill scores 8800 here, and `thin < broad` stays
+    # true anyway, so the relative assertion alone cannot kill that mutation.
+    assert thin_coverage <= 4100, "one-case skill must not borrow the aggregate report's breadth"
+    assert thin_coverage < broad_coverage, "coverage must track the skill's own case count"
+    assert thin_confidence < broad_confidence
+    assert any(w.get("code") == "small_fixture_set" for w in thin_warnings)
+    assert all(w.get("severity") != "hard_gate" for w in thin_warnings if w.get("code") == "small_fixture_set")
+    assert not any(w.get("code") == "small_fixture_set" for w in broad_warnings)
