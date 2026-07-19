@@ -9,7 +9,6 @@ extracted URLs, not full message bodies.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import sys
@@ -17,7 +16,7 @@ import urllib.parse
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import httpx
 
@@ -28,11 +27,13 @@ from newsletter_ingest import (
     select_items,
     _atomic_write_text,
 )
-
-GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
-AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1"
+from gmail_newsletter_fetch import (
+    GMAIL_READONLY_SCOPE,
+    AUTH_URL,
+    TOKEN_URL,
+    GMAIL_API as GMAIL_BASE,
+    _walk_payload,
+)
 
 
 @dataclass(frozen=True)
@@ -146,35 +147,14 @@ def _headers_by_name(payload: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def _decode_body_data(data: str) -> str:
-    if not data:
-        return ""
-    padded = data + "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(padded.encode()).decode("utf-8", errors="replace")
-
-
-def _walk_parts(part: dict[str, Any]) -> Iterable[dict[str, Any]]:
-    yield part
-    for child in part.get("parts") or []:
-        if isinstance(child, dict):
-            yield from _walk_parts(child)
-
-
 def message_to_newsletter(message: dict[str, Any]) -> NewsletterMessage:
     payload = message.get("payload") or {}
     headers = _headers_by_name(payload)
-    chunks: list[str] = []
-    for part in _walk_parts(payload):
-        mime_type = str(part.get("mimeType") or "")
-        if mime_type not in {"text/plain", "text/html"}:
-            continue
-        body = part.get("body") or {}
-        chunks.append(_decode_body_data(str(body.get("data") or "")))
     return NewsletterMessage(
         subject=headers.get("subject", ""),
         sender=headers.get("from", ""),
         received_at=headers.get("date", ""),
-        body="\n".join(c for c in chunks if c),
+        body="\n".join(_walk_payload(payload)),
     )
 
 
