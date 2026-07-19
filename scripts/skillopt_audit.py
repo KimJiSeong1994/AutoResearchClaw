@@ -10,7 +10,6 @@ bodies.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -18,6 +17,12 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from skillopt_common import sha256_text
+except ModuleNotFoundError:  # pragma: no cover - direct path fallback in tests
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from skillopt_common import sha256_text
 
 SCHEMA_VERSION = "skillopt-audit.v1"
 ROOT_KINDS = {
@@ -118,8 +123,7 @@ def relpath(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+# sha256_text imported from skillopt_common
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:

@@ -8,22 +8,33 @@ application and live accepted-lineage writes belong to Phase 4 controlled apply.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
-import tempfile
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
+try:
+    from skillopt_common import (
+        HEX64_RE, ValidationResult,
+        is_relative_to, now_iso,
+        read_json, sha256_text, validate_report_output_path, write_json,
+    )
+except ModuleNotFoundError:  # pragma: no cover - direct path fallback in tests
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from skillopt_common import (
+        HEX64_RE, ValidationResult,
+        is_relative_to, now_iso,
+        read_json, sha256_text, validate_report_output_path, write_json,
+    )
 
 PROPOSAL_SCHEMA = "skillopt-proposal.v1"
 REJECTED_SCHEMA = "skillopt-rejected-edit.v1"
 LINEAGE_SCHEMA = "skillopt-accepted-lineage.v1"
 EDIT_TYPES = {"add", "delete", "replace"}
 RISKS = {"low", "medium", "high"}
-HEX64_RE = re.compile(r"^[a-f0-9]{64}$")
+# HEX64_RE imported from skillopt_common
 SECRET_RE = re.compile(
     r"(?i)(/Users/|(?:^|\s)~/|Mobile Documents|discord(?:app)?\.com/api/webhooks/|"
     r"sk-[A-Za-z0-9_-]{20,}|xox[baprs]-|api[_ -]?key|bot[_ -]?token|"
@@ -76,27 +87,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
 }
 
 
-@dataclass(frozen=True)
-class ValidationResult:
-    ok: bool
-    errors: list[str]
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+# ValidationResult, now_iso, read_json, write_json, sha256_text imported from skillopt_common
 
 
 def rel_display(path_value: str, root: Path) -> str:
@@ -111,36 +102,7 @@ def rel_display(path_value: str, root: Path) -> str:
     return path_value
 
 
-def is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
-        return True
-    except ValueError:
-        return False
-
-
-def validate_report_output_path(path: Path, root: Path, label: str) -> ValidationResult:
-    resolved = path.resolve()
-    protected = [
-        root / ".codex/skills",
-        root / "skills",
-        root / "runtime",
-    ]
-    for protected_root in protected:
-        if is_relative_to(resolved, protected_root):
-            return ValidationResult(False, [f"{label} must not be under protected skill/runtime surfaces"])
-    allowed_report_root = root / ".omx/reports/skillopt"
-    tmp_root = Path("/tmp").resolve()
-    private_tmp_root = Path("/private/tmp").resolve()
-    system_tmp_root = Path(tempfile.gettempdir()).resolve()
-    if (
-        not is_relative_to(resolved, allowed_report_root)
-        and not is_relative_to(resolved, tmp_root)
-        and not is_relative_to(resolved, private_tmp_root)
-        and not is_relative_to(resolved, system_tmp_root)
-    ):
-        return ValidationResult(False, [f"{label} must be under .omx/reports/skillopt or a temporary directory"])
-    return ValidationResult(True, [])
+# is_relative_to and validate_report_output_path imported from skillopt_common
 
 
 def slug(value: str) -> str:
