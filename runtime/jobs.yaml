@@ -467,7 +467,8 @@ jobs:
       - JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH
       - optional runtime/traveler-scout-topics.json or JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH
       - optional runtime/traveler-scoring.json or JIPHYEONJEON_TRAVELER_SCORING_PATH; missing or malformed falls back to committed defaults
-      - optional outcome ledger path JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH; append-only observation and adoption events, advisory only and never auto-tunes scoring
+      - optional outcome ledger path JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH; append-only observation, adoption, and review events, advisory only and never auto-tunes scoring
+      - source-review decisions JSONL beside the source-candidate queue; append-only 집현전-클로 verdicts, terminal approve/reject drop the candidate from the daily report while hold keeps it visible
       - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
       - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
       - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
