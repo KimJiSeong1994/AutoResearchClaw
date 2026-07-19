@@ -410,6 +410,35 @@ def changed_line_count(patch: str) -> int:
     return sum(1 for line in patch.splitlines() if line.strip())
 
 
+def skill_name_from_path(skill_path: str) -> str:
+    """Map a proposal skill path to the skill name used by eval results.
+
+    `.codex/skills/<name>/SKILL.md`, `skills/<name>/SKILL.md`, and
+    `skills/<name>/README.md` all resolve to `<name>`, which is how
+    `skillopt_eval.py` keys each case result.
+    """
+    parts = Path(skill_path).parts
+    for index, part in enumerate(parts):
+        if part == "skills" and index + 1 < len(parts):
+            return parts[index + 1]
+    return Path(skill_path).parent.name
+
+
+def scoped_eval_context(eval_results: list[dict[str, Any]], skill_path: str) -> tuple[int, bool]:
+    """Return (eval_quality_bp, eval_present) for one proposal's target skill.
+
+    Eval coverage is per skill: a proposal must never inherit the pass rate of
+    unrelated skills. A skill with no held-out cases falls back to the same
+    2500 bp `eval_absent` floor the eval-level scorer applies.
+    """
+    target = skill_name_from_path(skill_path)
+    cases = [row for row in eval_results if str(row.get("skill", "")) == target]
+    if not cases:
+        return 2500, False
+    passed = sum(1 for row in cases if row.get("passed"))
+    return clamp((passed * 10000) // len(cases), 0, 10000), True
+
+
 def legacy_rank(proposal: dict[str, Any]) -> list[Any]:
     gaps = set(str(g) for g in proposal.get("source_gap_codes") or [])
     skill_path = str(proposal.get("skill_path", ""))
@@ -462,11 +491,11 @@ def proposal_components(proposal: dict[str, Any], eval_components: dict[str, int
     if eval_present:
         evidence.append("eval_reward:component_context")
     else:
-        warnings.append({"code": "eval_absent", "severity": "warning", "message": "proposal reward has no eval report context"})
+        warnings.append({"code": "eval_absent", "severity": "warning", "message": "target skill has no held-out eval cases"})
         components["eval_quality_bp"] = min(components.get("eval_quality_bp", 0), 3500)
     explanations.extend([
         f"legacy rank tuple is {legacy_rank(proposal)}",
-        "eval_quality component inherits eval report context when present",
+        "eval_quality component follows held-out case pass rate for this skill only",
         "contract_quality component reflects proposal gap scope",
         "safety component applies privacy and secret penalties",
         "stability component penalizes riskier edit operations",
@@ -493,8 +522,8 @@ def proposal_reward_records(args: argparse.Namespace, root: Path, eval_record: d
     if errors:
         return [], errors
     accepted_fps, rejected_fps = lineage_indexes(accepted_rows, rejected_rows)
-    eval_components = (eval_record or {}).get("components") or {key: 5000 for key in COMPONENT_KEYS}
-    eval_present = isinstance(eval_report, dict)
+    global_eval_components = (eval_record or {}).get("components") or {key: 5000 for key in COMPONENT_KEYS}
+    eval_results = extract_eval_results(eval_report)
     audit_hashes = audit_content_hashes(audit_report)
     records: list[dict[str, Any]] = []
     for path in files:
@@ -509,9 +538,12 @@ def proposal_reward_records(args: argparse.Namespace, root: Path, eval_record: d
             records.append(invalid_proposal_record(path, root, generated_at, "proposal JSON is not an object"))
             continue
         fp = proposal_fingerprint(proposal)
-        components, explanations, warnings, penalties, evidence = proposal_components(proposal, eval_components, eval_present, accepted_fps, rejected_fps, raw_privacy_signal)
-        confidence_bp = int((eval_record or {}).get("confidence_bp", 4500)) if eval_present else 3500
-        coverage_bp = int((eval_record or {}).get("coverage_bp", 3000)) if eval_present else 3000
+        skill_eval_quality, skill_eval_present = scoped_eval_context(eval_results, str(proposal.get("skill_path", "")))
+        scoped_components = dict(global_eval_components)
+        scoped_components["eval_quality_bp"] = skill_eval_quality
+        components, explanations, warnings, penalties, evidence = proposal_components(proposal, scoped_components, skill_eval_present, accepted_fps, rejected_fps, raw_privacy_signal)
+        confidence_bp = int((eval_record or {}).get("confidence_bp", 4500)) if skill_eval_present else 3500
+        coverage_bp = int((eval_record or {}).get("coverage_bp", 3000)) if skill_eval_present else 3000
         if len(proposal.get("source_gap_codes") or []) > 0:
             coverage_bp = min(10000, coverage_bp + 800)
         if not HEX64_RE.match(str(proposal.get("baseline_sha256", ""))):
