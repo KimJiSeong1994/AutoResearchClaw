@@ -7,7 +7,6 @@ import json
 import os
 import re
 import sys
-from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -29,6 +28,8 @@ from .post_newsletter import (
     _post_message_with_rate_limit,
     _required_snowflake,
 )
+from .config import _env_flag
+from .miner import _SENSITIVE_QUERY_KEYS, _TRACKING_QUERY_KEYS, clean_text, sanitize_url
 from .publication_trust_gate import PublicationTrustGateError, run_publication_trust_gate
 
 DEFAULT_CARD_NEWS_CHANNEL_ID = ""
@@ -121,43 +122,6 @@ _QUESTION_TRANSFORMS = (
     (re.compile(r"^(.+?)을 측정합니다\.?$"), r"\1이 운영 환경에서도 유지되는가?"),
     (re.compile(r"^(.+?)를 측정합니다\.?$"), r"\1가 운영 환경에서도 유지되는가?"),
 )
-_SENSITIVE_QUERY_KEYS = {
-    "access_token",
-    "auth",
-    "code",
-    "key",
-    "password",
-    "relay_token",
-    "secret",
-    "signature",
-    "sig",
-    "token",
-}
-_TRACKING_QUERY_KEYS = {
-    "eid",
-    "fbclid",
-    "gclid",
-    "igshid",
-    "li",
-    "lipi",
-    "mc_cid",
-    "mc_eid",
-    "mid",
-    "midsig",
-    "midtoken",
-    "mkt_tok",
-    "ref",
-    "source",
-    "t",
-    "trk",
-    "trkemail",
-    "utm",
-    "utm_campaign",
-    "utm_content",
-    "utm_medium",
-    "utm_source",
-    "utm_term",
-}
 _META_DESC_PATTERN = re.compile(
     r"<meta\b(?=[^>]*(?:name|property)\s*=\s*['\"](?:description|og:description|twitter:description)['\"])[^>]*\bcontent\s*=\s*(['\"])(.*?)\1[^>]*>",
     flags=re.IGNORECASE | re.DOTALL,
@@ -246,13 +210,6 @@ class CardNewsQualityGateConfig:
     agent_dedupe_timeout_sec: float = 45.0
 
 
-def _clean(value: object, *, limit: int | None = None) -> str:
-    text = " ".join(str(value or "").split()).strip()
-    if limit is not None and len(text) > limit:
-        return text[: max(0, limit - 1)].rstrip() + "…"
-    return text
-
-
 def _strip_emoji(value: str) -> str:
     return "".join(
         char
@@ -265,11 +222,11 @@ def _strip_emoji(value: str) -> str:
 
 
 def _clean_title(value: object, *, limit: int | None = None) -> str:
-    return _clean(_strip_emoji(str(value or "")), limit=limit)
+    return clean_text(_strip_emoji(str(value or "")), limit=limit)
 
 
 def _clean_multiline(value: object) -> str:
-    lines = [_clean(line) for line in str(value or "").splitlines()]
+    lines = [clean_text(line) for line in str(value or "").splitlines()]
     return "\n".join(line for line in lines if line)
 
 
@@ -299,7 +256,7 @@ def _summary_lines(item: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     if isinstance(raw, list):
         for line in raw:
-            text = _clean(line, limit=160)
+            text = clean_text(line, limit=160)
             if text and text not in lines:
                 lines.append(text)
             if len(lines) == 3:
@@ -308,7 +265,7 @@ def _summary_lines(item: dict[str, Any]) -> list[str]:
 
 
 def _source_name(item: dict[str, Any]) -> str:
-    return _clean(
+    return clean_text(
         item.get("source_name")
         or item.get("sender_name")
         or item.get("newsletter_name")
@@ -369,43 +326,6 @@ def _confidence_bucket(value: object) -> str:
     return "잠정"
 
 
-def _sanitize_public_url(url: str) -> str:
-    text = _clean(url)
-    if not text:
-        return ""
-    for key in _SENSITIVE_QUERY_KEYS:
-        text = re.sub(rf"([?&]){re.escape(key)}=[^&#]*", r"\1", text, flags=re.IGNORECASE)
-    tracking_keys = "|".join(re.escape(key) for key in sorted(_TRACKING_QUERY_KEYS, key=len, reverse=True))
-    text = re.sub(rf"([?&])(?:utm_[^=&]+|{tracking_keys})=[^&#]*", r"\1", text, flags=re.IGNORECASE)
-    while True:
-        compacted = re.sub(r"\?&+", "?", text)
-        compacted = re.sub(r"&&+", "&", compacted)
-        compacted = re.sub(r"[?&](#|$)", r"\1", compacted)
-        compacted = re.sub(r"\?&", "?", compacted)
-        if compacted == text:
-            return text
-        text = compacted
-
-
-def _sanitized_audit_url(url: str) -> str:
-    """Return public URL with tracking/secret params removed for audit storage."""
-    sanitized = _sanitize_public_url(url)
-    if not sanitized:
-        return ""
-    try:
-        parts = urlsplit(sanitized)
-    except ValueError:
-        return ""
-    kept: list[tuple[str, str]] = []
-    blocked = {key.lower() for key in _SENSITIVE_QUERY_KEYS | _TRACKING_QUERY_KEYS}
-    for key, value in parse_qsl(parts.query, keep_blank_values=True):
-        key_lower = key.lower()
-        if key_lower.startswith("utm_") or key_lower in blocked:
-            continue
-        kept.append((key, value))
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept, doseq=True), parts.fragment))
-
-
 def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
@@ -413,7 +333,7 @@ def _hash_text(value: str) -> str:
 def _strip_html(value: str) -> str:
     text = html.unescape(value or "")
     text = _TAG_PATTERN.sub(" ", text)
-    return _clean(text)
+    return clean_text(text)
 
 
 def _extract_public_metadata(markup: str) -> dict[str, str]:
@@ -440,7 +360,7 @@ def _extract_public_metadata(markup: str) -> dict[str, str]:
 
 
 def _should_fetch_public_metadata(url: str) -> bool:
-    lower = _sanitize_public_url(url).lower()
+    lower = sanitize_url(url).lower()
     if not lower.startswith(("http://", "https://")):
         return False
     return not any(pattern in lower for pattern in _SKIP_FETCH_URL_PATTERNS)
@@ -481,13 +401,13 @@ async def enrich_public_metadata(
     candidates = [
         item
         for item in _sort_by_quality([item for item in raw_items if isinstance(item, dict)])
-        if _should_fetch_public_metadata(_clean(item.get("url")))
+        if _should_fetch_public_metadata(clean_text(item.get("url")))
     ][:max_items]
     if not candidates:
         return payload
 
     async def fetch_one(item: dict[str, Any]) -> None:
-        url = _sanitize_public_url(_clean(item.get("url")))
+        url = sanitize_url(item.get("url"))
         if not url:
             return
         try:
@@ -504,13 +424,13 @@ async def enrich_public_metadata(
         if "text/html" not in content_type and "application/xhtml" not in content_type and content_type:
             return
         meta = _extract_public_metadata(response.text[:160_000])
-        description = _clean(meta.get("description"), limit=320)
+        description = clean_text(meta.get("description"), limit=320)
         if _metadata_is_better(item, description):
             item["article_description"] = description
             item["public_excerpt"] = description
             item["metadata_enriched"] = True
         title = _clean_title(meta.get("title"), limit=120)
-        current_title = _clean(item.get("article_title") or item.get("title"))
+        current_title = clean_text(item.get("article_title") or item.get("title"))
         if title and (not current_title or _looks_like_digest_title(current_title)):
             item["article_title"] = title
 
@@ -526,13 +446,13 @@ def _format_footer(
     *,
     reasons: list[str] | None = None,
 ) -> str:
-    parts = [f"— {source}", f"<{_sanitize_public_url(url)}>"]
+    parts = [f"— {source}", f"<{sanitize_url(url)}>"]
     if topic and topic != GENERIC_TOPIC:
         parts.append(f"`{topic}`")
     parts.append(f"`{bucket}`")
     base = " · ".join(parts)
     if reasons:
-        cleaned = [r for r in (_clean(item, limit=40) for item in reasons[:2]) if r]
+        cleaned = [r for r in (clean_text(item, limit=40) for item in reasons[:2]) if r]
         if cleaned:
             label = f"단서 {cleaned[0]}"
             tail = " · ".join([label, *cleaned[1:]])
@@ -560,16 +480,16 @@ def _dedup_paragraphs(paragraphs: list[str]) -> list[str]:
 
 def _richness(item: dict[str, Any], *, raw_title: str) -> str:
     if (
-        _clean(item.get("hook") or item.get("why_now"))
-        or _clean(item.get("core_change") or item.get("claim") or item.get("thesis"))
-        or _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"))
-        or _clean(item.get("why_matters"))
-        or _clean(item.get("evidence"))
-        or _clean(item.get("cta") or item.get("save_point"))
+        clean_text(item.get("hook") or item.get("why_now"))
+        or clean_text(item.get("core_change") or item.get("claim") or item.get("thesis"))
+        or clean_text(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"))
+        or clean_text(item.get("why_matters"))
+        or clean_text(item.get("evidence"))
+        or clean_text(item.get("cta") or item.get("save_point"))
         or _summary_lines(item)
     ):
         return "rich"
-    excerpt = _clean(item.get("public_excerpt") or item.get("article_description"))
+    excerpt = clean_text(item.get("public_excerpt") or item.get("article_description"))
     if excerpt and _clean_title(excerpt).lower() != raw_title.lower():
         return "lean"
     return "skeletal"
@@ -578,7 +498,7 @@ def _richness(item: dict[str, Any], *, raw_title: str) -> str:
 
 
 def _canonical_title_key(item: dict[str, Any]) -> str:
-    title = _clean(item.get("article_title") or item.get("title"), limit=140).lower()
+    title = clean_text(item.get("article_title") or item.get("title"), limit=140).lower()
     return re.sub(r"[^0-9a-z가-힣]+", " ", title).strip()
 
 
@@ -602,7 +522,7 @@ def _substantive_excerpt(item: dict[str, Any], *, raw_title: str) -> str:
 
 
 def _url_quality(url: str) -> int:
-    lower = _sanitize_public_url(url).lower().replace("&amp;", "&")
+    lower = sanitize_url(url).lower().replace("&amp;", "&")
     score = 0
     if any(host in lower for host in ("arxiv.org", "openreview.net", "doi.org", "microsoft.com/en-us/research", "deepmind.google", "openai.com", "anthropic.com", "ai.googleblog.com")):
         score += 8
@@ -624,8 +544,8 @@ def _url_quality(url: str) -> int:
 def _is_non_article_item(item: dict[str, Any]) -> bool:
     haystack = " ".join(
         [
-            _clean(item.get("article_title") or item.get("title")),
-            _sanitize_public_url(_clean(item.get("url"))),
+            clean_text(item.get("article_title") or item.get("title")),
+            sanitize_url(item.get("url")),
         ]
     ).lower()
     return any(term.lower() in haystack for term in _NON_ARTICLE_TERMS)
@@ -636,7 +556,7 @@ def _has_card_evidence(item: dict[str, Any]) -> bool:
     if _summary_lines(item) or _substantive_excerpt(item, raw_title=raw_title):
         return True
     return any(
-        _clean(item.get(field))
+        clean_text(item.get(field))
         for field in ("hook", "why_now", "core_change", "claim", "thesis", "why_matters", "evidence")
     )
 
@@ -644,10 +564,10 @@ def _has_card_evidence(item: dict[str, Any]) -> bool:
 def _is_tech_relevant_item(item: dict[str, Any]) -> bool:
     haystack = " ".join(
         [
-            _clean(item.get("article_title") or item.get("title")),
-            _clean(item.get("source_name") or item.get("sender") or item.get("newsletter_name")),
-            _clean(item.get("primary_topic_display")),
-            _clean(item.get("public_excerpt") or item.get("article_description")),
+            clean_text(item.get("article_title") or item.get("title")),
+            clean_text(item.get("source_name") or item.get("sender") or item.get("newsletter_name")),
+            clean_text(item.get("primary_topic_display")),
+            clean_text(item.get("public_excerpt") or item.get("article_description")),
         ]
     ).lower()
     for term in _TECH_RELEVANCE_TERMS:
@@ -659,18 +579,18 @@ def _is_tech_relevant_item(item: dict[str, Any]) -> bool:
 
 def _item_quality_score(item: dict[str, Any]) -> int:
     raw_title = _raw_title(item)
-    score = _url_quality(_clean(item.get("url")))
+    score = _url_quality(clean_text(item.get("url")))
     if _summary_lines(item):
         score += 20
     for field in ("hook", "why_now", "core_change", "claim", "thesis", "why_matters", "evidence"):
-        if _clean(item.get(field)):
+        if clean_text(item.get(field)):
             score += 8
     excerpt = _substantive_excerpt(item, raw_title=raw_title)
     if excerpt:
         score += min(14, max(5, len(excerpt) // 60))
-    elif _clean(item.get("public_excerpt") or item.get("article_description")):
+    elif clean_text(item.get("public_excerpt") or item.get("article_description")):
         score -= 4
-    if _clean(item.get("primary_topic_display") or GENERIC_TOPIC) == GENERIC_TOPIC:
+    if clean_text(item.get("primary_topic_display") or GENERIC_TOPIC) == GENERIC_TOPIC:
         score -= 2
     if _is_non_article_item(item):
         score -= 30
@@ -712,7 +632,7 @@ def _publishable_card(item: dict[str, Any]) -> bool:
     score = _item_quality_score(item)
     if _is_non_article_item(item):
         return False
-    topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+    topic = clean_text(item.get("primary_topic_display") or GENERIC_TOPIC)
     if topic == GENERIC_TOPIC and not _is_tech_relevant_item(item):
         return False
     if topic == GENERIC_TOPIC and not item.get("metadata_enriched"):
@@ -724,9 +644,6 @@ def _publishable_card(item: dict[str, Any]) -> bool:
     # fully thin synthetic or edge-case archives.
     return False
 
-
-def _env_flag(name: str, default: str = "1") -> bool:
-    return os.environ.get(name, default).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -793,7 +710,7 @@ def _card_news_skip_is_duplicate_related(evaluation: dict[str, Any]) -> bool:
 
 
 def _format_card_news_skip_ops_title(payload: dict[str, Any], evaluation: dict[str, Any]) -> str:
-    run_date = _clean(payload.get("date") or date.today().isoformat())
+    run_date = clean_text(payload.get("date") or date.today().isoformat())
     counts = evaluation.get("counts") if isinstance(evaluation.get("counts"), dict) else {}
     new_count = counts.get("new", "?")
     overlap = counts.get("overlap_ratio", "?")
@@ -808,7 +725,7 @@ def _format_card_news_skip_ops_body(
     audit_path: Path,
     token_source: str,
 ) -> str:
-    run_date = _clean(payload.get("date") or date.today().isoformat())
+    run_date = clean_text(payload.get("date") or date.today().isoformat())
     counts = evaluation.get("counts") if isinstance(evaluation.get("counts"), dict) else {}
     thresholds = evaluation.get("thresholds") if isinstance(evaluation.get("thresholds"), dict) else {}
     reason_codes = [str(reason) for reason in evaluation.get("reason_codes", [])]
@@ -897,7 +814,7 @@ async def _post_card_news_skip_ops_report(
 
 
 def _card_identity_fingerprint(item: dict[str, Any]) -> str:
-    url = _sanitized_audit_url(_clean(item.get("url")))
+    url = sanitize_url(item.get("url"))
     if url:
         return "url:" + _hash_text(url.lower())
     story = _story_key(item) or _canonical_title_key(item)
@@ -907,14 +824,14 @@ def _card_identity_fingerprint(item: dict[str, Any]) -> str:
 def _card_content_fingerprint(item: dict[str, Any]) -> str:
     parts = [
         _title(item),
-        _clean(item.get("primary_topic_display") or GENERIC_TOPIC),
-        _clean(item.get("hook") or item.get("why_now"), limit=360),
-        _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
-        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
-        _clean(item.get("why_matters") or item.get("evidence"), limit=360),
+        clean_text(item.get("primary_topic_display") or GENERIC_TOPIC),
+        clean_text(item.get("hook") or item.get("why_now"), limit=360),
+        clean_text(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
+        clean_text(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
+        clean_text(item.get("why_matters") or item.get("evidence"), limit=360),
         " ".join(_summary_lines(item)),
         _evidence_snippet(item, limit=360),
-        _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
+        clean_text(item.get("public_excerpt") or item.get("article_description"), limit=360),
     ]
     return _hash_text("\n".join(parts).lower())
 
@@ -962,15 +879,15 @@ def _card_similarity_text(item: dict[str, Any]) -> str:
     parts = [
         _raw_title(item),
         _title(item),
-        _clean(item.get("primary_topic_display") or GENERIC_TOPIC),
+        clean_text(item.get("primary_topic_display") or GENERIC_TOPIC),
         _story_key(item),
-        _clean(item.get("hook") or item.get("why_now"), limit=360),
-        _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
-        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
-        _clean(item.get("why_matters") or item.get("evidence"), limit=360),
+        clean_text(item.get("hook") or item.get("why_now"), limit=360),
+        clean_text(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
+        clean_text(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
+        clean_text(item.get("why_matters") or item.get("evidence"), limit=360),
         summary,
         _evidence_snippet(item, limit=360),
-        _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
+        clean_text(item.get("public_excerpt") or item.get("article_description"), limit=360),
     ]
     return " ".join(part for part in parts if part)
 
@@ -1008,13 +925,13 @@ def _agent_context(item: dict[str, Any]) -> dict[str, str]:
     summary = " ".join(str(line) for line in summary_lines if line) if isinstance(summary_lines, list) else ""
     return {
         "title": _title(item),
-        "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=80),
-        "story_key": _clean(_story_key(item), limit=220),
-        "claim": _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
-        "mechanism": _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
-        "evidence": _clean(item.get("why_matters") or item.get("evidence"), limit=360),
-        "summary": _clean(summary, limit=360),
-        "excerpt": _clean(item.get("public_excerpt") or item.get("article_description"), limit=360),
+        "topic": clean_text(item.get("primary_topic_display") or GENERIC_TOPIC, limit=80),
+        "story_key": clean_text(_story_key(item), limit=220),
+        "claim": clean_text(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=360),
+        "mechanism": clean_text(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=360),
+        "evidence": clean_text(item.get("why_matters") or item.get("evidence"), limit=360),
+        "summary": clean_text(summary, limit=360),
+        "excerpt": clean_text(item.get("public_excerpt") or item.get("article_description"), limit=360),
     }
 
 
@@ -1091,7 +1008,7 @@ def _load_recent_published_card_history(
             continue
         if record.get("decision") != "publish":
             continue
-        timestamp = _clean(record.get("timestamp"))
+        timestamp = clean_text(record.get("timestamp"))
         if timestamp:
             try:
                 seen_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -1101,12 +1018,12 @@ def _load_recent_published_card_history(
                 continue
         for card in record.get("cards") or []:
             if isinstance(card, dict):
-                identity = _clean(card.get("identity_fingerprint"))
+                identity = clean_text(card.get("identity_fingerprint"))
                 if identity:
                     identities.add(identity)
                 signature = card.get("content_signature")
                 if isinstance(signature, list):
-                    tokens = {_clean(token) for token in signature if _clean(token)}
+                    tokens = {clean_text(token) for token in signature if clean_text(token)}
                     if tokens:
                         signatures.append(tokens)
     return identities, signatures
@@ -1144,7 +1061,7 @@ def _load_recent_published_agent_contexts(
             continue
         if record.get("decision") != "publish":
             continue
-        timestamp = _clean(record.get("timestamp"))
+        timestamp = clean_text(record.get("timestamp"))
         if timestamp:
             try:
                 seen_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -1158,7 +1075,7 @@ def _load_recent_published_agent_contexts(
             context = card.get("agent_context")
             if not isinstance(context, dict):
                 continue
-            cleaned = {str(key): _clean(value, limit=420) for key, value in context.items() if _clean(value)}
+            cleaned = {str(key): clean_text(value, limit=420) for key, value in context.items() if clean_text(value)}
             if cleaned and _is_useful_agent_context(cleaned):
                 contexts.append(cleaned)
     return contexts
@@ -1360,7 +1277,7 @@ def _evaluate_card_news_quality(
 
 
 def _source_ref(source: Path, payload: dict[str, Any]) -> str:
-    run_date = _clean(payload.get("date"))
+    run_date = clean_text(payload.get("date"))
     if run_date:
         return run_date
     return f"{source.name}:sha256:{_hash_text(str(source))}"
@@ -1369,10 +1286,10 @@ def _source_ref(source: Path, payload: dict[str, Any]) -> str:
 def _audit_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for item in cards:
-        url = _sanitized_audit_url(_clean(item.get("url")))
+        url = sanitize_url(item.get("url"))
         record: dict[str, Any] = {
             "title": _title(item),
-            "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
+            "topic": clean_text(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
             "identity_fingerprint": _card_identity_fingerprint(item),
             "content_fingerprint": _card_content_fingerprint(item),
             "content_signature": _content_signature_hashes(item),
@@ -1382,8 +1299,8 @@ def _audit_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         if url:
             record["url"] = url
-        elif _clean(item.get("url")):
-            record["url_hash"] = _hash_text(_clean(item.get("url")))
+        elif clean_text(item.get("url")):
+            record["url_hash"] = _hash_text(clean_text(item.get("url")))
         records.append(record)
     return records
 
@@ -1401,7 +1318,7 @@ def _build_card_news_audit_record(
     record: dict[str, Any] = {
         "schema_version": 1,
         "timestamp": datetime.now(UTC).isoformat(),
-        "run_date": _clean(payload.get("date") or date.today().isoformat()),
+        "run_date": clean_text(payload.get("date") or date.today().isoformat()),
         "decision": decision,
         "source_ref": _source_ref(source, payload),
         "thresholds": evaluation.get("thresholds", {}),
@@ -1424,7 +1341,7 @@ def _append_card_news_audit(audit_path: Path, record: dict[str, Any]) -> None:
 
 def _semantic_family_key(item: dict[str, Any]) -> str:
     text = " ".join(
-        _clean(item.get(key), limit=240)
+        clean_text(item.get(key), limit=240)
         for key in ("article_title", "title", "public_excerpt", "article_description", "summary", "description")
     )
     if _GRAPH_EMBEDDING_FAMILY_RE.search(text):
@@ -1433,15 +1350,15 @@ def _semantic_family_key(item: dict[str, Any]) -> str:
 
 
 def _sort_by_quality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(items, key=lambda item: (_item_quality_score(item), _url_quality(_clean(item.get("url")))), reverse=True)
+    return sorted(items, key=lambda item: (_item_quality_score(item), _url_quality(clean_text(item.get("url")))), reverse=True)
 
 
-def _topic_groups(items: list[dict[str, Any]]) -> OrderedDict[str, list[dict[str, Any]]]:
-    groups: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+def _topic_groups(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
     for item in items:
-        topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+        topic = clean_text(item.get("primary_topic_display") or GENERIC_TOPIC)
         groups.setdefault(topic, []).append(item)
-    return OrderedDict(
+    return dict(
         sorted(groups.items(), key=lambda pair: (TOPIC_PRIORITY.get(pair[0], 800), -len(pair[1]), pair[0]))
     )
 
@@ -1454,7 +1371,7 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
     for item in _sort_by_quality([item for item in items if _publishable_card(item)]):
         title_key = _canonical_title_key(item)
         story_key = _story_key(item)
-        url = _clean(item.get("url"))
+        url = clean_text(item.get("url"))
         key = title_key or url
         semantic_key = _semantic_family_key(item)
         if (
@@ -1481,7 +1398,7 @@ def _select_cards(items: list[dict[str, Any]], *, max_cards: int) -> list[dict[s
         for _topic, topic_items in _topic_groups(items).items():
             for item in _sort_by_quality(topic_items):
                 title_key = _canonical_title_key(item)
-                url = _clean(item.get("url"))
+                url = clean_text(item.get("url"))
                 key = title_key or url
                 semantic_key = _semantic_family_key(item)
                 if not url or not key or key in seen_titles or (semantic_key and semantic_key in seen_semantic):
@@ -1506,7 +1423,7 @@ def _first_sentence(text: str) -> str:
 def _distinct_topics_in_order(cards: list[dict[str, Any]]) -> list[str]:
     seen: list[str] = []
     for item in cards:
-        topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+        topic = clean_text(item.get("primary_topic_display") or GENERIC_TOPIC)
         if topic and topic not in seen:
             seen.append(topic)
     return sorted(seen, key=lambda t: TOPIC_PRIORITY.get(t, 800))
@@ -1515,15 +1432,15 @@ def _distinct_topics_in_order(cards: list[dict[str, Any]]) -> list[str]:
 def _evidence_snippet(item: dict[str, Any], *, limit: int = 220) -> str:
     raw_title = _raw_title(item)
     candidates: list[str] = [
-        _clean(item.get("hook") or item.get("why_now")),
-        _clean(item.get("core_change") or item.get("claim") or item.get("thesis")),
+        clean_text(item.get("hook") or item.get("why_now")),
+        clean_text(item.get("core_change") or item.get("claim") or item.get("thesis")),
         *_summary_lines(item),
-        _clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism")),
-        _clean(item.get("why_matters") or item.get("evidence")),
+        clean_text(item.get("context") or item.get("mechanism") or item.get("claim_mechanism")),
+        clean_text(item.get("why_matters") or item.get("evidence")),
         _substantive_excerpt(item, raw_title=raw_title),
     ]
     for candidate in candidates:
-        text = _first_sentence(_normalize_register(_clean(candidate, limit=limit)))
+        text = _first_sentence(_normalize_register(clean_text(candidate, limit=limit)))
         if text:
             return text
     return ""
@@ -1545,7 +1462,7 @@ def _korean_takeaway(item: dict[str, Any], *, limit: int = 360) -> str:
             "분포가 다른 도메인에서는 쉽게 흔들린다는 점입니다. ToMA는 이미지-텍스트 쌍을 하나씩 맞추는 데서 "
             "멈추지 않고, 임베딩 공간의 연결·순환 구조를 지속적 호몰로지로 잡아 두 모달리티의 전역 구조를 함께 맞추려 합니다."
         )
-        return _clean(text, limit=limit)
+        return clean_text(text, limit=limit)
 
     if "ai-native products grow differently" in haystack or ("old saas playbook" in haystack and "trust" in haystack):
         text = (
@@ -1553,14 +1470,14 @@ def _korean_takeaway(item: dict[str, Any], *, limit: int = 360) -> str:
             "넣는 데 있습니다. 기존 SaaS가 정해진 워크플로우에 모델을 덧붙였다면, AI-native 제품은 데이터 피드백, "
             "비용 변동성, 사용자 신뢰를 제품 성장의 핵심 변수로 다뤄야 합니다."
         )
-        return _clean(text, limit=limit)
+        return clean_text(text, limit=limit)
 
     if "knowledge graph health" in haystack or "structure before scale" in haystack:
         text = (
             "이 글의 핵심은 지식그래프를 크게 만드는 것보다 먼저 노드·엣지의 품질과 연결 구조를 점검해야 한다는 주장입니다. "
             "GraphRAG에서는 구조가 불안정하면 검색이 빨라질수록 잘못된 근거도 더 빠르게 퍼지므로, 규모보다 상태 진단이 먼저입니다."
         )
-        return _clean(text, limit=limit)
+        return clean_text(text, limit=limit)
 
     if "rag, llm wiki, or gbrain" in haystack or "agent remembers" in haystack:
         text = (
@@ -1568,19 +1485,19 @@ def _korean_takeaway(item: dict[str, Any], *, limit: int = 360) -> str:
             "RAG, 위키형 메모리, 그래프형 기억은 각각 검색 속도, 근거 추적성, 갱신 비용이 다르기 때문에 제품 단계에서는 "
             "정답률보다 기억의 출처와 실패 복구 방식을 함께 봐야 합니다."
         )
-        return _clean(text, limit=limit)
+        return clean_text(text, limit=limit)
 
     if "hybrid search" in haystack and "bm25" in haystack:
         text = (
             "하이브리드 RAG의 요지는 벡터 검색 하나로 근거 검색을 끝내지 않는 데 있습니다. BM25, 임베딩 검색, 재랭킹을 "
             "함께 쓰면 키워드 일치와 의미 유사도를 보완할 수 있지만, 운영 환경에서는 지연시간과 평가 로그 설계가 같이 따라와야 합니다."
         )
-        return _clean(text, limit=limit)
+        return clean_text(text, limit=limit)
 
     if _has_hangul(snippet):
-        return _clean(_normalize_register(snippet), limit=limit)
+        return clean_text(_normalize_register(snippet), limit=limit)
 
-    topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC)
+    topic = clean_text(item.get("primary_topic_display") or GENERIC_TOPIC)
     if topic == "논문/리서치":
         text = (
             f"{_title(item)}는 공개 초록 기준으로 새 방법이나 평가 조건을 제시한 연구 후보입니다. "
@@ -1596,7 +1513,7 @@ def _korean_takeaway(item: dict[str, Any], *, limit: int = 360) -> str:
             f"{_title(item)}는 공개 요약 기준으로 기술 선택의 방향을 보여주는 후보입니다. "
             "본문 판단은 원문이 제시한 조건과 실제 운영 제약을 대조해야 합니다."
         )
-    return _clean(text, limit=limit)
+    return clean_text(text, limit=limit)
 
 
 def _evidence_records(cards: list[dict[str, Any]], *, limit: int = 4) -> list[dict[str, str]]:
@@ -1608,7 +1525,7 @@ def _evidence_records(cards: list[dict[str, Any]], *, limit: int = 4) -> list[di
         records.append(
             {
                 "title": _title(item),
-                "topic": _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
+                "topic": clean_text(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60),
                 "snippet": snippet,
                 "takeaway": _korean_takeaway(item, limit=360),
             }
@@ -1619,7 +1536,7 @@ def _evidence_records(cards: list[dict[str, Any]], *, limit: int = 4) -> list[di
 
 
 def _strip_sentence_end(text: str) -> str:
-    return _clean(text).rstrip(".!?。")
+    return clean_text(text).rstrip(".!?。")
 
 
 def _decision_axis(topics: list[str], records: list[dict[str, str]]) -> str:
@@ -1668,7 +1585,7 @@ def _theme_sentence(cards: list[dict[str, Any]]) -> str:
     if records:
         return f"{records[0]['title']}가 던지는 질문은 {axis}입니다."
     for item in cards:
-        why_now = _clean(item.get("why_now"), limit=240)
+        why_now = clean_text(item.get("why_now"), limit=240)
         if why_now:
             return _normalize_register(_first_sentence(why_now))
     return f"오늘 수집분은 {axis}를 확인해야 하는 후보로 남았습니다."
@@ -1697,7 +1614,7 @@ def _three_line_summary(cards: list[dict[str, Any]], theme: str) -> list[str]:
     else:
         second = f"관건은 {axis}입니다."
     third = f"공개 요약·초록이 있는 {evidence_count}/{len(cards)}건만 본문 근거로 쓰고, 메일 본문·토큰·비밀값은 제외했습니다."
-    return [_clean(first, limit=170), _clean(second, limit=170), _clean(third, limit=170)]
+    return [clean_text(first, limit=170), clean_text(second, limit=170), clean_text(third, limit=170)]
 
 
 def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
@@ -1709,10 +1626,10 @@ def _article_thesis(cards: list[dict[str, Any]], theme: str) -> str:
             f"{record['title']}는 {_strip_sentence_end(record['takeaway'])}라고 해석됩니다"
             for record in records
         )
-        return _clean(f"핵심은 {axis}입니다. 근거는 {basis}.", limit=280)
+        return clean_text(f"핵심은 {axis}입니다. 근거는 {basis}.", limit=280)
     for item in cards:
         claim = _normalize_register(
-            _clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=180)
+            clean_text(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=180)
         )
         if claim:
             return claim
@@ -1738,7 +1655,7 @@ def _argument_structure(cards: list[dict[str, Any]], theme: str) -> list[str]:
         else ""
     )
     return [
-        _clean(observation, limit=240),
+        clean_text(observation, limit=240),
         f"메커니즘: {axis} 때문에 도입자는 모델 성능뿐 아니라 데이터 구조, 메모리 저장 방식, 평가 로그를 함께 설계해야 합니다.",
         f"긴장: 공개 근거가 있는 항목은 {evidence_count}/{len(cards)}건입니다.{tension_tail} 기술 선택을 서두르면 성능 수치보다 운영 비용과 검증 책임이 먼저 누락됩니다.",
         "반론: 공개 요약·초록은 1차 설명이므로 성능 우위나 제품 효과는 원문 실험 조건 확인 전까지 보류합니다.",
@@ -1752,8 +1669,8 @@ def _industry_interpretation(cards: list[dict[str, Any]]) -> str:
     axis = _decision_axis(topics, records)
     lead = records[0]["title"] if records else "이번 브리핑"
     if not topics:
-        return _clean(f"{lead}는 기술 후보를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 함을 보여줍니다.", limit=240)
-    return _clean(
+        return clean_text(f"{lead}는 기술 후보를 바로 채택하기보다 공개 근거와 재현 조건을 먼저 확인해야 함을 보여줍니다.", limit=240)
+    return clean_text(
         f"{lead}의 쟁점은 연구 성과 자체보다 {axis}를 조직이 어떻게 책임질지에 가깝습니다. "
         "현장에서는 데이터 소유권, 인덱스 갱신 주기, 실패 로그, 비용 배분을 정하지 않으면 좋은 모델도 운영 리스크로 바뀝니다.",
         limit=280,
@@ -1763,7 +1680,7 @@ def _industry_interpretation(cards: list[dict[str, Any]]) -> str:
 def _future_questions(cards: list[dict[str, Any]]) -> list[str]:
     questions: list[str] = []
     for record in _evidence_records(cards, limit=4):
-        title = _clean(record["title"], limit=56)
+        title = clean_text(record["title"], limit=56)
         topic = record["topic"]
         if topic == "검색/RAG/지식그래프":
             qtext = f"{title}의 검색 구조는 우리 문서 권한, 최신성, 지연시간 조건에서도 같은 이득을 내는가?"
@@ -1795,13 +1712,13 @@ def _why_now_paragraph(cards: list[dict[str, Any]], theme: str) -> str:
     records = _evidence_records(cards, limit=2)
     axis = _decision_axis(topics, records)
     if len(records) >= 2:
-        return _clean(
+        return clean_text(
             f"{records[0]['title']}는 {records[0]['takeaway']} "
             f"여기에 {records[1]['title']}가 제기한 쟁점까지 붙이면, 이번 브리핑의 질문은 새 도구 소개가 아니라 {axis}입니다.",
             limit=430,
         )
     if records:
-        return _clean(
+        return clean_text(
             f"{records[0]['title']}는 {records[0]['takeaway']} "
             f"그래서 이번 이슈는 단일 링크 소개가 아니라 {axis}라는 운영 질문으로 읽어야 합니다.",
             limit=360,
@@ -1814,7 +1731,7 @@ def _source_basis_sentence(cards: list[dict[str, Any]], *, item_count: int) -> s
     evidence_count = _evidence_count(cards)
     if records:
         titles = ", ".join(record["title"] for record in records)
-        return _clean(
+        return clean_text(
             f"근거: 선별 {len(cards)}건 / 수집 {item_count}건 중 공개 요약·초록이 확인된 "
             f"{evidence_count}건을 본문 근거로 사용했습니다. 대표 근거는 {titles}입니다.",
             limit=260,
@@ -1847,7 +1764,7 @@ def _render_article_header(cards: list[dict[str, Any]], *, run_date: str, item_c
         "",
         "## 논증 구조",
     ]
-    lines.extend(f"{idx}. {_clean(line, limit=210)}" for idx, line in enumerate(argument, start=1))
+    lines.extend(f"{idx}. {clean_text(line, limit=210)}" for idx, line in enumerate(argument, start=1))
     lines += [
         "",
         "## 산업사회학적·현장기반 해석",
@@ -2001,11 +1918,11 @@ def _render_rich_card(
     frame: int = 1,
 ) -> str:
     summary = _summary_lines(item)
-    why_now = _normalize_register(_clean(item.get("hook") or item.get("why_now"), limit=240))
-    claim = _normalize_register(_clean(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=220))
-    mechanism = _normalize_register(_clean(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=220))
-    evidence = _normalize_register(_clean(item.get("why_matters") or item.get("evidence"), limit=220))
-    cta = _normalize_register(_clean(item.get("cta") or item.get("save_point"), limit=180))
+    why_now = _normalize_register(clean_text(item.get("hook") or item.get("why_now"), limit=240))
+    claim = _normalize_register(clean_text(item.get("core_change") or item.get("claim") or item.get("thesis"), limit=220))
+    mechanism = _normalize_register(clean_text(item.get("context") or item.get("mechanism") or item.get("claim_mechanism"), limit=220))
+    evidence = _normalize_register(clean_text(item.get("why_matters") or item.get("evidence"), limit=220))
+    cta = _normalize_register(clean_text(item.get("cta") or item.get("save_point"), limit=180))
 
     if frame == 2:
         paragraphs = _build_frame2_paragraphs(
@@ -2077,7 +1994,7 @@ def _render_lean_card(
         body_parts.extend([takeaway, ""])
     if excerpt:
         if not _has_substring_overlap(takeaway, excerpt, min_len=24):
-            body_parts.extend([f"원문 단서: {_clean(excerpt, limit=180)}", ""])
+            body_parts.extend([f"원문 단서: {clean_text(excerpt, limit=180)}", ""])
     body_parts.extend(
         [
             disclaimer,
@@ -2104,7 +2021,7 @@ def _render_skeletal_card(
             f"수집 제목 기준으로는 {follow_up_topic} 영역에서 `{title_signal}` 문제를 다룹니다. "
             "공개 요약을 가져오지 못해 세부 근거는 원문에서 확인해야 합니다."
         ),
-        f"<{_sanitize_public_url(url)}> · `{bucket}`",
+        f"<{sanitize_url(url)}> · `{bucket}`",
     ]
     return "\n".join(body_parts)
 
@@ -2113,7 +2030,7 @@ def _render_skeletal_card(
 
 def _first_nonempty(values: list[str], *, fallback: str = "") -> str:
     for value in values:
-        cleaned = _clean(value)
+        cleaned = clean_text(value)
         if cleaned:
             return cleaned
     return fallback
@@ -2148,7 +2065,7 @@ def _publication_summary_lines(cards: list[dict[str, Any]]) -> list[str]:
         if question:
             break
     summary.append(question or "다음 실행에서는 원문 근거와 운영 적용 조건을 함께 확인해야 합니다.")
-    return [_clean(line, limit=180) for line in summary[:3]]
+    return [clean_text(line, limit=180) for line in summary[:3]]
 
 
 def _publication_header(cards: list[dict[str, Any]], *, run_date: str, total_count: int) -> str:
@@ -2198,7 +2115,7 @@ def _render_card_news_messages_from_cards(
     *,
     item_count: int,
 ) -> list[str]:
-    run_date = _clean(payload.get("date") or date.today().isoformat())
+    run_date = clean_text(payload.get("date") or date.today().isoformat())
 
     header = _render_article_header(cards, run_date=run_date, item_count=item_count)
     messages = [header]
@@ -2207,15 +2124,15 @@ def _render_card_news_messages_from_cards(
     for item in cards:
         raw_title = _raw_title(item)
         title = _title(item)
-        topic = _clean(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60)
+        topic = clean_text(item.get("primary_topic_display") or GENERIC_TOPIC, limit=60)
         source = _source_name(item)
-        url = _clean(item.get("url"))
+        url = clean_text(item.get("url"))
         bucket = _confidence_bucket(item.get("topic_confidence"))
         raw_reasons = item.get("topic_reasons") or []
         reasons: list[str] = []
         if isinstance(raw_reasons, list):
             for raw in raw_reasons:
-                cleaned = _clean(raw, limit=40)
+                cleaned = clean_text(raw, limit=40)
                 if cleaned and cleaned not in reasons:
                     reasons.append(cleaned)
                 if len(reasons) >= 2:
@@ -2384,7 +2301,7 @@ async def _create_forum_card_news_thread(
     max_retries: int = 4,
 ) -> str:
     payload: dict[str, Any] = {
-        "name": _clean(name, limit=90),
+        "name": clean_text(name, limit=90),
         "auto_archive_duration": 1440,
         "message": {
             "content": content,
@@ -2564,7 +2481,7 @@ async def run() -> None:
                     client,
                     forum_url,
                     headers=headers,
-                    name=f"{_clean(payload.get('date') or date.today().isoformat())} 기술 브리핑 카드뉴스",
+                    name=f"{clean_text(payload.get('date') or date.today().isoformat())} 기술 브리핑 카드뉴스",
                     content=header_chunks[0],
                     hero_image_path=hero_image_path,
                 )

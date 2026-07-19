@@ -8,15 +8,26 @@ external systems.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
 import tempfile
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from skillopt_common import (
+        HEX64_RE, LOW_RISK_GAPS, ValidationResult,
+        changed_line_count, is_relative_to, now_iso,
+        read_json, sha256_text, validate_report_output_path,
+    )
+except ModuleNotFoundError:  # pragma: no cover - direct path fallback in tests
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from skillopt_common import (
+        HEX64_RE, LOW_RISK_GAPS, ValidationResult,
+        changed_line_count, is_relative_to, now_iso,
+        read_json, sha256_text, validate_report_output_path,
+    )
 
 SCHEMA_VERSION = "skillopt-reward.v1"
 COMPONENT_KEYS = (
@@ -37,9 +48,8 @@ WEIGHTS = {
     "lineage_bp": 700,
     "runtime_risk_bp": 900,
 }
-LOW_RISK_GAPS = {"missing_verification", "missing_input_contract", "weak_output_contract"}
+# LOW_RISK_GAPS and HEX64_RE imported from skillopt_common
 SIDE_EFFECT_PATH_RE = re.compile(r"(?i)(runtime/|deploy|service|bot|bridge|hermes|discord|ec2|aws|cron|crontab)")
-HEX64_RE = re.compile(r"^[a-f0-9]{64}$")
 FORBIDDEN_RE = re.compile(
     r"(?i)(/Users/|(?:^|[\s\"'])~/|Mobile Documents|discord(?:app)?\.com/api/webhooks/|"
     r"https://hooks\.slack\.com/services/|sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]+|"
@@ -50,14 +60,7 @@ PRIVATE_PATH_RE = re.compile(r"/Users/[^\s\"'`|,}]+")
 HOME_PATH_RE = re.compile(r"(?:(?<=\s)|^)~/[^\s\"'`|,}]+")
 
 
-@dataclass(frozen=True)
-class ValidationResult:
-    ok: bool
-    errors: list[str]
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+# ValidationResult and now_iso imported from skillopt_common
 
 
 def clamp(value: int, low: int, high: int) -> int:
@@ -68,16 +71,15 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+# sha256_text imported from skillopt_common
 
 
 def deterministic_id(prefix: str, basis: Any, length: int = 16) -> str:
     return f"{prefix}-{sha256_text(canonical_json(basis))[:length]}"
 
 
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+# read_json imported from skillopt_common
+# write_json kept local: omits sort_keys (diverges from common's sort_keys=True variant)
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -85,12 +87,7 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
-        return True
-    except ValueError:
-        return False
+# is_relative_to imported from skillopt_common
 
 
 def rel_display(path_value: str | Path, root: Path) -> str:
@@ -141,17 +138,7 @@ def privacy_errors(record: Any) -> list[str]:
     return ["record contains forbidden private path/token/webhook/mailbox-only content"] if contains_forbidden(record) else []
 
 
-def validate_report_output_path(path: Path, root: Path, label: str) -> ValidationResult:
-    resolved = path.resolve()
-    protected = [root / ".codex/skills", root / "skills", root / "runtime"]
-    for protected_root in protected:
-        if is_relative_to(resolved, protected_root):
-            return ValidationResult(False, [f"{label} must not be under protected skill/runtime surfaces"])
-    allowed_report_root = root / ".omx/reports/skillopt"
-    tmp_roots = {Path("/tmp").resolve(), Path("/private/tmp").resolve(), Path(tempfile.gettempdir()).resolve()}
-    if not is_relative_to(resolved, allowed_report_root) and not any(is_relative_to(resolved, tmp) for tmp in tmp_roots):
-        return ValidationResult(False, [f"{label} must be under .omx/reports/skillopt or a temporary directory"])
-    return ValidationResult(True, [])
+# validate_report_output_path imported from skillopt_common
 
 
 def validate_input_path(path: Path, root: Path, label: str) -> ValidationResult:
@@ -406,8 +393,32 @@ def proposal_fingerprint(proposal: dict[str, Any]) -> str:
     return sha256_text(canonical_json(basis))
 
 
-def changed_line_count(patch: str) -> int:
-    return sum(1 for line in patch.splitlines() if line.strip())
+# changed_line_count imported from skillopt_common
+
+
+def skill_name_from_path(skill_path: str) -> str:
+    """Skill name as `skillopt_eval.py` keys its case results.
+
+    Every auditable path is `<root>/<name>/{SKILL,README}.md`, so the parent
+    directory is the name.
+    """
+    return Path(skill_path).parent.name
+
+
+def scoped_eval_context(eval_results: list[dict[str, Any]], skill_path: str) -> tuple[int, int]:
+    """Return (eval_quality_bp, case_count) for a proposal's target skill.
+
+    Eval coverage is per skill: a proposal must never inherit the pass rate of
+    unrelated skills. A skill with no held-out cases gets the same 2500 bp
+    `eval_absent` floor the eval-level scorer applies, and its case count holds
+    confidence and coverage down instead of borrowing the report's breadth.
+    """
+    target = skill_name_from_path(skill_path)
+    cases = [row for row in eval_results if str(row.get("skill", "")) == target]
+    if not cases:
+        return 2500, 0
+    passed = sum(1 for row in cases if row.get("passed"))
+    return clamp((passed * 10000) // len(cases), 0, 10000), len(cases)
 
 
 def legacy_rank(proposal: dict[str, Any]) -> list[Any]:
@@ -462,11 +473,12 @@ def proposal_components(proposal: dict[str, Any], eval_components: dict[str, int
     if eval_present:
         evidence.append("eval_reward:component_context")
     else:
-        warnings.append({"code": "eval_absent", "severity": "warning", "message": "proposal reward has no eval report context"})
+        warnings.append({"code": "eval_absent", "severity": "warning", "message": "target skill has no held-out eval cases"})
+        # Backstop for callers passing unscoped components; scoped_eval_context already returns 2500.
         components["eval_quality_bp"] = min(components.get("eval_quality_bp", 0), 3500)
     explanations.extend([
         f"legacy rank tuple is {legacy_rank(proposal)}",
-        "eval_quality component inherits eval report context when present",
+        "eval_quality component follows held-out case pass rate for this skill only",
         "contract_quality component reflects proposal gap scope",
         "safety component applies privacy and secret penalties",
         "stability component penalizes riskier edit operations",
@@ -493,8 +505,8 @@ def proposal_reward_records(args: argparse.Namespace, root: Path, eval_record: d
     if errors:
         return [], errors
     accepted_fps, rejected_fps = lineage_indexes(accepted_rows, rejected_rows)
-    eval_components = (eval_record or {}).get("components") or {key: 5000 for key in COMPONENT_KEYS}
-    eval_present = isinstance(eval_report, dict)
+    global_eval_components = (eval_record or {}).get("components") or {key: 5000 for key in COMPONENT_KEYS}
+    eval_results = extract_eval_results(eval_report)
     audit_hashes = audit_content_hashes(audit_report)
     records: list[dict[str, Any]] = []
     for path in files:
@@ -509,9 +521,19 @@ def proposal_reward_records(args: argparse.Namespace, root: Path, eval_record: d
             records.append(invalid_proposal_record(path, root, generated_at, "proposal JSON is not an object"))
             continue
         fp = proposal_fingerprint(proposal)
-        components, explanations, warnings, penalties, evidence = proposal_components(proposal, eval_components, eval_present, accepted_fps, rejected_fps, raw_privacy_signal)
-        confidence_bp = int((eval_record or {}).get("confidence_bp", 4500)) if eval_present else 3500
-        coverage_bp = int((eval_record or {}).get("coverage_bp", 3000)) if eval_present else 3000
+        skill_eval_quality, skill_case_count = scoped_eval_context(eval_results, str(proposal.get("skill_path", "")))
+        scoped_components = dict(global_eval_components)
+        scoped_components["eval_quality_bp"] = skill_eval_quality
+        components, explanations, warnings, penalties, evidence = proposal_components(proposal, scoped_components, bool(skill_case_count), accepted_fps, rejected_fps, raw_privacy_signal)
+        confidence_bp = int((eval_record or {}).get("confidence_bp", 4500)) if skill_case_count else 3500
+        coverage_bp = int((eval_record or {}).get("coverage_bp", 3000)) if skill_case_count else 3000
+        if skill_case_count:
+            # Breadth is per skill too: a one-case skill must not borrow the
+            # aggregate report's confidence. Mirrors the eval-level case term.
+            coverage_bp = min(coverage_bp, clamp(2500 + min(skill_case_count, 8) * 750, 0, 10000))
+            if skill_case_count < 3:
+                confidence_bp = min(confidence_bp, 5500)
+                warnings.append({"code": "small_fixture_set", "severity": "warning", "message": f"target skill has only {skill_case_count} held-out case(s)"})
         if len(proposal.get("source_gap_codes") or []) > 0:
             coverage_bp = min(10000, coverage_bp + 800)
         if not HEX64_RE.match(str(proposal.get("baseline_sha256", ""))):

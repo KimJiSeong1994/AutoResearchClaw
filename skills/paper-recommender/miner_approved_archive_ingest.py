@@ -23,31 +23,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 import newsletter_ingest
 
 _APPROVED_TAG = "approved-by-jiphyeonjeon-claw"
-_FORBIDDEN_KEYS = {
-    "raw_provider_payload",
-    "raw_transcript",
-    "caption_text",
-    "raw_caption",
-    "audio_bytes",
-    "audio_path",
-    "video_bytes",
-    "private_body",
-    "credential",
-    "credentials",
-    "access_token",
-    "refresh_token",
-}
-
-
-def _contains_forbidden_key(value: object) -> bool:
-    if isinstance(value, dict):
-        return any(str(key) in _FORBIDDEN_KEYS or _contains_forbidden_key(child) for key, child in value.items())
-    if isinstance(value, list):
-        return any(_contains_forbidden_key(child) for child in value)
-    if isinstance(value, str):
-        lower = value.lower()
-        return any(marker in lower for marker in ("token=", "access_token=", "refresh_token=", "secret=", "credential="))
-    return False
+_contains_forbidden_key = newsletter_ingest._contains_content_analysis_forbidden  # noqa: SLF001
 
 
 def _clean(value: object, *, limit: int = 700) -> str:

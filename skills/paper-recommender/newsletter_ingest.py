@@ -1401,11 +1401,6 @@ def _cardnews_hook(topic: str, topic_items: list[dict[str, str]]) -> str:
     return f"{topic} 흐름을 카드 단위로 빠르게 점검할 때입니다."
 
 
-def _cardnews_cta(title: str, topic: str) -> str:
-    target = title or topic or "원문"
-    return f"저장 후 {target}의 방법·평가·적용 조건을 원문에서 재확인하세요."
-
-
 def _representative_item(items: list[dict[str, str]]) -> dict[str, str]:
     for item in items:
         if item.get("url"):

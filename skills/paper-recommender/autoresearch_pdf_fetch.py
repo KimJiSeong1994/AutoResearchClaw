@@ -36,6 +36,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from wiki_publish import _parse_paper_bullets  # noqa: E402
+
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 PaperWiki-AutoResearch/1.0"
@@ -189,44 +195,13 @@ def items_from_raw_json(date_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
-_BULLET_RE = re.compile(
-    r"^- \*\*(?P<title>[^*]+?)\*\*  _\((?P<meta>[^)]+)\)_\n"
-    r"(?P<rest>(?:  - [^\n]*\n)*)",
-    re.MULTILINE,
-)
-
-
 def items_from_papers_md(date_dir: Path) -> list[dict[str, Any]]:
     p = date_dir / "daily-research-papers.md"
     if not p.exists():
         return []
     text = p.read_text(encoding="utf-8")
-    out: list[dict[str, Any]] = []
-    for bm in _BULLET_RE.finditer(text):
-        title = bm.group("title").strip().replace("\\|", "|")
-        meta_parts = [s.strip() for s in bm.group("meta").split("·")]
-        source = meta_parts[0] if meta_parts else ""
-        year: int | None = None
-        for s in meta_parts[1:]:
-            try:
-                year = int(s)
-                break
-            except ValueError:
-                continue
-        rest = bm.group("rest")
-        url_m = re.search(r"  - \[(https?://[^\]]+)\]\(", rest)
-        url = url_m.group(1) if url_m else None
-        arxiv_m = re.search(r"  - arxiv: `([^`]+)`", rest)
-        arxiv_id = arxiv_m.group(1) if arxiv_m else None
-        doi_m = re.search(r"  - doi: `([^`]+)`", rest)
-        doi = doi_m.group(1) if doi_m else None
-        ab_m = re.search(r"^  - _([^\n]+)_\s*$", rest, re.MULTILINE)
-        abstract = ab_m.group(1) if ab_m else None
-        out.append({
-            "title": title, "source": source, "year": year, "url": url,
-            "arxiv_id": arxiv_id, "doi": doi, "abstract": abstract,
-        })
-    return out
+    _keep = {"title", "source", "year", "url", "arxiv_id", "doi", "abstract"}
+    return [{k: v for k, v in paper.items() if k in _keep} for paper in _parse_paper_bullets(text)]
 
 
 def items_for_date(date_dir: Path) -> list[dict[str, Any]]:

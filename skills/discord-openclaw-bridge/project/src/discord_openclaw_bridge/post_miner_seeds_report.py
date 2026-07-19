@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from .config import _load_dotenv
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPS_REPORT_CHANNEL_ID = "1502980129343672504"  # 운영리포팅 forum
@@ -56,16 +58,6 @@ def _resolve_bot_token() -> tuple[str, str]:
 class ReportConfigError(RuntimeError):
     """Raised when required runtime configuration is missing."""
 
-
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _kst_today_label(run_at_iso: str) -> str:

@@ -89,7 +89,12 @@ def proposal(
     return payload
 
 
-def fixture_root(*, tiny_eval: bool = False) -> Path:
+def fixture_root(
+    *,
+    tiny_eval: bool = False,
+    extra_candidates: list[dict[str, Any]] | None = None,
+    eval_results_override: list[dict[str, Any]] | None = None,
+) -> Path:
     tmp = tempfile.TemporaryDirectory()
     _TEMPS.append(tmp)
     root = Path(tmp.name)
@@ -131,10 +136,18 @@ Use this skill for SkillOpt reward tests.
     ]
     if tiny_eval:
         eval_results = eval_results[:1]
+    if eval_results_override is not None:
+        eval_results = eval_results_override
+    passed_count = sum(1 for row in eval_results if row.get("passed"))
     eval_report = {
         "schema_version": "skillopt-eval.v1",
         "generated_at": "2026-06-29T00:00:00+09:00",
-        "summary": {"total": len(eval_results), "passed": len(eval_results), "failed": 0, "status": "PASS"},
+        "summary": {
+            "total": len(eval_results),
+            "passed": passed_count,
+            "failed": len(eval_results) - passed_count,
+            "status": "PASS" if passed_count == len(eval_results) else "FAIL",
+        },
         "results": eval_results,
         "acceptance_policy": {"automatic_accept": False, "requires_reviewer_gate": True},
     }
@@ -166,6 +179,7 @@ Use this skill for SkillOpt reward tests.
             changed_lines=1,
         ),
     ]
+    candidates.extend(extra_candidates or [])
     for item in candidates:
         dump(candidate_dir / item["skill"] / f'{item["proposal_id"]}.json', item)
 
@@ -372,3 +386,101 @@ def test_reward_is_advisory_and_cannot_mark_unsafe_stale_or_private_candidates_a
     safe_record = by_id["skillopt-example-safe"]
     assert safe_record.get("accepted") is not True
     assert safe_record.get("approval_status", "advisory") in {"advisory", "rank_only", "pending"}
+
+
+def test_skill_name_from_path_handles_codex_and_runtime_layouts() -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import skillopt_reward
+    finally:
+        sys.path.pop(0)
+
+    assert skillopt_reward.skill_name_from_path(".codex/skills/academic-technical-filter/SKILL.md") == "academic-technical-filter"
+    assert skillopt_reward.skill_name_from_path("skills/discord-openclaw-bridge/SKILL.md") == "discord-openclaw-bridge"
+    assert skillopt_reward.skill_name_from_path("skills/discord-openclaw-bridge/README.md") == "discord-openclaw-bridge"
+    assert skillopt_reward.skill_name_from_path("skills/paper-recommender/SKILL.md") == "paper-recommender"
+
+
+def test_proposal_targeting_skill_without_fixtures_does_not_inherit_eval_quality() -> None:
+    """A proposal must never borrow the pass rate of an unrelated skill.
+
+    Regression: `components = dict(eval_components)` gave every proposal the
+    global eval score, so skills/discord-openclaw-bridge (zero fixtures) scored
+    eval_quality_bp=10000 off three unrelated skills passing 8/8.
+    """
+    uncovered = proposal(
+        proposal_id="skillopt-uncovered-safe",
+        fingerprint=sha256ish("a"),
+        skill_path="skills/uncovered-skill/SKILL.md",
+        changed_lines=3,
+    )
+    uncovered["skill"] = "uncovered-skill"
+    root = fixture_root(extra_candidates=[uncovered])
+    report = load_report(root)
+    by_id = {record["proposal_id"]: record for record in records_by_type(report, "proposal_reward")}
+
+    record = by_id["skillopt-uncovered-safe"]
+    assert record["components"]["eval_quality_bp"] == 2500
+    assert record["confidence_bp"] == 3500
+    assert record["coverage_bp"] <= 3800
+    assert any(warning.get("code") == "eval_absent" for warning in record["warnings"])
+
+    covered = by_id["skillopt-example-safe"]
+    assert covered["components"]["eval_quality_bp"] == 10000
+    assert record["score_bp"] < covered["score_bp"]
+
+
+def test_proposal_eval_quality_follows_per_skill_pass_rate() -> None:
+    other = proposal(
+        proposal_id="skillopt-other-safe",
+        fingerprint=sha256ish("b"),
+        skill_path=".codex/skills/other/SKILL.md",
+        changed_lines=3,
+    )
+    other["skill"] = "other"
+    root = fixture_root(
+        extra_candidates=[other],
+        eval_results_override=[
+            {"skill": "example", "case_id": "e1", "passed": True, "details": {}},
+            {"skill": "example", "case_id": "e2", "passed": True, "details": {}},
+            {"skill": "example", "case_id": "e3", "passed": True, "details": {}},
+            {"skill": "example", "case_id": "e4", "passed": False, "details": {}},
+            {"skill": "other", "case_id": "o1", "passed": True, "details": {}},
+            {"skill": "other", "case_id": "o2", "passed": True, "details": {}},
+        ],
+    )
+    report = load_report(root)
+    by_id = {record["proposal_id"]: record for record in records_by_type(report, "proposal_reward")}
+
+    assert by_id["skillopt-example-safe"]["components"]["eval_quality_bp"] == 7500
+    assert by_id["skillopt-other-safe"]["components"]["eval_quality_bp"] == 10000
+
+
+def test_thin_per_skill_fixture_set_caps_proposal_confidence_and_coverage() -> None:
+    """A one-case skill must not borrow the aggregate report's breadth.
+
+    Per-skill eval quality alone is not enough: confidence and coverage were
+    still read straight off the global eval record, so a skill with a single
+    held-out case scored as confidently as one with eight.
+    """
+    def coverage_and_confidence(example_case_count: int) -> tuple[int, int, list[dict[str, Any]]]:
+        results = [{"skill": "example", "case_id": f"e{i}", "passed": True, "details": {}} for i in range(example_case_count)]
+        results += [{"skill": "filler", "case_id": f"f{i}", "passed": True, "details": {}} for i in range(6)]
+        report = load_report(fixture_root(eval_results_override=results), name=f"reward-{example_case_count}.json")
+        record = {r["proposal_id"]: r for r in records_by_type(report, "proposal_reward")}["skillopt-example-safe"]
+        assert record["components"]["eval_quality_bp"] == 10000, "all cases pass, so the rate is perfect either way"
+        return record["coverage_bp"], record["confidence_bp"], record["warnings"]
+
+    thin_coverage, thin_confidence, thin_warnings = coverage_and_confidence(1)
+    broad_coverage, broad_confidence, broad_warnings = coverage_and_confidence(8)
+
+    assert thin_confidence <= 5500, "single-case skill must not inherit aggregate confidence"
+    # Concrete ceiling, not just a relative comparison: without the per-skill
+    # coverage cap a one-case skill scores 8800 here, and `thin < broad` stays
+    # true anyway, so the relative assertion alone cannot kill that mutation.
+    assert thin_coverage <= 4100, "one-case skill must not borrow the aggregate report's breadth"
+    assert thin_coverage < broad_coverage, "coverage must track the skill's own case count"
+    assert thin_confidence < broad_confidence
+    assert any(w.get("code") == "small_fixture_set" for w in thin_warnings)
+    assert all(w.get("severity") != "hard_gate" for w in thin_warnings if w.get("code") == "small_fixture_set")
+    assert not any(w.get("code") == "small_fixture_set" for w in broad_warnings)

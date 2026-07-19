@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from ._shared import _read_jsonl_rows
+from .config import _load_dotenv
 from .miner import read_jsonl, sanitize_url
 from .seeds import DEFAULT_SEEDS_PATH
 from .traveler import default_source_queue_path
@@ -71,16 +73,6 @@ class ReportItem:
     scout_priority: str = ""
 
 
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
 
 def _host(url: str) -> str:
     try:
@@ -88,15 +80,6 @@ def _host(url: str) -> str:
     except ValueError:
         return ""
 
-
-def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    try:
-        return [row for row in read_jsonl(path) if isinstance(row, dict)]
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("could not read jsonl %s: %s", path, exc)
-        return []
 
 
 def _row_url(row: dict[str, Any]) -> str:

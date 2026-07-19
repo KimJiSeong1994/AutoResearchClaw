@@ -25,7 +25,9 @@ from urllib.parse import quote_plus
 
 import httpx
 
+from .config import _load_dotenv
 from .miner import clean_text, read_jsonl, sanitize_url
+from ._shared import _read_jsonl_rows
 from .traveler_evidence import append_evidence, collect_evidence_for_url, default_evidence_path
 from .traveler import (
     TravelerRecordResult,
@@ -111,26 +113,6 @@ class DiscoveryProvider(Protocol):
     async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:
         ...
 
-
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    try:
-        return [row for row in read_jsonl(path) if isinstance(row, dict)]
-    except (OSError, json.JSONDecodeError) as exc:
-        LOG.warning("could not read jsonl %s: %s", path, exc)
-        return []
 
 
 def _safe_candidate_queue_path(raw_path: object, *, default_candidate_queue: Path) -> Path:
@@ -441,14 +423,11 @@ class StaticTechnicalSourceProvider:
         ("arXiv cs.AI recent submissions", "https://arxiv.org/list/cs.AI/recent", "conference_feed", "arXiv official recent list for AI papers."),
         ("arXiv cs.CL recent submissions", "https://arxiv.org/list/cs.CL/recent", "conference_feed", "arXiv official recent list for computational linguistics papers."),
         ("OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research announcements and papers."),
-        ("Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public research blog with recurring technical posts."),
-        ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface."),
+        ("Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public AI and systems research blog."),
+        ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."),
         ("Hugging Face Papers", "https://huggingface.co/papers", "article_hub", "Public daily paper discovery hub."),
         ("Papers with Code Latest", "https://paperswithcode.com/latest", "article_hub", "Public paper and code trend hub."),
         ("OpenReview recent activity", "https://openreview.net/", "conference_feed", "Public conference and workshop paper review platform."),
-        ("OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research publication surface for AI systems."),
-        ("Google Research Blog", "https://research.google/blog/", "research_lab_blog", "Official public AI and systems research blog."),
-        ("Anthropic Research", "https://www.anthropic.com/research", "research_lab_blog", "Official public research publication surface for model safety and AI systems."),
         ("Microsoft Research Blog", "https://www.microsoft.com/en-us/research/blog/", "research_lab_blog", "Official public research blog with recurring AI and systems posts."),
         ("Meta AI Research", "https://ai.meta.com/research/", "research_lab_blog", "Official public AI research publication surface."),
         ("T2-RAGBench", "https://aclanthology.org/2026.eacl-long.8/", "paper_page", "ACL Anthology paper page for text-and-table retrieval augmented generation evaluation benchmark."),

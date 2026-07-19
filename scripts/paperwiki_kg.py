@@ -11,9 +11,7 @@ import argparse
 import calendar
 import hashlib
 import json
-import os
 import re
-import shutil
 import sqlite3
 import sys
 import time
@@ -837,6 +835,43 @@ def freshness_score(first_seen_epoch: float | None, as_of_epoch: float, half_lif
     return max(0.05, min(1.0, 0.5 ** (age_days / hl)))
 
 
+def row_allowed(row: sqlite3.Row, args: argparse.Namespace) -> bool:
+    """Trust-tier gate shared by cmd_query and cmd_recommend."""
+    trust = row["trust_tier"]
+    if trust == "trusted":
+        return True
+    if trust == "raw" and args.include_raw:
+        return True
+    if trust == "report" and args.include_reports:
+        return True
+    if args.include_untrusted:
+        return True
+    return False
+
+
+def result_from_chunk(row: sqlite3.Row, con: sqlite3.Connection, *, rank: float, reason_prefix: str = "fts") -> dict[str, Any]:
+    """Build a result dict from a KG chunk row.
+
+    reason_prefix selects the edge-reason label prefix; cmd_query passes
+    "fts" (the default) for FTS hits and a graph-hop label for expanded
+    chunks; cmd_recommend always uses the "fts" default.
+    """
+    edge_rows = con.execute(
+        "SELECT raw_target,resolution_state,target_text FROM kg_edges WHERE source_id=? AND tombstone=0 LIMIT 8",
+        (row["source_id"],),
+    ).fetchall()
+    return {
+        "path": row["path"], "title": row["title"], "chunk_id": row["chunk_id"],
+        "line_start": row["line_start"], "line_end": row["line_end"],
+        "score": rank,
+        "trust_tier": row["trust_tier"], "source_hash": row["source_hash"],
+        "edge_reasons": [f"{reason_prefix}:{e['resolution_state']}:{e['raw_target']}" for e in edge_rows],
+        "citations": [{"path": row["path"], "line_start": row["line_start"], "line_end": row["line_end"]}],
+        "warnings": [] if row["trust_tier"] == "trusted" else ["untrusted_or_opt_in_source"],
+        "excerpt": row["text"][:500],
+    }
+
+
 def cmd_query(args: argparse.Namespace) -> int:
     db = Path(args.db).expanduser()
     vault = Path(args.vault).expanduser().resolve() if args.vault else None
@@ -856,31 +891,6 @@ def cmd_query(args: argparse.Namespace) -> int:
         print_json_or_markdown({"ok": False, "fresh": False, "error": "missing_db", "results": []}, args.format)
         return code
     con = connect(db)
-    def row_allowed(row: sqlite3.Row) -> bool:
-        trust = row["trust_tier"]
-        if trust == "trusted":
-            return True
-        if trust == "raw" and args.include_raw:
-            return True
-        if trust == "report" and args.include_reports:
-            return True
-        if args.include_untrusted:
-            return True
-        return False
-
-    def result_from_chunk(row: sqlite3.Row, *, rank: float, reason_prefix: str = "fts") -> dict[str, Any]:
-        edge_rows = con.execute("SELECT raw_target,resolution_state,target_text FROM kg_edges WHERE source_id=? AND tombstone=0 LIMIT 8", (row["source_id"],)).fetchall()
-        return {
-            "path": row["path"], "title": row["title"], "chunk_id": row["chunk_id"],
-            "line_start": row["line_start"], "line_end": row["line_end"],
-            "score": rank,
-            "trust_tier": row["trust_tier"], "source_hash": row["source_hash"],
-            "edge_reasons": [f"{reason_prefix}:{e['resolution_state']}:{e['raw_target']}" for e in edge_rows],
-            "citations": [{"path": row["path"], "line_start": row["line_start"], "line_end": row["line_end"]}],
-            "warnings": [] if row["trust_tier"] == "trusted" else ["untrusted_or_opt_in_source"],
-            "excerpt": row["text"][:500],
-        }
-
     match = sql_match_query(args.query)
     try:
         rows = con.execute("""
@@ -906,7 +916,7 @@ def cmd_query(args: argparse.Namespace) -> int:
             seen_source_ids: set[str] = set()
             for row in rows:
                 if (
-                    not row_allowed(row)
+                    not row_allowed(row, args)
                     or row["chunk_id"] in cand_seen
                     or row["path"].startswith("pages/interests/")
                 ):
@@ -937,7 +947,7 @@ def cmd_query(args: argparse.Namespace) -> int:
                     for chunk in chunks:
                         if (
                             chunk["chunk_id"] in cand_seen
-                            or not row_allowed(chunk)
+                            or not row_allowed(chunk, args)
                             or chunk["path"].startswith("pages/interests/")
                         ):
                             continue
@@ -954,7 +964,7 @@ def cmd_query(args: argparse.Namespace) -> int:
                 fit, matched, ireasons = interest_fit(con, row, interests, node_cache)
                 fit_norm = fit / (weight_sum + EPS)
                 final = base_norm + strength * min(1.0, fit_norm)
-                result = result_from_chunk(row, rank=base)
+                result = result_from_chunk(row, con, rank=base)
                 result["base_score"] = base_norm
                 result["interest_score"] = fit_norm
                 result["matched_interests"] = [m["slug"] for m in matched]
@@ -970,11 +980,11 @@ def cmd_query(args: argparse.Namespace) -> int:
     seen_chunks: set[str] = set()
     seed_source_ids: list[str] = []
     for row in rows:
-        if not row_allowed(row):
+        if not row_allowed(row, args):
             continue
         seen_chunks.add(row["chunk_id"])
         seed_source_ids.append(row["source_id"])
-        results.append(result_from_chunk(row, rank=float(-row["rank"] if row["rank"] is not None else 0.0)))
+        results.append(result_from_chunk(row, con, rank=float(-row["rank"] if row["rank"] is not None else 0.0)))
         if len(results) >= args.limit:
             break
     # Trust-aware one-hop graph expansion from FTS seeds. Only resolved trusted
@@ -1000,10 +1010,10 @@ def cmd_query(args: argparse.Namespace) -> int:
                     ORDER BY c.line_start LIMIT 1
                 """, (edge["target_node_id"],)).fetchall()
                 for chunk in chunks:
-                    if chunk["chunk_id"] in seen_chunks or not row_allowed(chunk):
+                    if chunk["chunk_id"] in seen_chunks or not row_allowed(chunk, args):
                         continue
                     seen_chunks.add(chunk["chunk_id"])
-                    results.append(result_from_chunk(chunk, rank=0.05, reason_prefix=f"graph-hop:{edge['raw_target']}"))
+                    results.append(result_from_chunk(chunk, con, rank=0.05, reason_prefix=f"graph-hop:{edge['raw_target']}"))
                     if len(results) >= args.limit:
                         break
                 if len(results) >= args.limit:
@@ -1050,31 +1060,6 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         print_recommend(out, args.format, args.snippet_date)
         return 0
 
-    def row_allowed(row: sqlite3.Row) -> bool:
-        trust = row["trust_tier"]
-        if trust == "trusted":
-            return True
-        if trust == "raw" and args.include_raw:
-            return True
-        if trust == "report" and args.include_reports:
-            return True
-        if args.include_untrusted:
-            return True
-        return False
-
-    def result_from_chunk(row: sqlite3.Row, *, rank: float) -> dict[str, Any]:
-        edge_rows = con.execute("SELECT raw_target,resolution_state,target_text FROM kg_edges WHERE source_id=? AND tombstone=0 LIMIT 8", (row["source_id"],)).fetchall()
-        return {
-            "path": row["path"], "title": row["title"], "chunk_id": row["chunk_id"],
-            "line_start": row["line_start"], "line_end": row["line_end"],
-            "score": rank,
-            "trust_tier": row["trust_tier"], "source_hash": row["source_hash"],
-            "edge_reasons": [f"fts:{e['resolution_state']}:{e['raw_target']}" for e in edge_rows],
-            "citations": [{"path": row["path"], "line_start": row["line_start"], "line_end": row["line_end"]}],
-            "warnings": [] if row["trust_tier"] == "trusted" else ["untrusted_or_opt_in_source"],
-            "excerpt": row["text"][:500],
-        }
-
     diagnostics: list[dict[str, Any]] = [] if code == 0 else [status]
     candidates: dict[str, sqlite3.Row] = {}
 
@@ -1083,7 +1068,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
             return
         if chunk["path"].startswith("pages/interests/"):
             return
-        if not row_allowed(chunk):
+        if not row_allowed(chunk, args):
             return
         candidates[chunk["chunk_id"]] = chunk
 
@@ -1168,7 +1153,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         trust_w = trust_weights.get(chunk["trust_tier"], 0.2)
         novelty = 1.0 + (0.15 if fit > 0 and outgoing_resolved(chunk["source_id"]) < 2 else 0.0)
         raw_score = fit_norm * freshness * trust_w * novelty
-        result = result_from_chunk(chunk, rank=raw_score)
+        result = result_from_chunk(chunk, con, rank=raw_score)
         result["components"] = {"fit": fit_norm, "freshness": freshness, "trust_w": trust_w, "novelty": novelty}
         result["matched_interests"] = [m["slug"] for m in matched]
         result["why"] = [
@@ -1360,10 +1345,7 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
 
 
 def print_json_or_text(out: dict[str, Any], as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def print_json_or_markdown(out: dict[str, Any], fmt: str) -> None:

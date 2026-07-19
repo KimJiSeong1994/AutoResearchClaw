@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from .config import _load_dotenv
 from .publication_trust_gate import PublicationTrustGateError, run_publication_trust_gate
 
 DISCORD_SUPPRESS_EMBEDS_FLAG = 1 << 2
@@ -16,16 +17,6 @@ NEWSLETTER_TITLE = "집현전-Claw 뉴스레터 수집 브리핑"
 class NewsletterPostConfigError(RuntimeError):
     """Raised when newsletter posting is not safely configured."""
 
-
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _required_snowflake(name: str) -> int:

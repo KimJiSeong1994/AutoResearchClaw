@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from ._shared import _parse_utc, _severity_status
 from .miner import _append_jsonl_unlocked, locked_jsonl_paths, read_jsonl
 
 TEAM_ID = "jiphyeonjeon-audit-team"
@@ -61,17 +62,6 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _parse_utc(value: Any) -> datetime | None:
-    if value in (None, ""):
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
 
 def _hash(value: Any, length: int = 16) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:length]
@@ -95,13 +85,6 @@ def _redact(value: Any) -> Any:
         return {str(key): _redact(item) for key, item in value.items()}
     return value
 
-
-def _severity_status(issues: list[dict[str, Any]]) -> str:
-    if any(issue.get("severity") == "error" for issue in issues):
-        return "error"
-    if issues:
-        return "warning"
-    return "ok"
 
 
 def _issue(

@@ -9,28 +9,33 @@ skill mutation and accepted-lineage writes start here under controlled gates.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
 import re
 import sys
-import tempfile
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 try:
     import skillopt_propose as propose
-except ModuleNotFoundError:  # pragma: no cover - direct import fallback in tests
+    from skillopt_common import (
+        LOW_RISK_GAPS, ValidationResult,
+        changed_line_count, is_relative_to, now_iso,
+        read_json, sha256_text, validate_report_output_path, write_json,
+    )
+except ModuleNotFoundError:  # pragma: no cover - direct path fallback in tests
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import skillopt_propose as propose
+    from skillopt_common import (
+        LOW_RISK_GAPS, ValidationResult,
+        changed_line_count, is_relative_to, now_iso,
+        read_json, sha256_text, validate_report_output_path, write_json,
+    )
 
 SELECTION_SCHEMA = "skillopt-selection.v1"
 APPLY_RUN_SCHEMA = "skillopt-apply-run.v1"
 REJECTED_SCHEMA = "skillopt-rejected-edit.v1"
 LINEAGE_SCHEMA = "skillopt-accepted-lineage.v1"
-LOW_RISK_GAPS = ("missing_verification", "missing_input_contract", "weak_output_contract")
+# LOW_RISK_GAPS imported from skillopt_common
 UNSAFE_GAPS = {"runtime_unmapped"}
 SIDE_EFFECT_PATH_RE = re.compile(r"(?i)(hermes|paperwiki|discord|ec2|runtime/jobs\.yaml|runtime/agents\.yaml)")
 SECRET_RE = re.compile(
@@ -41,23 +46,8 @@ SECRET_RE = re.compile(
 )
 
 
-@dataclass(frozen=True)
-class Check:
-    ok: bool
-    errors: list[str]
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+# Check is an alias for ValidationResult to avoid churn at call sites.
+Check = ValidationResult
 
 
 def append_jsonl(path: Path, payload: Any) -> None:
@@ -66,34 +56,9 @@ def append_jsonl(path: Path, payload: Any) -> None:
         fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def contains_secret(value: Any) -> bool:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
     return bool(SECRET_RE.search(text))
-
-
-def is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
-        return True
-    except ValueError:
-        return False
-
-
-def validate_report_output_path(path: Path, root: Path, label: str) -> Check:
-    resolved = path.resolve()
-    protected = [root / ".codex/skills", root / "skills", root / "runtime"]
-    for protected_root in protected:
-        if is_relative_to(resolved, protected_root):
-            return Check(False, [f"{label} must not be under protected skill/runtime surfaces"])
-    allowed = root / ".omx/reports/skillopt"
-    tmp_roots = {Path("/tmp").resolve(), Path("/private/tmp").resolve(), Path(tempfile.gettempdir()).resolve()}
-    if is_relative_to(resolved, allowed) or any(is_relative_to(resolved, tmp) for tmp in tmp_roots):
-        return Check(True, [])
-    return Check(False, [f"{label} must be under .omx/reports/skillopt or a temporary directory"])
 
 
 def skill_path(root: Path, proposal: dict[str, Any]) -> Path:
@@ -155,13 +120,9 @@ def section_spans(text: str, target: str) -> list[tuple[int, int]]:
     return spans
 
 
-def normalize_patch(patch: str) -> str:
-    return "\n".join(line.rstrip() for line in patch.strip().splitlines()) + "\n"
-
-
 def apply_patch_text(text: str, proposal: dict[str, Any]) -> tuple[str | None, list[str], str]:
     target = str(proposal.get("target_section", "")).strip()
-    patch = normalize_patch(str(proposal.get("patch", "")))
+    patch = propose.normalize_patch(str(proposal.get("patch", "")))
     edit_type = str(proposal.get("edit_type", ""))
     spans = section_spans(text, target)
     lines = text.splitlines(keepends=True)
@@ -202,10 +163,6 @@ def approval_status(proposal: dict[str, Any]) -> str:
     if reviewer == "APPROVE" and critic == "APPROVE":
         return "approved"
     return "pending"
-
-
-def changed_line_count(patch: str) -> int:
-    return sum(1 for line in patch.splitlines() if line.strip())
 
 
 def classify_candidate(root: Path, path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
