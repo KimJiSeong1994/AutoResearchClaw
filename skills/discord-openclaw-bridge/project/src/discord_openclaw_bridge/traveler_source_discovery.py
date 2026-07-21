@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 import httpx
 
@@ -274,6 +274,29 @@ def _keywords(topic: str, *, limit: int = 8) -> list[str]:
     return words[:limit]
 
 
+SEARCH_QUERY_RE = re.compile(r"(?i)(^|&)(q|query|search_query|search|keywords?)=")
+SEARCH_PATH_RE = re.compile(r"(?i)/(search|find|results?)(/|$|\?)")
+
+
+def is_search_surface(url: str) -> bool:
+    """True when a URL is a query snapshot rather than a stable source.
+
+    Review rejected every search URL the traveler ever proposed: a result page
+    changes with ranking and cannot be re-fetched deterministically, so it is
+    not something to collect from. Paper pages, listing feeds, and blogs are
+    stable and must keep passing.
+    """
+    if not url:
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if SEARCH_QUERY_RE.search(parts.query or ""):
+        return True
+    return bool(SEARCH_PATH_RE.search(parts.path or ""))
+
+
 def _topic_fit(topic: str, title: str) -> str:
     keys = _keywords(topic, limit=5)
     matched = [key for key in keys if key.lower() in title.lower()]
@@ -283,10 +306,18 @@ def _topic_fit(topic: str, title: str) -> str:
 
 
 def _dedupe_candidates(candidates: Iterable[DiscoveryCandidate]) -> list[DiscoveryCandidate]:
+    """Drop duplicates and search surfaces.
+
+    Every provider funnels through here, so the search-surface guard lives at
+    this one point rather than in each provider.
+    """
     seen: set[str] = set()
     deduped: list[DiscoveryCandidate] = []
     for candidate in candidates:
         safe_url = sanitize_url(candidate.url)
+        if is_search_surface(safe_url or candidate.url):
+            LOG.info("traveler discovery dropped search surface url=%s provider=%s", candidate.url, candidate.provider)
+            continue
         key = safe_url or f"invalid:{candidate.url}"
         if key in seen:
             continue
@@ -401,7 +432,7 @@ class SemanticScholarDiscoveryProvider:
         params = {
             "query": request.topic,
             "limit": str(min(max(request.min_sources_to_review, 10), 50)),
-            "fields": "title,venue,year,externalIds,openAccessPdf,url",
+            "fields": "paperId,title,venue,year,externalIds,openAccessPdf,url",
         }
         try:
             response = await _get_with_backoff(client, SEMANTIC_SCHOLAR_SEARCH_URL, params=params, provider=self.name)
@@ -423,19 +454,33 @@ class SemanticScholarDiscoveryProvider:
             external = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
             arxiv_id = clean_text(external.get("ArXiv"), limit=80)
             venue = clean_text(item.get("venue"), limit=120)
+            # Propose the paper itself, never a search URL for it. A query
+            # snapshot is not a recollectable source: its contents change with
+            # ranking, it cannot be re-fetched deterministically, and every one
+            # of these this provider produced was rejected on review. The
+            # identifiers below address a stable page.
+            paper_id = clean_text(item.get("paperId"), limit=80)
+            doi = clean_text(external.get("DOI"), limit=120)
             if arxiv_id:
-                url = f"https://arxiv.org/search/?query={quote_plus(request.topic)}&searchtype=all&source=header"
-                source_type = "archive_page"
-                title_text = f"arXiv search: {request.topic}"
-                cadence = "Semantic Scholar 검색 결과에 arXiv 식별자가 포함되어 공개 아카이브 검색면을 반복 확인할 수 있습니다."
-            elif venue:
-                url = f"https://www.semanticscholar.org/search?q={quote_plus(venue)}&sort=relevance"
-                source_type = "article_hub"
-                title_text = f"Semantic Scholar venue search: {venue}"
-                cadence = "Semantic Scholar 공개 검색 결과에서 venue 단위 후속 논문을 반복 확인할 수 있습니다."
+                url = f"https://arxiv.org/abs/{arxiv_id}"
+                source_type = "paper_page"
+                title_text = title or f"arXiv {arxiv_id}"
+                cadence = "arXiv 초록 페이지는 식별자로 고정되어 언제든 동일한 공개 원문을 다시 확인할 수 있습니다."
+            elif doi:
+                url = f"https://doi.org/{doi}"
+                source_type = "paper_page"
+                title_text = title or f"DOI {doi}"
+                cadence = "DOI는 영구 식별자로 공개 원문 페이지를 안정적으로 가리킵니다."
+            elif paper_id:
+                url = f"https://www.semanticscholar.org/paper/{paper_id}"
+                source_type = "paper_page"
+                title_text = title or f"Semantic Scholar paper {paper_id}"
+                cadence = "Semantic Scholar 논문 페이지는 paperId로 고정된 공개 메타데이터 면입니다."
             else:
-                rejected.append(f"{title or 'untitled'}: no reusable public source surface")
+                rejected.append(f"{title or 'untitled'}: no stable public paper identifier")
                 continue
+            if venue:
+                title_text = f"{title_text} ({venue})"
             candidates.append(
                 DiscoveryCandidate(
                     url=url,
