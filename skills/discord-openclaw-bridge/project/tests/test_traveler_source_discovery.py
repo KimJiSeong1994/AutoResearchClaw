@@ -1180,3 +1180,125 @@ def test_autonomous_static_exception_requires_static_provider_review_type_and_ok
         assert summary.accepted_count == 0, name
         assert not candidates.exists(), name
         assert _jsonl(evidence)[0]["decision"].get("reason") != "curated_static_source_surface_requires_review"
+
+
+def test_is_search_surface_rejects_query_snapshots() -> None:
+    """Search URLs are not sources: ranking changes them and they cannot be re-fetched."""
+    from discord_openclaw_bridge.traveler_source_discovery import is_search_surface
+
+    for url in (
+        "https://www.semanticscholar.org/search?q=BigData+Congress&sort=relevance",
+        "https://arxiv.org/search/?query=rag&searchtype=all",
+        "https://example.com/search?query=llm",
+        "https://example.com/find?q=agents",
+        "https://example.com/results?keywords=retrieval",
+        "https://example.com/search",
+        "https://example.com/search/",
+    ):
+        assert is_search_surface(url), f"should be rejected as a search surface: {url}"
+
+
+def test_is_search_surface_keeps_real_sources() -> None:
+    """The guard must not swallow the stable pages the traveler exists to find."""
+    from discord_openclaw_bridge.traveler_source_discovery import is_search_surface
+
+    for url in (
+        "https://arxiv.org/abs/2401.00001",
+        "https://arxiv.org/list/cs.AI/recent",
+        "https://doi.org/10.1000/xyz",
+        "https://www.semanticscholar.org/paper/abc123",
+        "https://aclanthology.org/2026.eacl-long.8/",
+        "https://huggingface.co/papers",
+        "https://paperswithcode.com/latest",
+        "https://openreview.net/",
+        "https://research.google/blog/",
+        "https://www.anthropic.com/research",
+        "https://openai.com/research/",
+        "https://blog.example.com/research?page=2",       # a query that is not a search
+        "https://example.com/researchers",                 # 'search' inside a word
+        "",
+    ):
+        assert not is_search_surface(url), f"should have been kept: {url}"
+
+
+def test_dedupe_drops_search_surfaces_from_every_provider() -> None:
+    from discord_openclaw_bridge.traveler_source_discovery import DiscoveryCandidate, _dedupe_candidates
+
+    def candidate(url: str) -> DiscoveryCandidate:
+        return DiscoveryCandidate(
+            url=url, title="t", source_type="paper_page", reliability_note="r",
+            cadence_note="c", topic_fit="f", collection_hint="h", provider="p",
+        )
+
+    kept = _dedupe_candidates([
+        candidate("https://arxiv.org/abs/2401.00001"),
+        candidate("https://www.semanticscholar.org/search?q=venue&sort=relevance"),
+        candidate("https://doi.org/10.1000/xyz"),
+    ])
+
+    assert [c.url for c in kept] == ["https://arxiv.org/abs/2401.00001", "https://doi.org/10.1000/xyz"]
+
+
+def test_query_only_urls_are_rejected_without_a_search_path() -> None:
+    """The query rule must stand on its own.
+
+    semanticscholar.org/search?q= trips the path rule too, so a corpus of only
+    those cannot tell whether the query rule still works.
+    """
+    from discord_openclaw_bridge.traveler_source_discovery import is_search_surface
+
+    for url in (
+        "https://example.com/papers?q=retrieval",
+        "https://example.com/browse?query=llm+agents",
+        "https://example.com/index.html?search_query=rag",
+        "https://example.com/feed?keywords=graph",
+    ):
+        assert is_search_surface(url), f"query-shaped URL should be rejected: {url}"
+
+
+def test_semantic_scholar_provider_proposes_paper_pages_not_searches() -> None:
+    """The provider contract, independent of the dedupe guard.
+
+    The guard would silently absorb a regression here, leaving the provider
+    producing nothing at all, so assert the URLs it builds directly.
+    """
+    import asyncio
+
+    from discord_openclaw_bridge.traveler_source_discovery import (
+        ResearchRequest,
+        SemanticScholarDiscoveryProvider,
+        is_search_surface,
+    )
+
+    payload = {
+        "data": [
+            {"paperId": "p1", "title": "RAG paper", "venue": "ACL", "externalIds": {"ArXiv": "2401.00001"}},
+            {"paperId": "p2", "title": "DOI paper", "venue": "NeurIPS", "externalIds": {"DOI": "10.1000/xyz"}},
+            {"paperId": "p3", "title": "Bare paper", "venue": "ICML", "externalIds": {}},
+            {"paperId": "", "title": "Unidentifiable", "venue": "", "externalIds": {}},
+        ]
+    }
+
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await SemanticScholarDiscoveryProvider().discover(
+                ResearchRequest(
+                    request_id="r1",
+                    topic="retrieval augmented generation",
+                    scope="public",
+                    min_sources_to_review=10,
+                    candidate_queue_path=Path("/tmp/unused.jsonl"),
+                ),
+                client=client,
+            )
+
+    result = asyncio.run(run())
+    urls = [c.url for c in result.candidates]
+
+    assert "https://arxiv.org/abs/2401.00001" in urls, "an arXiv id must yield the abstract page"
+    assert "https://doi.org/10.1000/xyz" in urls, "a DOI must yield the resolver page"
+    assert "https://www.semanticscholar.org/paper/p3" in urls, "a paperId must yield the paper page"
+    assert not any(is_search_surface(u) for u in urls), f"provider proposed a search surface: {urls}"
+    assert all(c.source_type == "paper_page" for c in result.candidates)
+    assert any("no stable public paper identifier" in r for r in result.rejected)
