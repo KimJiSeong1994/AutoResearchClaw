@@ -47,7 +47,11 @@ cd "$ROOT_DIR"
 python3 scripts/check-prompt-governance.py
 python3 scripts/check-runtime-manifests.py
 
-remote_workspace_quoted="$(quote_remote "$HERMES_REMOTE_WORKSPACE")"
+remote_workspace_relative="${HERMES_REMOTE_WORKSPACE#\~/}"
+# Keep $HOME literal for the local shell so the remote shell expands it. Bash
+# versions disagree on whether printf %q escapes a leading tilde, so passing
+# the configured ~/... path directly is not portable across macOS and CI.
+remote_workspace_quoted="\$HOME/$(quote_remote "$remote_workspace_relative")"
 
 "${SSH_BASE[@]}" "$REMOTE_HOST" "mkdir -p $remote_workspace_quoted/skills $remote_workspace_quoted/runtime $remote_workspace_quoted/scripts"
 

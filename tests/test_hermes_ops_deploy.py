@@ -154,6 +154,38 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertIn("--exclude '.env'", text)
         self.assertNotIn("~/.openclaw/workspace ~/.hermes/workspace", text)
 
+    def test_deploy_commands_expand_home_on_remote_across_bash_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            capture = tmp_path / "ssh-args.txt"
+            fake_ssh = tmp_path / "ssh"
+            fake_rsync = tmp_path / "rsync"
+            fake_ssh.write_text(
+                "#!/usr/bin/env bash\n"
+                'printf "%s\\n" "$@" >> "$CAPTURE_FILE"\n',
+                encoding="utf-8",
+            )
+            fake_rsync.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            fake_ssh.chmod(0o755)
+            fake_rsync.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{tmp_path}{os.pathsep}{env.get('PATH', '')}",
+                    "CAPTURE_FILE": str(capture),
+                    "REMOTE_HOST": "example.invalid",
+                    "KEY_FILE": "/tmp/nonexistent-key",
+                }
+            )
+
+            subprocess.run(["bash", str(DEPLOY_HERMES)], cwd=ROOT, env=env, check=True)
+            subprocess.run(["bash", str(DEPLOY_HERMES_BRIDGE)], cwd=ROOT, env=env, check=True)
+            captured = capture.read_text(encoding="utf-8")
+
+        self.assertIn("$HOME/.hermes/workspace", captured)
+        self.assertIn("$HOME/.hermes/workspace/skills/discord-openclaw-bridge", captured)
+        self.assertNotIn(r"\~/.hermes", captured)
+
 
     def test_hermes_auxiliary_bot_installer_is_guarded_and_reversible(self) -> None:
         text = INSTALL_HERMES_AUX.read_text(encoding="utf-8")
