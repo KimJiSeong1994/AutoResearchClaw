@@ -55,7 +55,7 @@ quote_remote() {
   printf '%q' "$1"
 }
 
-echo "== remote Hermes bridge smoke =="
+echo "== remote Hermes primary bridge smoke =="
 echo "host: $REMOTE_HOST"
 echo
 
@@ -74,7 +74,7 @@ section() {
 
 section "workspace"
 echo "$project_dir"
-[ -d "$project_dir" ] || { echo "FAIL: canary bridge project missing" >&2; exit 1; }
+[ -d "$project_dir" ] || { echo "FAIL: Hermes bridge project missing" >&2; exit 1; }
 [ -f "$token_file" ] || { echo "FAIL: Hermes gateway token file missing" >&2; exit 1; }
 
 section "python runtime"

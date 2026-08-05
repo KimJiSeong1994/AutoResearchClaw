@@ -36,12 +36,32 @@ logger = logging.getLogger(__name__)
 FORUM_CHANNEL_TYPE = 15
 DISCORD_MESSAGE_LIMIT = 2000
 DISCORD_THREAD_TITLE_LIMIT = 90
-DEFAULT_MINER_INTAKE_PATH = Path.home() / ".openclaw" / "workspace" / "intake" / "jiphyeonjeon-miner" / "links.jsonl"
-DEFAULT_MINER_REVIEW_QUEUE_PATH = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"
-DEFAULT_MINER_APPROVED_EXPORT_PATH = Path.home() / ".openclaw" / "workspace" / "manual_links" / "approved-manual-links.jsonl"
-DEFAULT_REPORT_STATE_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-collection-report-last-status.json"
 AGENT_ID = "jiphyeonjeon-traveler"
 AGENT_DISPLAY_NAME = "집현전-여행자"
+
+
+def _default_workspace() -> Path:
+    return Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    ).expanduser()
+
+
+def default_miner_intake_path() -> Path:
+    return _default_workspace() / "intake" / "jiphyeonjeon-miner" / "links.jsonl"
+
+
+def default_miner_review_queue_path() -> Path:
+    return _default_workspace() / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"
+
+
+def default_miner_approved_export_path() -> Path:
+    return _default_workspace() / "manual_links" / "approved-manual-links.jsonl"
+
+
+def default_report_state_path() -> Path:
+    return _default_workspace() / "state" / "traveler-collection-report-last-status.json"
 
 
 class TravelerReportConfigError(RuntimeError):
@@ -119,9 +139,9 @@ def _load_seed_urls(path: Path) -> set[str]:
 
 def _load_collection_context() -> CollectionContext:
     seed_path = Path(os.environ.get("JIPHYEONJEON_MINER_SEEDS_PATH", str(DEFAULT_SEEDS_PATH))).expanduser()
-    intake_path = Path(os.environ.get("JIPHYEONJEON_MINER_INTAKE_PATH", str(DEFAULT_MINER_INTAKE_PATH))).expanduser()
-    review_path = Path(os.environ.get("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", str(DEFAULT_MINER_REVIEW_QUEUE_PATH))).expanduser()
-    approved_path = Path(os.environ.get("JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH", str(DEFAULT_MINER_APPROVED_EXPORT_PATH))).expanduser()
+    intake_path = Path(os.environ.get("JIPHYEONJEON_MINER_INTAKE_PATH", str(default_miner_intake_path()))).expanduser()
+    review_path = Path(os.environ.get("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", str(default_miner_review_queue_path()))).expanduser()
+    approved_path = Path(os.environ.get("JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH", str(default_miner_approved_export_path()))).expanduser()
 
     seed_urls = _load_seed_urls(seed_path)
     collected_urls: set[str] = set(seed_urls)
@@ -536,7 +556,7 @@ async def run(*, dry_run: bool = False, skip_miner_request: bool = False) -> Non
     source_queue = Path(os.environ.get("JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH", str(default_source_queue_path()))).expanduser()
     scout_queue = Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", str(default_scout_queue_path()))).expanduser()
     limit = int(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_MAX_ITEMS", "8"))
-    status_path = Path(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH", str(DEFAULT_REPORT_STATE_PATH))).expanduser()
+    status_path = Path(os.environ.get("JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH", str(default_report_state_path()))).expanduser()
     miner_channel_id = os.environ.get("DISCORD_MINER_CHANNEL_ID", "").strip()
     miner_client_id = os.environ.get("DISCORD_MINER_CLIENT_ID", "").strip()
     guild_id = os.environ.get("DISCORD_GUILD_ID", "").strip()

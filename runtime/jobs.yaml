@@ -10,9 +10,9 @@ metadata:
   phase: 1-control-plane-manifest
 
 defaults:
-  runtime_host: openclaw-ec2
-  workspace: ~/.openclaw/workspace
-  gateway_base_url: http://127.0.0.1:18789/v1
+  runtime_host: hermes-ec2
+  workspace: ~/.hermes/workspace
+  gateway_base_url: http://127.0.0.1:28789/v1
   timezone: Asia/Seoul
 
 jobs:
@@ -79,62 +79,63 @@ jobs:
       secrets: never print gateway token values
 
   - id: hermes-workspace-deploy
-    name: Deploy Hermes canary workspace control files
+    name: Deploy Hermes primary workspace control files
     type: operator-command
     owner_agent: hermes-ec2-ops
     command_refs:
       - bash scripts/deploy-hermes-workspace.sh
     triggers:
-      - manual canary only
+      - main branch production deploy
+      - manual
     depends_on:
       - prompt-governance-validate
     target:
-      host: openclaw-ec2
+      host: hermes-ec2
       path: ~/.hermes/workspace
     outputs:
-      - Hermes canary workspace control files
+      - Hermes primary workspace control files
       - prompt registry
     safety:
-      side_effects: remote canary workspace file sync only
+      side_effects: remote Hermes primary workspace file sync only
       secrets: do not print Hermes or OpenClaw gateway tokens
 
   - id: hermes-ops-readiness-check
-    name: Check remote Hermes canary ops readiness
+    name: Check remote Hermes primary ops readiness
     type: health-check
     owner_agent: hermes-ec2-ops
     command_refs:
       - bash scripts/check-hermes-ops.sh
     triggers:
-      - manual canary only
-      - after Hermes canary deploy
+      - manual
+      - after Hermes primary deploy
     checks:
-      - Hermes canary service state
+      - Hermes primary service state
       - loopback listener
       - /v1/models probe
       - Discord bridge Hermes env aliases
       - recent Hermes warning/error log signal
     safety:
-      side_effects: read-only remote canary inspection
+      side_effects: read-only remote Hermes inspection
       secrets: never print Hermes or OpenClaw gateway token values
 
   - id: hermes-bridge-smoke-check
-    name: Check Discord bridge against Hermes canary chat API
+    name: Check Discord bridge against Hermes primary chat API
     type: health-check
     owner_agent: hermes-ec2-ops
     command_refs:
       - bash scripts/check-hermes-bridge-smoke.sh
     triggers:
-      - manual canary only
-      - after Hermes canary readiness passes
-      - before production cutover
+      - manual
+      - after Hermes readiness passes
+      - before primary bridge promotion
     depends_on:
       - hermes-ops-readiness-check
     checks:
-      - Discord bridge imports from the Hermes canary workspace
-      - Hermes env aliases select the canary loopback gateway
-      - canary OpenAI-compatible chat smoke returns the expected sentinel
+      - Discord bridge imports from the Hermes primary workspace
+      - Hermes env aliases select the loopback gateway
+      - OpenAI-compatible chat smoke returns the expected sentinel
     safety:
-      side_effects: remote canary OpenAI-compatible chat smoke only
+      side_effects: remote Hermes OpenAI-compatible chat smoke only
       secrets: never print Hermes, OpenClaw, Discord, or provider token values
 
   - id: hermes-bridge-canary-service-install
@@ -156,6 +157,25 @@ jobs:
       side_effects: installs a disabled user service unit and canary .env only
       secrets: copies existing remote Discord/provider tokens on-host but never prints token values
 
+  - id: hermes-primary-bridge-service-install
+    name: Promote the primary Hermes Discord bridge service
+    type: operator-command
+    owner_agent: hermes-ec2-ops
+    command_refs:
+      - bash scripts/install-hermes-primary-bridge-service.sh
+    triggers:
+      - main branch production deploy
+      - after Hermes bridge smoke passes
+    depends_on:
+      - hermes-bridge-smoke-check
+    outputs:
+      - active discord-hermes-bridge.service
+      - disabled OpenClaw gateway and bridge units retained for rollback
+      - Hermes-only scheduled workspace paths
+    safety:
+      side_effects: promotes Hermes only after readiness checks and restores the previously active bridge on failure
+      secrets: updates the remote bridge env on-host without printing token values
+
   - id: hermes-auxiliary-bot-service-install
     name: Install or cut over Hermes auxiliary Discord bot services
     type: operator-command
@@ -163,11 +183,10 @@ jobs:
     command_refs:
       - bash scripts/install-hermes-auxiliary-bot-services.sh
     triggers:
-      - manual canary only
+      - manual
       - after Hermes bridge cutover is stable
-      - before OpenClaw gateway decommission
     depends_on:
-      - hermes-bridge-canary-service-install
+      - hermes-primary-bridge-service-install
     outputs:
       - guarded auxiliary bot service units
       - optional reversible cutover when HERMES_AUX_CUTOVER=1
@@ -190,7 +209,7 @@ jobs:
       secrets: none
 
   - id: researchclaw-validate
-    name: Validate AutoResearchClaw on OpenClaw gateway
+    name: Validate AutoResearchClaw on Hermes gateway
     type: remote-check
     owner_agent: researchclaw
     command_refs:
@@ -200,11 +219,11 @@ jobs:
       - before first topic run after config changes
       - manual
     target:
-      repo: ~/.openclaw/workspace/projects/AutoResearchClaw
-      config: ~/.openclaw/workspace/projects/AutoResearchClaw/config.yaml
+      repo: ~/.hermes/workspace/projects/AutoResearchClaw
+      config: ~/.hermes/workspace/projects/AutoResearchClaw/config.yaml
     safety:
       side_effects: validation only
-      secrets: read OPENCLAW_GATEWAY_TOKEN from ~/.openclaw_gateway_token
+      secrets: read HERMES_GATEWAY_TOKEN from ~/.hermes_gateway_token
 
   - id: researchclaw-topic-run
     name: Run AutoResearchClaw topic research and sync results
@@ -236,9 +255,9 @@ jobs:
       cron_utc: "0 23 * * *"
       local_time: "08:00 Asia/Seoul"
     target:
-      project_dir: ~/.openclaw/workspace/projects/paper-recommender
+      project_dir: ~/.hermes/workspace/projects/paper-recommender
       entrypoint: .venv/bin/paper-recommender
-      config: ~/.openclaw/workspace/projects/paper-recommender/config.yaml
+      config: ~/.hermes/workspace/projects/paper-recommender/config.yaml
     outputs:
       - artifacts/YYYY-MM-DD/recommendations.md
       - artifacts/YYYY-MM-DD/raw.json
@@ -289,17 +308,17 @@ jobs:
       secrets: Google Script Properties and relay token are not committed
 
   - id: discord-openclaw-bridge-service
-    name: Discord OpenClaw bridge service
+    name: Discord Hermes bridge service
     type: systemd-user-service
     owner_agent: discord-openclaw-bridge
     command_refs:
-      - bash scripts/deploy-discord-openclaw-bridge.sh
-      - skills/discord-openclaw-bridge/project/scripts/install.sh
-      - systemctl --user start discord-openclaw-bridge.service
+      - bash scripts/deploy-discord-hermes-bridge.sh
+      - bash scripts/check-hermes-bridge-smoke.sh
+      - bash scripts/install-hermes-primary-bridge-service.sh
       - skills/discord-openclaw-bridge/project/scripts/status.sh
     target:
-      project_dir: ~/.openclaw/workspace/skills/discord-openclaw-bridge/project
-      service: discord-openclaw-bridge.service
+      project_dir: ~/.hermes/workspace/skills/discord-openclaw-bridge/project
+      service: discord-hermes-bridge.service
       guild_id: "<DISCORD_GUILD_ID>"
       channel_id: "<DISCORD_ALLOWED_CHANNEL_ID>"
     interfaces:
@@ -317,14 +336,14 @@ jobs:
     command_refs:
       - skills/discord-openclaw-bridge/project/scripts/invite-miner-url.sh
       - skills/discord-openclaw-bridge/project/scripts/install-miner.sh
-      - systemctl --user start discord-jiphyeonjeon-miner.service
+      - systemctl --user start discord-hermes-jiphyeonjeon-miner.service
     target:
-      service: discord-jiphyeonjeon-miner.service
+      service: discord-hermes-jiphyeonjeon-miner.service
       channel_env: DISCORD_MINER_CHANNEL_ID
     outputs:
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
-      - ~/.openclaw/workspace/manual_links/approved-manual-links.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.hermes/workspace/manual_links/approved-manual-links.jsonl
     safety:
       side_effects: Discord link intake and append-only review records
       secrets: persisted metadata limited to Discord IDs and sanitized URLs
@@ -456,7 +475,10 @@ jobs:
       - uv run discord-openclaw-traveler-discover-sources
       - uv run discord-openclaw-post-traveler-collection-report
       - uv run discord-openclaw-traveler-outcomes
-      - uv run discord-openclaw-traveler-tune propose
+      - python3 scripts/skillopt_traveler_ops.py --scout ~/.hermes/workspace/state/traveler-scout-last-status.json --discovery ~/.hermes/workspace/state/traveler-source-discovery-last-status.json --report ~/.hermes/workspace/state/traveler-collection-report-last-status.json --reward ~/.hermes/workspace/state/traveler-skillopt-reward-latest.json --workspace ~/.hermes/workspace --out ~/.hermes/workspace/state/traveler-skillopt-latest.json
+      - uv run discord-openclaw-traveler-outcomes --ledger ~/.hermes/workspace/state/traveler-outcome-ledger.jsonl --report-status ~/.hermes/workspace/state/traveler-collection-report-last-status.json --miner-review-queue ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl --miner-decisions ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl --approved-export ~/.hermes/workspace/manual_links/approved-manual-links.jsonl --approval-window-days 7 --report ~/.hermes/workspace/state/traveler-calibration-latest.json
+      - uv run discord-openclaw-traveler-outcomes --ledger ~/.hermes/workspace/state/traveler-outcome-ledger.jsonl --report-only --skillopt-reward --approval-window-days 7 --report ~/.hermes/workspace/state/traveler-skillopt-reward-latest.json
+      - uv run discord-openclaw-traveler-tune --ledger ~/.hermes/workspace/state/traveler-outcome-ledger.jsonl auto-apply --topics runtime/traveler-scout-topics.json --skill skills/jiphyeonjeon-traveler/SKILL.md --topics-baseline-sha256 <current-topics-sha256> --skill-baseline-sha256 <current-skill-sha256> --lineage ~/.hermes/workspace/state/traveler-skillopt-lineage.jsonl --approval-window-days 7
     schedule:
       cron_utc: "0 13 * * *"
       local_time: "22:00 Asia/Seoul"
@@ -470,12 +492,16 @@ jobs:
       - optional runtime/traveler-scoring.json or JIPHYEONJEON_TRAVELER_SCORING_PATH; missing or malformed falls back to committed defaults
       - optional outcome ledger path JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH; append-only observation, adoption, and review events, advisory only and never auto-tunes scoring
       - source-review decisions JSONL beside the source-candidate queue; append-only 집현전-클로 verdicts, terminal approve/reject drop the candidate from the daily report while hold keeps it visible
-      - discord-openclaw-traveler-tune propose runs daily and is read-only, writing traveler-tuning-proposals.json for an operator to read; apply requires an interactive --confirm and is never invoked by cron
-      - the outcome and tuning steps are advisory: they run after the report and their failure never fails it
+      - Traveler outcome recording runs after the report and records handoff/Miner approval observations into the ledger and calibration report
+      - Miner approval is read directly from the latest link-review-decisions.jsonl row joined to link-review-queue.jsonl by intake_id; approved-manual-links.jsonl is fallback-only
+      - bounded SkillOpt auto-tune is enabled by default with TRAVELER_SKILLOPT_AUTOTUNE_ENABLED=1 and runs after outcomes plus the operational evaluator
+      - bounded auto-tune may edit only runtime/traveler-scout-topics.json priority/max_candidates and the SKILLOPT:TRAVELER:SEARCH-SCOPE generated section in skills/jiphyeonjeon-traveler/SKILL.md
+      - bounded auto-tune must write before/after hash, backup, rollback, and lineage evidence; failures never fail the daily report and no-op never fails the daily report
       - optional PaperWiki KG DB path PAPERWIKI_KG_DB for best-effort scout-topic prioritization
       - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
       - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
       - current Miner seed/intake/review/approved surfaces
+      - Miner link-review queue plus append-only latest decisions; latest reject/hold revokes a previously recorded approval
     outputs:
       - Discord Traveler forum collection-gap report
       - traveler-scout-last-status.json
@@ -483,12 +509,51 @@ jobs:
       - traveler-collection-report-last-status.json
       - traveler-outcome-ledger.jsonl append-only observation, adoption, and review events
       - traveler-calibration-latest.json advisory adoption/approval rates by confidence bucket
-      - traveler-tuning-proposals.json read-only proposals awaiting a human --confirm
+      - traveler-skillopt-latest.json read-only SkillOpt operational evaluation for search/discovery/report quality
+      - traveler-skillopt-reward-latest.json bounded reward report using 70% exact-url Miner approval and 30% approved-set diversity
+      - traveler-skillopt-autotune-latest.json bounded no-op/apply report
+      - traveler-skillopt-lineage.jsonl append-only bounded auto-tune lineage
       - optional traveler-scout-topics.paperwiki.json generated topic artifact
     safety:
       side_effects: public Discord report posting; candidate discovery writes pending review records only
       secrets: Discord bot token remains in remote .env only; report/status must not contain tokens
       paperwiki_boundary: cron must not fail solely because PaperWiki KG is disabled, absent, or unhealthy; KG influence remains explicit opt-in/advisory and candidates still require evidence and review
+      skillopt_boundary: Traveler SkillOpt operational evaluation is advisory; bounded auto-tune may apply only the declared topics priority/max_candidates and SKILLOPT:TRAVELER:SEARCH-SCOPE marker edits, while unrestricted apply, scoring mutation, provider-code edits, queue writes, and Discord side effects remain forbidden
+
+  - id: skillopt-traveler-operational-evaluation
+    name: Traveler SkillOpt operational evaluation
+    type: read-only-health-check
+    owner_agent: skillopt-auditor
+    command_refs:
+      - python3 scripts/skillopt_traveler_ops.py --scout ~/.hermes/workspace/state/traveler-scout-last-status.json --discovery ~/.hermes/workspace/state/traveler-source-discovery-last-status.json --report ~/.hermes/workspace/state/traveler-collection-report-last-status.json --reward ~/.hermes/workspace/state/traveler-skillopt-reward-latest.json --workspace ~/.hermes/workspace --out ~/.hermes/workspace/state/traveler-skillopt-latest.json
+      - uv run discord-openclaw-traveler-outcomes --ledger ~/.hermes/workspace/state/traveler-outcome-ledger.jsonl --report-status ~/.hermes/workspace/state/traveler-collection-report-last-status.json --miner-review-queue ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl --miner-decisions ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl --approved-export ~/.hermes/workspace/manual_links/approved-manual-links.jsonl --approval-window-days 7 --report ~/.hermes/workspace/state/traveler-calibration-latest.json
+      - uv run discord-openclaw-traveler-outcomes --ledger ~/.hermes/workspace/state/traveler-outcome-ledger.jsonl --report-only --skillopt-reward --approval-window-days 7 --report ~/.hermes/workspace/state/traveler-skillopt-reward-latest.json
+      - uv run discord-openclaw-traveler-tune --ledger ~/.hermes/workspace/state/traveler-outcome-ledger.jsonl auto-apply --topics runtime/traveler-scout-topics.json --skill skills/jiphyeonjeon-traveler/SKILL.md --topics-baseline-sha256 <current-topics-sha256> --skill-baseline-sha256 <current-skill-sha256> --lineage ~/.hermes/workspace/state/traveler-skillopt-lineage.jsonl --approval-window-days 7
+      - python3 scripts/skillopt_eval.py --root . --fixtures tests/fixtures/skillopt --out /tmp/skillopt-eval-traveler.json
+    triggers:
+      - after Traveler scout, source discovery, and daily collection report status artifacts are fresh
+      - manual operations review
+    inputs:
+      - traveler-scout-last-status.json
+      - traveler-source-discovery-last-status.json
+      - traveler-collection-report-last-status.json
+      - read-only Hermes workspace path for artifact recency and queue context
+      - tests/fixtures/skillopt/jiphyeonjeon-traveler/heldout for deterministic local regression coverage
+    outputs:
+      - ~/.hermes/workspace/state/traveler-skillopt-latest.json
+      - ~/.hermes/workspace/state/traveler-skillopt-reward-latest.json
+      - ~/.hermes/workspace/state/traveler-skillopt-autotune-latest.json
+      - ~/.hermes/workspace/state/traveler-skillopt-lineage.jsonl
+      - advisory pass/warn/fail verdicts for Traveler search yield, discovery provider health, report freshness, accepted-count anomalies, and stale artifacts
+      - bounded auto-tune no-op/apply report with before/after hash, backup, rollback, and lineage references
+    checks:
+      - evaluator reads only status and queue artifacts
+      - missing or stale status artifacts produce advisory failure without mutation
+      - accepted_count=0 is surfaced as a quality anomaly rather than a hidden success
+      - bounded auto-tune uses primary Miner exact-URL approval weight 70%, approved-set provider/domain/topic Shannon diversity weight 30%, 7-day censor, and minimum sample size 5
+      - automatic editing is limited to runtime/traveler-scout-topics.json priority/max_candidates and the SKILLOPT:TRAVELER:SEARCH-SCOPE marker section
+      - unrestricted SkillOpt apply, scoring config mutation, provider-code edits, queue writes, and Discord side effects remain forbidden
+    safety: bounded operational evaluation and auto-tune only; no unrestricted skill mutation, no scoring mutation, no provider-code edits, no Discord/EC2/Hermes writes except explicit evaluator/reward/autotune/lineage reports and declared bounded targets, no tokens or private content in output
 
   - id: discord-miner-seeds-expand
     name: Expand configured Miner seed sources
@@ -522,11 +587,11 @@ jobs:
       - manual operations review
       - remote ops readiness check
     inputs:
-      - ~/.openclaw/workspace/state/miner-seeds-last-status.json
-      - ~/.openclaw/workspace/state/traveler-collection-report-last-status.json
-      - ~/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.hermes/workspace/state/miner-seeds-last-status.json
+      - ~/.hermes/workspace/state/traveler-collection-report-last-status.json
+      - ~/.hermes/workspace/intake/jiphyeonjeon-miner/links.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
     outputs:
       - Guard operations issue digest JSON
       - optional append-only Guard operations issue queue
@@ -655,15 +720,15 @@ jobs:
     inputs:
       - runtime/jobs.yaml
       - runtime/agents.yaml
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
-      - ~/.openclaw/workspace/review/newsletter-candidates/candidate-review.jsonl
-      - ~/.openclaw/workspace/logs/discord-card-news/card-news-publication-audit.jsonl
-      - ~/.openclaw/workspace/reports/jiphyeonjeon-trust-gates/*.json
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.hermes/workspace/review/newsletter-candidates/candidate-review.jsonl
+      - ~/.hermes/workspace/logs/discord-card-news/card-news-publication-audit.jsonl
+      - ~/.hermes/workspace/reports/jiphyeonjeon-trust-gates/*.json
     outputs:
       - stdout Audit Team digest JSON by default
-      - optional append-only ~/.openclaw/workspace/review/jiphyeonjeon-audit/issues.jsonl
-      - optional append-only ~/.openclaw/workspace/logs/jiphyeonjeon-audit/audit-log.jsonl
+      - optional append-only ~/.hermes/workspace/review/jiphyeonjeon-audit/issues.jsonl
+      - optional append-only ~/.hermes/workspace/logs/jiphyeonjeon-audit/audit-log.jsonl
     checks:
       - schedule cron drift from captured snapshots and committed wrappers
       - Discord service liveness freshness from captured log/status metadata
@@ -686,8 +751,8 @@ jobs:
       - manual review planning
       - before large Claw review sessions
     inputs:
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
     outputs:
       - duplicate candidate report
       - stale pending item report
@@ -753,11 +818,11 @@ jobs:
       - manual after Claw approved export
       - before newsletter/card-news editorial planning
     inputs:
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
-      - ~/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
-      - ~/.openclaw/workspace/manual_links/approved-manual-links.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+      - ~/.hermes/workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
+      - ~/.hermes/workspace/manual_links/approved-manual-links.jsonl
     outputs:
-      - ~/.openclaw/workspace/review/newsletter-candidates/candidate-review.jsonl
+      - ~/.hermes/workspace/review/newsletter-candidates/candidate-review.jsonl
     safety:
       side_effects: writes separate candidate-review artifact only; does not publish or modify newsletter/card-news sources
       secrets: public approved-link metadata only

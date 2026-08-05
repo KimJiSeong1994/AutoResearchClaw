@@ -4,10 +4,10 @@ jiphyeonjeon:
   timeout_sec: 60
 
 openclaw:
-  base_url: http://127.0.0.1:18789/v1
-  token_env: OPENCLAW_GATEWAY_TOKEN
-  primary_model: openclaw/clawbridge
-  fallback_model: openclaw/default
+  base_url: http://127.0.0.1:28789/v1
+  token_env: HERMES_GATEWAY_TOKEN
+  primary_model: hermes-agent
+  fallback_model: ""
   timeout_sec: 120
 
 profile:
@@ -180,7 +180,7 @@ daily_research:
     # exposes an OpenAI-compatible /v1/embeddings endpoint, so no extra
     # python deps are required.
     max_clusters: 3
-    embedding_model: openclaw/clawbridge
+    embedding_model: hermes-agent
     embedding_endpoint: /v1/embeddings
   deep:
     # Each surviving cluster is handed off to AutoResearchClaw for a
@@ -190,8 +190,8 @@ daily_research:
     concurrency: 1
     timeout_sec: 2400        # 40 min hard cap per topic (>= empirical max)
     mode: full-auto          # researchclaw HITL mode; "express" is faster but shallower
-    run_topic_script: ~/.openclaw/workspace/skills/researchclaw/run-topic.sh
-    artifacts_root: ~/.openclaw/workspace/projects/AutoResearchClaw/artifacts
+    run_topic_script: ~/.hermes/workspace/skills/researchclaw/run-topic.sh
+    artifacts_root: ~/.hermes/workspace/projects/AutoResearchClaw/artifacts
   auth:
     # Login-based auth replaces the static JIPHYEONJEON_TOKEN. Set
     # JIPHYEONJEON_USERNAME and JIPHYEONJEON_PASSWORD in the EC2 .env;

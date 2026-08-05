@@ -1,0 +1,50 @@
+{
+  "discovery": {
+    "accepted_count": 0,
+    "candidate_queue_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl",
+    "duplicate_count": 4,
+    "error_count": 0,
+    "evidence_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/evidence.jsonl",
+    "provider_results": [
+      {
+        "candidate_count": 1,
+        "provider": "arxiv",
+        "rejected_count": 2,
+        "reviewed_count": 8
+      },
+      {
+        "candidate_count": 0,
+        "provider": "semantic_scholar",
+        "rejected_count": 1,
+        "reviewed_count": 4
+      }
+    ],
+    "providers_used": [
+      "arxiv",
+      "semantic_scholar",
+      "static"
+    ],
+    "rejected_count": 0,
+    "requests_processed": 1,
+    "reviewed_count": 4,
+    "run_at": "2026-08-05T00:02:00Z"
+  },
+  "expected": {
+    "reason": "duplicates_only",
+    "status": "degraded"
+  },
+  "id": "duplicate-only",
+  "report": {
+    "item_count": 0,
+    "miner_request_state": "sent",
+    "run_at": "2026-08-05T00:04:00Z"
+  },
+  "scout": {
+    "requests_created": 1,
+    "research_queue_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/research-requests.jsonl",
+    "run_at": "2026-08-05T00:00:00Z",
+    "scout_queue_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl",
+    "stale_pending_topics": []
+  },
+  "workspace": "/home/ubuntu/.hermes/workspace"
+}

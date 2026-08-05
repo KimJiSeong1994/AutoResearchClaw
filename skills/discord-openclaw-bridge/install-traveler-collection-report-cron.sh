@@ -5,7 +5,7 @@ set -euo pipefail
 
 KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
-REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.openclaw/workspace}"
+REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.hermes/workspace}"
 TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE="${TRAVELER_COLLECTION_REPORT_CRON_SCHEDULE:-0 13 * * *}"
 
 case "$REMOTE_WORKSPACE" in

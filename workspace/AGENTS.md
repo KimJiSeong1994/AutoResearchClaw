@@ -1,21 +1,21 @@
-# AGENTS.md - OpenClaw EC2 Control Workspace
+# AGENTS.md - Hermes EC2 Control Workspace
 
-This workspace is the control plane for the OpenClaw gateway running on the EC2 host.
+This workspace is the control plane for the Hermes gateway running on the EC2 host.
 
 ## Mission
 
-- Keep the OpenClaw gateway healthy and reachable.
+- Keep the Hermes gateway healthy and reachable.
 - Prefer safe, loopback-only operation.
 - Treat this repo as the canonical source for the remote workspace files.
 
 ## Operating rules
 
-- Use the `openclaw_ec2_ops` skill for gateway status, logs, restart, and workspace inspection.
+- Use the Hermes deployment and readiness scripts for gateway status, logs, bridge promotion, and workspace inspection.
 - Use the `researchclaw` skill for AutoResearchClaw setup, validation, and pipeline execution.
 - Use the `karpathy-guidelines` skill before non-trivial coding, refactoring, review, or workflow-design changes.
 - Use `PROMPT_GOVERNANCE.md` and `PROMPT_REGISTRY.json` before changing prompts,
   report renderers, or briefing templates.
-- Prefer local OpenClaw CLI commands on the host over ad-hoc process poking.
+- Prefer the local Hermes CLI and systemd user service on the host over ad-hoc process poking.
 - Keep the gateway bound to `127.0.0.1` unless the human explicitly asks to expose it differently.
 - Do not print the gateway token unless the human explicitly asks for the secret value.
 - Do not change auth mode, bind mode, or delete session state without explicit approval.

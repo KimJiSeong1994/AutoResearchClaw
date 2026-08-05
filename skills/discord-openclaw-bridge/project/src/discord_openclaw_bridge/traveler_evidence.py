@@ -23,7 +23,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .miner import append_jsonl, clean_text, sanitize_url
 
-DEFAULT_EVIDENCE_PATH = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "evidence.jsonl"
+def _default_workspace() -> Path:
+    return Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    ).expanduser()
+
+
+DEFAULT_EVIDENCE_PATH = _default_workspace() / "review" / "jiphyeonjeon-traveler" / "evidence.jsonl"
 DEFAULT_USER_AGENT = "AutoResearchClaw-TravelerEvidence/0.1"
 _ALLOWED_CONTENT_MARKERS = ("html", "xml", "rss", "atom")
 _DESCRIPTION_RE = re.compile(
@@ -104,7 +112,8 @@ class EvidenceRecord:
 
 
 def default_evidence_path() -> Path:
-    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_EVIDENCE_PATH", str(DEFAULT_EVIDENCE_PATH))).expanduser()
+    fallback = _default_workspace() / "review" / "jiphyeonjeon-traveler" / "evidence.jsonl"
+    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_EVIDENCE_PATH", str(fallback))).expanduser()
 
 
 def evidence_id_for(*, request_id: str, provider: str, url: str) -> str:

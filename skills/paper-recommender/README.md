@@ -57,7 +57,7 @@ Quick trend command:
 
 ```bash
 ssh ubuntu@<EC2_PUBLIC_IP> 'jq -c "{date: .run_at, jaccard, soul_b: .soul_bytes, k: (.variants.keywords|length), s: (.variants.soul|length)}" \
-  ~/.openclaw/workspace/projects/paper-recommender/state/ab_log.jsonl'
+  ~/.hermes/workspace/projects/paper-recommender/state/ab_log.jsonl'
 ```
 
 ## First-time setup
@@ -156,7 +156,7 @@ existing token when no local `.mbox`/`.jsonl` export is present.
 
 ## Configuration knobs
 
-`~/.openclaw/workspace/projects/paper-recommender/config.yaml`:
+`~/.hermes/workspace/projects/paper-recommender/config.yaml`:
 
 - `profile.seed_topics` — fallback keywords (cold start; future profile management page will overwrite)
 - `profile.narrative_enabled` — extra LLM call to seed SOUL with a fresh narrative when missing
@@ -168,8 +168,8 @@ existing token when no local `.mbox`/`.jsonl` export is present.
 
 ## Tokens & secrets
 
-- **OpenClaw gateway token** — read from `~/.openclaw_gateway_token` at run time (loopback only)
-- **집현전 JWT** — stored in `~/.openclaw/workspace/projects/paper-recommender/.env` as `JIPHYEONJEON_TOKEN`. Bootstrap delivers it over SSH **stdin** (never on the command line, so it does not appear in `ps`/shell history) and writes via temp + atomic rename
+- **OpenClaw gateway token** — read from `~/.hermes_gateway_token` at run time (loopback only)
+- **집현전 JWT** — stored in `~/.hermes/workspace/projects/paper-recommender/.env` as `JIPHYEONJEON_TOKEN`. Bootstrap delivers it over SSH **stdin** (never on the command line, so it does not appear in `ps`/shell history) and writes via temp + atomic rename
 - The pipeline decodes the JWT payload only to read `sub` for filename routing — no signature verification, no authorization decisions made from the token contents
 
 ## Obsidian output
@@ -250,10 +250,10 @@ Approved 집현전-광부 rows can be published into the newsletter raw archive/
 
 ```bash
 python3 skills/paper-recommender/miner_approved_archive_ingest.py \
-  --manual-links-path "$HOME/.openclaw/workspace/review/jiphyeonjeon-claw/approved-manual-links.jsonl" \
+  --manual-links-path "$HOME/.hermes/workspace/review/jiphyeonjeon-claw/approved-manual-links.jsonl" \
   --wiki-root "$HOME/Desktop/paper-wiki" \
   --date "$(date +%F)" \
-  --briefing-path "$HOME/.openclaw/workspace/reports/miner-approved-briefing.md" \
+  --briefing-path "$HOME/.hermes/workspace/reports/miner-approved-briefing.md" \
   --source-label "집현전-광부 승인 큐"
 ```
 

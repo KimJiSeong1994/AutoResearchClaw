@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
-from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_PATH = ROOT / "scripts" / "check-runtime-manifests.py"
@@ -265,15 +266,159 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("--max-topics", runner_text)
         self.assertIn("paperwiki_interests_used", runner_text)
         self.assertIn("PaperWiki KG merge failed; using baseline topics", runner_text)
+        self.assertIn("scripts/skillopt_traveler_ops.py", runner_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_SKILLOPT_STATUS_PATH", runner_text)
+        self.assertIn("traveler-skillopt-latest.json", runner_text)
+        self.assertIn("report status is stale for this run; skipping advisory evaluation", runner_text)
+        self.assertIn("dry-run: skipping traveler SkillOpt operational evaluation", runner_text)
+        self.assertIn("TRAVELER_SKILLOPT_AUTOTUNE_ENABLED:-1", runner_text)
+        self.assertIn("discord_openclaw_bridge.traveler_tuning", runner_text)
+        self.assertIn("auto-apply", runner_text)
+        self.assertIn("--topics-baseline-sha256 \"${topics_baseline_sha256}\"", runner_text)
+        self.assertIn("--skill-baseline-sha256 \"${skill_baseline_sha256}\"", runner_text)
+        self.assertIn("json_field", runner_text)
+        self.assertIn("ops report status=${ops_status}; skipping bounded auto-tune", runner_text)
+        self.assertIn("ops report was not produced by this run", runner_text)
+        self.assertIn("reward report was not produced by this run", runner_text)
+        self.assertIn("outcome/reward step failed; skipping bounded auto-tune", runner_text)
+        self.assertIn("reward report missing", runner_text)
+        self.assertIn("reward report schema=${reward_schema}; skipping bounded auto-tune", runner_text)
+        self.assertIn("traveler-skillopt-reward.v1", runner_text)
+        self.assertIn("--report-status \"${JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH}\"", runner_text)
+        self.assertIn("--approved-export \"${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH}\"", runner_text)
+        self.assertIn("--miner-review-queue \"${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH}\"", runner_text)
+        self.assertIn("--miner-decisions \"${JIPHYEONJEON_MINER_DECISIONS_PATH}\"", runner_text)
+        self.assertIn("--skillopt-reward", runner_text)
+        self.assertIn("--approval-window-days 7", runner_text)
+        self.assertIn("traveler-skillopt-lineage.jsonl", runner_text)
+        self.assertLess(runner_text.rindex("post_traveler_collection_report"), runner_text.rindex("traveler_outcomes"))
+        self.assertLess(runner_text.rindex("traveler_outcomes"), runner_text.rindex("run_skillopt_traveler_ops"))
+        self.assertLess(runner_text.rindex("run_skillopt_traveler_ops"), runner_text.rindex("run_skillopt_traveler_autotune"))
         self.assertIn("HERMES_WORKSPACE", wrapper_text)
+        self.assertIn("$HOME/.hermes/workspace", wrapper_text)
+        self.assertNotIn("$HOME/.openclaw/workspace", wrapper_text)
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
         self.assertTrue(stable_entrypoint.exists())
         self.assertIn("run-traveler-collection-report.sh", wrapper_text)
         installer_text = installer.read_text(encoding="utf-8")
+        hermes_aux_text = (ROOT / "scripts" / "install-hermes-auxiliary-bot-services.sh").read_text(encoding="utf-8")
+        self.assertIn('REMOTE_WORKSPACE="${REMOTE_WORKSPACE:-~/.hermes/workspace}"', installer_text)
         self.assertIn("scripts/traveler-collection-report.sh", installer_text)
         self.assertIn("HERMES_WORKSPACE=$WORKSPACE $WRAPPER", installer_text)
         self.assertIn("bash -n \"$WRAPPER\"", installer_text)
         self.assertIn("bash -n \"$RUNNER\"", installer_text)
+        self.assertIn("Environment=TRAVELER_SKILLOPT_AUTOTUNE_ENABLED=1", hermes_aux_text)
+        self.assertIn("traveler-skillopt-reward-latest.json", hermes_aux_text)
+        self.assertIn("traveler-skillopt-autotune-latest.json", hermes_aux_text)
+        self.assertIn("traveler-skillopt-lineage.jsonl", hermes_aux_text)
+        self.assertIn("Environment=JIPHYEONJEON_MINER_DECISIONS_PATH=", hermes_aux_text)
+
+    def test_traveler_skill_has_single_bounded_generated_scope_contract(self) -> None:
+        skill = (ROOT / "skills" / "jiphyeonjeon-traveler" / "SKILL.md").read_text(encoding="utf-8")
+        start = "<!-- SKILLOPT:TRAVELER:SEARCH-SCOPE:START -->"
+        end = "<!-- SKILLOPT:TRAVELER:SEARCH-SCOPE:END -->"
+        self.assertEqual(skill.count(start), 1)
+        self.assertEqual(skill.count(end), 1)
+        section = skill.split(start, 1)[1].split(end, 1)[0]
+        self.assertIn("exact-URL approval", section)
+        self.assertIn("later reject/hold", section)
+        self.assertIn("weighted 70%", section)
+        self.assertIn("Shannon diversity", section)
+        self.assertIn("weighted 30%", section)
+        self.assertIn("7-day censor", section)
+        self.assertIn("Minimum eligible sample size is 5", section)
+        self.assertIn("runtime/traveler-scout-topics.json", section)
+        self.assertIn("priority", section)
+        self.assertIn("max_candidates", section)
+        self.assertIn("hash", section)
+        self.assertIn("backup", section)
+        self.assertIn("rollback", section)
+        self.assertIn("lineage", section)
+        self.assertIn("Read-only evaluator", skill)
+        self.assertIn("Bounded auto-tune sink", skill)
+        self.assertIn("automatic_apply=false", skill)
+        self.assertIn("status` is not `failed`", skill)
+        self.assertIn("traveler-skillopt-reward.v1", skill)
+
+    def test_traveler_skillopt_ops_is_read_only_manifest_job(self) -> None:
+        checker = load_checker()
+        jobs = entries_by_id(checker, (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8"))
+        agents = entries_by_id(checker, (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8"))
+
+        job = jobs["skillopt-traveler-operational-evaluation"]
+        auditor = agents["skillopt-auditor"]
+        traveler = agents["jiphyeonjeon-traveler"]
+        job_text = " ".join(
+            [
+                *job.fields.values(),
+                *job.lists.get("inputs", []),
+                *job.lists.get("command_refs", []),
+                *job.lists.get("outputs", []),
+                *job.lists.get("checks", []),
+            ]
+        ).lower()
+        daily_text = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("skillopt-traveler-operational-evaluation", auditor.lists.get("owns_jobs", []))
+        self.assertIn("scripts/skillopt_traveler_ops.py", auditor.lists.get("source_refs", []))
+        self.assertIn("skills/jiphyeonjeon-traveler/SKILL.md", auditor.lists.get("source_refs", []))
+        self.assertIn("skills/jiphyeonjeon-traveler/SKILL.md", traveler.lists.get("source_refs", []))
+        self.assertIn("scripts/skillopt_traveler_ops.py", traveler.lists.get("source_refs", []))
+        self.assertIn("--scout", job_text)
+        self.assertIn("--discovery", job_text)
+        self.assertIn("--report", job_text)
+        self.assertIn("--workspace", job_text)
+        self.assertIn("traveler-skillopt-latest.json", job_text)
+        self.assertIn("discord-openclaw-traveler-tune", job_text)
+        self.assertIn("auto-apply", job_text)
+        self.assertIn("--report-status", job_text)
+        self.assertIn("--approved-export", job_text)
+        self.assertIn("--miner-review-queue", job_text)
+        self.assertIn("--miner-decisions", job_text)
+        self.assertIn("--skillopt-reward", job_text)
+        self.assertIn("traveler-skillopt-reward-latest.json", job_text)
+        self.assertIn("traveler-skillopt-autotune-latest.json", job_text)
+        self.assertIn("traveler-skillopt-lineage.jsonl", job_text)
+        self.assertIn("approval-window-days 7", job_text)
+        self.assertIn("70%", job_text)
+        self.assertIn("30%", job_text)
+        self.assertIn("minimum sample size 5", job_text)
+        self.assertIn("priority/max_candidates", job_text)
+        self.assertIn("skillopt:traveler:search-scope", job_text)
+        self.assertIn("scripts/skillopt_eval.py", job_text)
+        self.assertIn("tests/fixtures/skillopt", job_text)
+        self.assertIn("tests/fixtures/skillopt/jiphyeonjeon-traveler/heldout", job_text)
+        self.assertIn("accepted_count=0", job_text)
+        self.assertIn("bounded auto-tune", job_text)
+        self.assertIn("unrestricted skillopt apply", job_text)
+        self.assertIn("remain forbidden", job_text)
+        self.assertIn("before/after hash", job_text)
+        self.assertIn("backup", job_text)
+        self.assertIn("rollback", job_text)
+        self.assertIn("lineage", job_text)
+        self.assertIn("python3 scripts/skillopt_traveler_ops.py", daily_text)
+        self.assertIn("discord-openclaw-traveler-tune --ledger", daily_text)
+        self.assertIn("auto-apply", daily_text)
+        self.assertIn("failures never fail the daily report", daily_text)
+        self.assertIn("TRAVELER_SKILLOPT_AUTOTUNE_ENABLED=1", daily_text)
+        self.assertIn("unrestricted apply", daily_text.lower())
+
+        local_eval = next(ref for ref in job.lists.get("command_refs", []) if "scripts/skillopt_eval.py" in ref)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "skillopt-eval-traveler.json"
+            command = local_eval.replace("/tmp/skillopt-eval-traveler.json", str(out))
+            proc = subprocess.run(
+                shlex.split(command),
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            report = json.loads(out.read_text(encoding="utf-8"))
+            traveler_results = [row for row in report["results"] if row["skill"] == "jiphyeonjeon-traveler"]
+            self.assertEqual(len(traveler_results), 9)
+            self.assertTrue(all(row["passed"] for row in traveler_results))
 
     def test_traveler_runtime_manifests_declare_optional_paperwiki_kg(self) -> None:
         jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
@@ -302,8 +447,7 @@ class RuntimeManifestTest(unittest.TestCase):
                         "REMOTE_WORKSPACE": workspace,
                     },
                     text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     check=False,
                 )
                 self.assertEqual(2, result.returncode)
@@ -337,7 +481,7 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("DAILY_BRIEFING_WAIT_SECONDS", briefing_text)
         self.assertIn("NEWSLETTER_ARCHIVE_LOCK_DIR", briefing_text)
         self.assertIn("wait_for_archive_runner", briefing_text)
-        self.assertIn('grep -Fqx -- "작성일: \`$NEWSLETTER_DATE\`"', briefing_text)
+        self.assertIn(r'grep -Fqx -- "작성일: \`$NEWSLETTER_DATE\`"', briefing_text)
         self.assertIn('RUN_DATE="${NEWSLETTER_DATE:-$(date +%F)}"', briefing_text)
         self.assertIn("집현전 데일리 뉴스레터 — 기술 블로그 브리핑", briefing_text)
         self.assertIn("오늘의 핵심 항목 — 기술 블로그형 소개", briefing_text)

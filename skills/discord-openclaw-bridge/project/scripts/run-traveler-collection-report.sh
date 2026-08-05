@@ -11,10 +11,11 @@ if [ -d "$SCRIPT_DIR/../.venv" ]; then
   PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
   DEFAULT_WORKSPACE="$(cd "${PROJECT_DIR}/../../.." && pwd)"
 else
-  DEFAULT_WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-${HOME}/.openclaw/workspace}}"
+  DEFAULT_WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-${HOME}/.hermes/workspace}}"
   PROJECT_DIR="${DEFAULT_WORKSPACE}/skills/discord-openclaw-bridge/project"
 fi
 WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-${DEFAULT_WORKSPACE}}}"
+RUN_STARTED_EPOCH="$(date +%s)"
 LOG_DIR="${WORKSPACE}/logs"
 TRAVELER_REVIEW_DIR="${WORKSPACE}/review/jiphyeonjeon-traveler"
 TRAVELER_STATE_DIR="${WORKSPACE}/state"
@@ -30,6 +31,7 @@ export JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH="${JIPHYEONJEON_TRAVELER_SCOUT_ST
 export JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH="${JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH:-${TRAVELER_STATE_DIR}/traveler-collection-report-last-status.json}"
 export JIPHYEONJEON_MINER_INTAKE_PATH="${JIPHYEONJEON_MINER_INTAKE_PATH:-${MINER_INTAKE_DIR}/links.jsonl}"
 export JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH:-${MINER_REVIEW_DIR}/link-review-queue.jsonl}"
+export JIPHYEONJEON_MINER_DECISIONS_PATH="${JIPHYEONJEON_MINER_DECISIONS_PATH:-${MINER_REVIEW_DIR}/link-review-decisions.jsonl}"
 export JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-${MANUAL_LINKS_DIR}/approved-manual-links.jsonl}"
 mkdir -p "${TRAVELER_REVIEW_DIR}" "${TRAVELER_STATE_DIR}" "${MINER_INTAKE_DIR}" "${MINER_REVIEW_DIR}" "${MANUAL_LINKS_DIR}"
 LOG_FILE="${LOG_DIR}/traveler-collection-report.log"
@@ -147,6 +149,129 @@ PY
   fi
 }
 
+file_mtime_epoch() {
+  local path="$1"
+  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || echo 0
+}
+
+json_field() {
+  local path="$1"
+  local field="$2"
+  .venv/bin/python - "$path" "$field" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = payload
+for part in sys.argv[2].split("."):
+    if not isinstance(value, dict) or part not in value:
+        raise SystemExit(1)
+    value = value[part]
+print("" if value is None else str(value))
+PY
+}
+
+run_skillopt_traveler_ops() {
+  local skillopt_script="${REPO_DIR}/scripts/skillopt_traveler_ops.py"
+  local out="${JIPHYEONJEON_TRAVELER_SKILLOPT_STATUS_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-latest.json}"
+  local report_mtime
+  if [ "${SKILLOPT_TRAVELER_OPS_ENABLED:-1}" != "1" ]; then
+    echo "traveler skillopt ops: disabled by SKILLOPT_TRAVELER_OPS_ENABLED"
+    return 0
+  fi
+  if [ ! -f "${skillopt_script}" ]; then
+    echo "traveler skillopt ops: evaluator missing at ${skillopt_script}; skipping advisory evaluation"
+    return 0
+  fi
+  if [ ! -f "${JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH}" ]; then
+    echo "traveler skillopt ops: report status missing; skipping advisory evaluation"
+    return 0
+  fi
+  report_mtime="$(file_mtime_epoch "${JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH}")"
+  if [ "${report_mtime}" -lt "${RUN_STARTED_EPOCH}" ]; then
+    echo "traveler skillopt ops: report status is stale for this run; skipping advisory evaluation"
+    return 0
+  fi
+  mkdir -p "$(dirname "${out}")"
+  local skillopt_exit=0
+  .venv/bin/python "${skillopt_script}" \
+    --scout "${JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH}" \
+    --discovery "${JIPHYEONJEON_TRAVELER_DISCOVERY_STATUS_PATH}" \
+    --report "${JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH}" \
+    --reward "${TRAVELER_SKILLOPT_REWARD_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-reward-latest.json}" \
+    --workspace "${WORKSPACE}" \
+    --out "${out}" || skillopt_exit=$?
+  printf "[%s] traveler-skillopt-ops done (exit=%s out=%s)\n" "$(timestamp)" "${skillopt_exit}" "${out}"
+  return 0
+}
+
+run_skillopt_traveler_autotune() {
+  local ops_report="${JIPHYEONJEON_TRAVELER_SKILLOPT_STATUS_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-latest.json}"
+  local reward_report="${JIPHYEONJEON_TRAVELER_SKILLOPT_REWARD_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-reward-latest.json}"
+  local autotune_report="${JIPHYEONJEON_TRAVELER_SKILLOPT_AUTOTUNE_REPORT_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-autotune-latest.json}"
+  local lineage="${JIPHYEONJEON_TRAVELER_SKILLOPT_LINEAGE_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-lineage.jsonl}"
+  local topics_path="${JIPHYEONJEON_TRAVELER_SKILLOPT_TOPICS_PATH:-${REPO_DIR}/runtime/traveler-scout-topics.json}"
+  local skill_path="${JIPHYEONJEON_TRAVELER_SKILLOPT_SKILL_PATH:-${REPO_DIR}/skills/jiphyeonjeon-traveler/SKILL.md}"
+  local ops_status
+  local reward_schema
+  local topics_baseline_sha256
+  local skill_baseline_sha256
+  if [ "${TRAVELER_SKILLOPT_AUTOTUNE_ENABLED:-1}" != "1" ]; then
+    echo "traveler skillopt autotune: disabled by TRAVELER_SKILLOPT_AUTOTUNE_ENABLED"
+    return 0
+  fi
+  if [ "${OUTCOMES_EXIT:-1}" != "0" ] || [ "${REWARD_EXIT:-1}" != "0" ]; then
+    echo "traveler skillopt autotune: outcome/reward step failed; skipping bounded auto-tune"
+    return 0
+  fi
+  if [ ! -f "${ops_report}" ]; then
+    echo "traveler skillopt autotune: ops report missing at ${ops_report}; skipping bounded auto-tune"
+    return 0
+  fi
+  if [ "$(file_mtime_epoch "${ops_report}")" -lt "${RUN_STARTED_EPOCH}" ]; then
+    echo "traveler skillopt autotune: ops report was not produced by this run; skipping bounded auto-tune"
+    return 0
+  fi
+  ops_status="$(json_field "${ops_report}" status 2>/dev/null || echo "invalid")"
+  if [ "${ops_status}" = "failed" ] || [ "${ops_status}" = "invalid" ]; then
+    echo "traveler skillopt autotune: ops report status=${ops_status}; skipping bounded auto-tune"
+    return 0
+  fi
+  if [ ! -f "${reward_report}" ]; then
+    echo "traveler skillopt autotune: reward report missing at ${reward_report}; skipping bounded auto-tune"
+    return 0
+  fi
+  if [ "$(file_mtime_epoch "${reward_report}")" -lt "${RUN_STARTED_EPOCH}" ]; then
+    echo "traveler skillopt autotune: reward report was not produced by this run; skipping bounded auto-tune"
+    return 0
+  fi
+  reward_schema="$(json_field "${reward_report}" schema_version 2>/dev/null || echo "invalid")"
+  if [ "${reward_schema}" != "traveler-skillopt-reward.v1" ]; then
+    echo "traveler skillopt autotune: reward report schema=${reward_schema}; skipping bounded auto-tune"
+    return 0
+  fi
+  if [ ! -f "${topics_path}" ] || [ ! -f "${skill_path}" ]; then
+    echo "traveler skillopt autotune: bounded target missing; skipping bounded auto-tune"
+    return 0
+  fi
+  topics_baseline_sha256="$(.venv/bin/python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "${topics_path}")"
+  skill_baseline_sha256="$(.venv/bin/python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "${skill_path}")"
+  mkdir -p "$(dirname "${reward_report}")" "$(dirname "${autotune_report}")" "$(dirname "${lineage}")"
+  local autotune_exit=0
+  .venv/bin/python -m discord_openclaw_bridge.traveler_tuning \
+    --ledger "${TRAVELER_LEDGER_PATH}" \
+    auto-apply \
+    --topics "${topics_path}" \
+    --skill "${skill_path}" \
+    --topics-baseline-sha256 "${topics_baseline_sha256}" \
+    --skill-baseline-sha256 "${skill_baseline_sha256}" \
+    --lineage "${lineage}" \
+    --approval-window-days 7 >"${autotune_report}" 2>>"${LOG_FILE}" || autotune_exit=$?
+  printf "[%s] traveler-skillopt-autotune done (exit=%s report=%s lineage=%s)\n" "$(timestamp)" "${autotune_exit}" "${autotune_report}" "${lineage}"
+  return 0
+}
+
 printf "\n[%s] traveler-collection-report start\n" "$(timestamp)"
 cd "${PROJECT_DIR}"
 prepare_scout_topics
@@ -156,6 +281,7 @@ if [ "${TRAVELER_COLLECTION_REPORT_DRY_RUN:-0}" = "1" ]; then
   .venv/bin/python -m discord_openclaw_bridge.traveler_scout "${SCOUT_TOPICS_ARGS[@]}" --max-topics "${TRAVELER_SCOUT_MAX_TOPICS}" --dry-run
   .venv/bin/python -m discord_openclaw_bridge.traveler_source_discovery --dry-run
   .venv/bin/python -m discord_openclaw_bridge.post_traveler_collection_report --dry-run
+  echo "dry-run: skipping traveler SkillOpt operational evaluation to avoid stale production artifacts"
   printf "[%s] traveler-collection-report dry-run complete\n" "$(timestamp)"
   exit 0
 fi
@@ -180,31 +306,33 @@ CLI_EXIT=0
 .venv/bin/python -m discord_openclaw_bridge.post_traveler_collection_report || CLI_EXIT=$?
 printf "[%s] traveler-collection-report done (exit=%s scout_exit=%s discovery_exit=%s)\n" "$(timestamp)" "${CLI_EXIT}" "${SCOUT_EXIT}" "${DISCOVERY_EXIT}"
 
-# Advisory steps. These record and analyse outcomes; neither posts anything nor
-# changes config, so a failure here must never fail the daily report.
-# --ledger is explicit: its default is ~/.openclaw/workspace regardless of which
-# workspace is running, so without this the ledger lands beside a different
-# deployment's state while the report lands here.
+# Advisory steps. These record handoff/Miner approval outcomes and write
+# calibration/reward inputs; neither can overwrite the daily report exit.
+# --ledger is explicit so rollback OPENCLAW_WORKSPACE/Hermes overrides cannot
+# split the outcome history away from the report workspace.
 TRAVELER_LEDGER_PATH="${JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH:-${TRAVELER_STATE_DIR}/traveler-outcome-ledger.jsonl}"
+TRAVELER_CALIBRATION_REPORT_PATH="${JIPHYEONJEON_TRAVELER_CALIBRATION_REPORT_PATH:-${TRAVELER_STATE_DIR}/traveler-calibration-latest.json}"
+TRAVELER_SKILLOPT_REWARD_PATH="${JIPHYEONJEON_TRAVELER_SKILLOPT_REWARD_PATH:-${TRAVELER_STATE_DIR}/traveler-skillopt-reward-latest.json}"
 OUTCOMES_EXIT=0
 .venv/bin/python -m discord_openclaw_bridge.traveler_outcomes \
   --ledger "${TRAVELER_LEDGER_PATH}" \
-  --report "${TRAVELER_STATE_DIR}/traveler-calibration-latest.json" || OUTCOMES_EXIT=$?
+  --report-status "${JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH}" \
+  --miner-review-queue "${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH}" \
+  --miner-decisions "${JIPHYEONJEON_MINER_DECISIONS_PATH}" \
+  --approved-export "${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH}" \
+  --approval-window-days 7 \
+  --report "${TRAVELER_CALIBRATION_REPORT_PATH}" || OUTCOMES_EXIT=$?
 printf "[%s] traveler-outcomes done (exit=%s)\n" "$(timestamp)" "${OUTCOMES_EXIT}"
+REWARD_EXIT=0
+.venv/bin/python -m discord_openclaw_bridge.traveler_outcomes \
+  --ledger "${TRAVELER_LEDGER_PATH}" \
+  --report-only \
+  --skillopt-reward \
+  --approval-window-days 7 \
+  --report "${TRAVELER_SKILLOPT_REWARD_PATH}" || REWARD_EXIT=$?
+printf "[%s] traveler-skillopt-reward done (exit=%s report=%s)\n" "$(timestamp)" "${REWARD_EXIT}" "${TRAVELER_SKILLOPT_REWARD_PATH}"
 
-# propose is read-only: it prints what a human could choose to apply. `apply`
-# needs an interactive --confirm and is deliberately never invoked here.
-TUNE_EXIT=0
-# Trailing X's: BSD mktemp does not substitute a template with a suffix after them.
-TUNE_TMP="$(mktemp "${TRAVELER_STATE_DIR}/traveler-tuning-proposals.XXXXXX")"
-# --ledger precedes the subcommand: it is a top-level argument, so `propose --ledger` fails.
-if .venv/bin/python -m discord_openclaw_bridge.traveler_tuning \
-  --ledger "${TRAVELER_LEDGER_PATH}" propose >"${TUNE_TMP}" 2>>"${LOG_FILE}"; then
-  mv "${TUNE_TMP}" "${TRAVELER_STATE_DIR}/traveler-tuning-proposals.json"
-else
-  TUNE_EXIT=$?
-  rm -f "${TUNE_TMP}"
-fi
-printf "[%s] traveler-tune propose done (exit=%s)\n" "$(timestamp)" "${TUNE_EXIT}"
+run_skillopt_traveler_ops
+run_skillopt_traveler_autotune
 
 exit "${CLI_EXIT}"

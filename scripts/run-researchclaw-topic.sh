@@ -15,7 +15,7 @@ ssh -i "$KEY_FILE" "$REMOTE_HOST" bash -s -- "$TOPIC_B64" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 TOPIC="$(printf '%s' "$1" | python3 -c 'import base64, sys; print(base64.b64decode(sys.stdin.read()).decode(), end="")')"
-exec bash ~/.openclaw/workspace/skills/researchclaw/run-topic.sh "$TOPIC"
+exec bash ~/.hermes/workspace/skills/researchclaw/run-topic.sh "$TOPIC"
 REMOTE_SCRIPT
 
 bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sync-researchclaw-results.sh"

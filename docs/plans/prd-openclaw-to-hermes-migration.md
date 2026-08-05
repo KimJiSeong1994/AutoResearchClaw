@@ -1,5 +1,14 @@
 # PRD: OpenClaw to Hermes Agent migration
 
+## Production status (2026-08-05)
+
+- Hermes is the EC2 primary gateway on loopback `127.0.0.1:28789`.
+- `discord-hermes-bridge.service` and the three `discord-hermes-jiphyeonjeon-*` units are active.
+- OpenClaw gateway and bridge units are disabled; their files and state remain intact for rollback.
+- Scheduled workspace paths point to `~/.hermes/workspace`.
+- The EC2 `t2.micro` cannot run both gateways reliably: simultaneous operation caused sustained memory and I/O pressure. Do not re-enable OpenClaw while Hermes is active except during a bounded rollback.
+- Hermes is constrained to `agent.max_turns=12` and `agent.reasoning_effort=low` for bridge responsiveness on this host size.
+
 ## Goal
 
 Migrate the AutoResearchClaw operating surface from an OpenClaw-centered runtime to Hermes Agent without losing the existing Discord, ResearchClaw, paper recommendation, review queue, and publication safety boundaries.

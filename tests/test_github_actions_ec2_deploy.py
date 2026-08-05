@@ -42,13 +42,15 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
     def test_workflow_calls_existing_deploy_scripts_and_restart_check(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
 
-        self.assertIn("bash scripts/deploy-openclaw-workspace.sh", text)
-        self.assertIn("bash scripts/deploy-discord-openclaw-bridge.sh", text)
+        self.assertIn("bash scripts/deploy-hermes-workspace.sh", text)
+        self.assertIn("bash scripts/deploy-discord-hermes-bridge.sh", text)
+        self.assertIn("bash scripts/check-hermes-ops.sh", text)
+        self.assertIn("bash scripts/check-hermes-bridge-smoke.sh", text)
+        self.assertIn("bash scripts/install-hermes-primary-bridge-service.sh", text)
         self.assertIn("uv run --with pytest pytest -q", text)
-        self.assertIn("bash project/scripts/install.sh", text)
-        self.assertIn("bash project/scripts/restart.sh", text)
-        self.assertIn("systemctl --user is-active discord-openclaw-bridge.service", text)
-        self.assertIn("systemctl --user show discord-openclaw-bridge.service", text)
+        self.assertNotIn("bash scripts/deploy-openclaw-workspace.sh", text)
+        self.assertNotIn("systemctl --user is-active discord-openclaw-bridge.service", text)
+        self.assertNotIn("cd ~/.openclaw/workspace", text)
 
     def test_workflow_does_not_embed_obvious_private_key_material(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
@@ -63,22 +65,25 @@ class GitHubActionsEc2DeployTest(unittest.TestCase):
             self.assertNotIn(pattern, text)
 
     def test_deploy_scripts_accept_ssh_options_and_sync_runtime_scripts(self) -> None:
-        workspace = (ROOT / "scripts" / "deploy-openclaw-workspace.sh").read_text(encoding="utf-8")
-        bridge = (ROOT / "scripts" / "deploy-discord-openclaw-bridge.sh").read_text(encoding="utf-8")
+        workspace = (ROOT / "scripts" / "deploy-hermes-workspace.sh").read_text(encoding="utf-8")
+        bridge = (ROOT / "scripts" / "deploy-discord-hermes-bridge.sh").read_text(encoding="utf-8")
+        legacy_bridge = (ROOT / "scripts" / "deploy-discord-openclaw-bridge.sh").read_text(encoding="utf-8")
 
         self.assertIn("SSH_OPTIONS", workspace)
         self.assertIn("SSH_OPTIONS", bridge)
         self.assertIn("SSH_BASE=(ssh)", workspace)
         self.assertIn("SSH_BASE=(ssh)", bridge)
-        self.assertIn('RSYNC_SSH="${SSH_BASE[*]}"', workspace)
-        self.assertIn('RSYNC_SSH="${SSH_BASE[*]}"', bridge)
+        self.assertIn("for ssh_arg in", workspace)
+        self.assertIn("for ssh_arg in", bridge)
         self.assertIn("runtime/", workspace)
         self.assertIn("scripts/", workspace)
-        self.assertIn("REFRESH_OPENCLAW_IDENTITY", workspace)
-        self.assertIn("timeout 20s openclaw agents set-identity", workspace)
+        self.assertIn("~/.hermes/workspace", workspace)
+        self.assertIn("~/.hermes/workspace", bridge)
         self.assertIn("--exclude '.env'", workspace)
         self.assertIn("--exclude '.env'", bridge)
         self.assertGreaterEqual(workspace.count("--exclude '.env'"), 3)
+        self.assertIn("deploy-discord-hermes-bridge.sh", legacy_bridge)
+        self.assertNotIn("~/.openclaw/workspace ~/.hermes/workspace", legacy_bridge)
 
 
 if __name__ == "__main__":

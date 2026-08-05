@@ -11,14 +11,14 @@ metadata:
   phase: 1-control-plane-manifest
 
 defaults:
-  runtime_host: openclaw-ec2
-  workspace: ~/.openclaw/workspace
-  gateway_base_url: http://127.0.0.1:18789/v1
-  model_target: openclaw/clawbridge
+  runtime_host: hermes-ec2
+  workspace: ~/.hermes/workspace
+  gateway_base_url: http://127.0.0.1:28789/v1
+  model_target: hermes-agent
 
 agents:
   - id: workspace-operator
-    name: OpenClaw workspace operator
+    name: Hermes workspace operator
     kind: control-plane
     source_refs:
       - README.md
@@ -55,7 +55,7 @@ agents:
       - do not delete sessions, auth files, or agent state without approval
 
   - id: hermes-ec2-ops
-    name: Hermes Agent EC2 canary operations agent
+    name: Hermes Agent EC2 operations agent
     kind: ops-skill
     source_refs:
       - docs/plans/prd-openclaw-to-hermes-migration.md
@@ -64,21 +64,23 @@ agents:
       - scripts/check-hermes-bridge-smoke.sh
       - scripts/deploy-hermes-workspace.sh
       - scripts/install-hermes-bridge-canary-service.sh
+      - scripts/install-hermes-primary-bridge-service.sh
       - scripts/install-hermes-auxiliary-bot-services.sh
     owns_jobs:
       - hermes-workspace-deploy
       - hermes-ops-readiness-check
       - hermes-bridge-smoke-check
       - hermes-bridge-canary-service-install
+      - hermes-primary-bridge-service-install
       - hermes-auxiliary-bot-service-install
     runtime:
-      profile: hermes-canary
+      profile: hermes-primary
       workspace: ~/.hermes/workspace
       gateway_endpoint: http://127.0.0.1:28789/v1
       token_file: ~/.hermes_gateway_token
       service: hermes-gateway.service
-      bridge_service: discord-hermes-bridge-canary.service
-      bridge_enable_guard: ~/.hermes/ENABLE_DISCORD_BRIDGE_CANARY
+      bridge_service: discord-hermes-bridge.service
+      rollback_bridge_service: discord-hermes-bridge-canary.service
       auxiliary_services:
         - discord-hermes-jiphyeonjeon-miner.service
         - discord-hermes-jiphyeonjeon-traveler.service
@@ -86,23 +88,23 @@ agents:
       log_glob: ~/.hermes/logs/*.log
       bridge_env: ~/.hermes/workspace/skills/discord-openclaw-bridge/project/.env
     responsibilities:
-      - inspect Hermes canary gateway status without mutating OpenClaw production paths
-      - deploy side-by-side workspace files into the Hermes canary workspace
+      - inspect the Hermes production gateway and bridge state
+      - deploy workspace files into the Hermes primary workspace
       - verify loopback-only /v1 models health when a Hermes token file exists
-      - verify Discord bridge canary chat calls through Hermes before production cutover
-      - install the Hermes canary bridge service as disabled and guard-file gated
+      - verify Discord bridge chat calls through Hermes before promotion
+      - promote the Hermes primary bridge and retain disabled OpenClaw units for rollback
       - install and optionally cut over Hermes auxiliary bot services with rollback checks
-      - report canary service, listener, bridge env, auxiliary services, and log signal without printing secrets
+      - report primary service, listener, bridge env, auxiliary services, and log signal without printing secrets
     boundaries:
-      - keep Hermes canary gateway on loopback unless explicitly changed
-      - do not restart production services or mutate OpenClaw state
+      - keep the Hermes gateway on loopback unless explicitly changed
+      - do not delete OpenClaw state; it is rollback-only until a separate cleanup approval
       - do not print Hermes or OpenClaw token values
-      - do not start the Hermes Discord bridge while the OpenClaw bridge is active unless explicitly cutover-approved
+      - do not run the Hermes and OpenClaw Discord bridges simultaneously
       - do not cut over auxiliary bots unless HERMES_AUX_CUTOVER=1 is explicitly set for a migration window
-      - canary deploy remains separate from OpenClaw workspace deploy
+      - never deploy new production content into ~/.openclaw
 
   - id: researchclaw
-    name: ResearchClaw via OpenClaw
+    name: ResearchClaw via Hermes
     kind: project-agent
     source_refs:
       - skills/researchclaw/SKILL.md
@@ -111,16 +113,16 @@ agents:
       - researchclaw-validate
       - researchclaw-topic-run
     runtime:
-      repo: ~/.openclaw/workspace/projects/AutoResearchClaw
-      config: ~/.openclaw/workspace/projects/AutoResearchClaw/config.yaml
-      gateway_endpoint: http://127.0.0.1:18789/v1
+      repo: ~/.hermes/workspace/projects/AutoResearchClaw
+      config: ~/.hermes/workspace/projects/AutoResearchClaw/config.yaml
+      gateway_endpoint: http://127.0.0.1:28789/v1
     responsibilities:
       - validate AutoResearchClaw integration
       - run explicit topic research requests
       - sync generated results into the local Obsidian target
     boundaries:
       - do not start full research unless a user clearly asks for execution
-      - use loopback OpenClaw gateway only
+      - use the loopback Hermes gateway only
 
   - id: paper-recommender
     name: Daily paper recommender
@@ -132,14 +134,14 @@ agents:
       - paper-recommender-daily
       - newsletter-ingest-local-daily
     runtime:
-      project_dir: ~/.openclaw/workspace/projects/paper-recommender
-      config: ~/.openclaw/workspace/projects/paper-recommender/config.yaml
+      project_dir: ~/.hermes/workspace/projects/paper-recommender
+      config: ~/.hermes/workspace/projects/paper-recommender/config.yaml
       entrypoint: .venv/bin/paper-recommender
-      gateway_endpoint: http://127.0.0.1:18789/v1
+      gateway_endpoint: http://127.0.0.1:28789/v1
     responsibilities:
       - derive profile from Jiphyeonjeon bookmarks
       - evolve per-user SOUL.md state
-      - collect candidate papers and rerank through OpenClaw
+      - collect candidate papers and rerank through Hermes
       - write recommendation artifacts and A/B logs
       - publish sanitized newsletter exports into the wiki archive
     boundaries:
@@ -164,7 +166,7 @@ agents:
       - prefer relay_pull to avoid Apps Script to Discord network failures
 
   - id: discord-openclaw-bridge
-    name: Discord OpenClaw bridge
+    name: Discord Hermes bridge
     kind: service-agent
     source_refs:
       - skills/discord-openclaw-bridge/SKILL.md
@@ -172,15 +174,15 @@ agents:
     owns_jobs:
       - discord-openclaw-bridge-service
     runtime:
-      project_dir: ~/.openclaw/workspace/skills/discord-openclaw-bridge/project
-      service: discord-openclaw-bridge.service
+      project_dir: ~/.hermes/workspace/skills/discord-openclaw-bridge/project
+      service: discord-hermes-bridge.service
       guild_id: "<DISCORD_GUILD_ID>"
       channel_id: "<DISCORD_ALLOWED_CHANNEL_ID>"
-      gateway_endpoint: http://127.0.0.1:18789/v1
+      gateway_endpoint: http://127.0.0.1:28789/v1
     responsibilities:
       - provide /openclaw and /openclaw_status in the allowlisted channel
       - post configured Jiphyeonjeon briefings
-      - keep OpenClaw gateway calls on loopback
+      - keep Hermes gateway calls on loopback
     boundaries:
       - main bridge does not collect Miner links
       - DISCORD_BOT_TOKEN stays in project .env
@@ -195,7 +197,7 @@ agents:
       - discord-jiphyeonjeon-miner-service
       - discord-miner-seeds-expand
     runtime:
-      service: discord-jiphyeonjeon-miner.service
+      service: discord-hermes-jiphyeonjeon-miner.service
       channel_env: DISCORD_MINER_CHANNEL_ID
       intake_path: JIPHYEONJEON_MINER_INTAKE_PATH
       review_queue_path: JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH
@@ -212,17 +214,22 @@ agents:
     name: 집현전-여행자 source discovery agent
     kind: research-agent
     source_refs:
+      - skills/jiphyeonjeon-traveler/SKILL.md
       - skills/discord-openclaw-bridge/README.md#집현전-여행자-source-discovery-path
       - workspace/PROMPT_REGISTRY.json
       - scripts/paperwiki_kg.py
+      - scripts/skillopt_traveler_ops.py
       - runtime/traveler-scout-topics.json
       - runtime/traveler-scoring.json
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/traveler.py
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/traveler_scout.py
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/traveler_source_discovery.py
       - docs/ops/traveler-new-discovery-blocked-analysis-2026-06-26.md
     owns_jobs:
       - jiphyeonjeon-traveler-source-discovery
       - jiphyeonjeon-traveler-daily-collection-report
     runtime:
-      service: discord-jiphyeonjeon-traveler.service
+      service: discord-hermes-jiphyeonjeon-traveler.service
       token_env: DISCORD_TRAVELER_BOT_TOKEN
       client_env: DISCORD_TRAVELER_CLIENT_ID
       channel_env: DISCORD_TRAVELER_CHANNEL_ID
@@ -282,22 +289,30 @@ agents:
       - scripts/skillopt_propose.py
       - scripts/skillopt_apply.py
       - scripts/skillopt_reward.py
+      - scripts/skillopt_traveler_ops.py
       - tests/fixtures/skillopt
       - .codex/skills/academic-technical-filter/SKILL.md
       - .codex/skills/blog-research-post/SKILL.md
       - .codex/skills/jiphyeonjeon-reporter-article-post/SKILL.md
+      - skills/jiphyeonjeon-traveler/SKILL.md
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/traveler.py
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/traveler_scout.py
+      - skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/traveler_source_discovery.py
       - docs/plans/skillopt-agent-skill-strengthening.md
     owns_jobs:
       - skillopt-readiness-audit
       - skillopt-evaluation-harness
       - skillopt-patch-proposal
       - skillopt-reward-evaluator
+      - skillopt-traveler-operational-evaluation
       - skillopt-controlled-apply
     responsibilities:
       - inventory Codex and runtime skill surfaces
       - map skill surfaces to runtime agents and jobs
       - produce SkillOpt readiness gap matrices and sanitized PaperWiki evidence maps
       - run held-out skill evaluation fixtures before accepting bounded skill edits
+      - run read-only Traveler operational SkillOpt checks over scout, discovery, and daily-report status artifacts
+      - run bounded Traveler auto-tuning only for runtime/traveler-scout-topics.json priority/max_candidates and the generated marker section in skills/jiphyeonjeon-traveler/SKILL.md
       - generate bounded SkillOpt patch proposals from audit and evaluation evidence
       - emit advisory score-bearing reward reports for eligible proposal ranking and diagnostics
       - run controlled one-proposal select and dry-run/apply handoffs after explicit approvals
@@ -309,6 +324,7 @@ agents:
       - does not edit PaperWiki vault notes, Discord state, EC2, Hermes workspaces, or runtime control-plane files during controlled apply
       - emits only wiki-relative PaperWiki paths and sanitized metadata
       - never auto-accepts SkillOpt edits without reviewer and critic gates
+      - never applies unrestricted Traveler tuning; bounded auto-tune must write hash, backup, rollback, and lineage evidence and stay inside the declared allowed targets
       - patch proposal generation is not skill mutation and live accepted-lineage writes remain Phase 4-only
       - never prints tokens, webhook URLs, private note bodies, or absolute local vault paths
 

@@ -10,9 +10,52 @@ from discord_openclaw_bridge.miner import DiscordLinkMetadata
 from discord_openclaw_bridge.traveler import (
     TravelerResearchRequest,
     TravelerSourceInput,
+    default_research_queue_path,
+    default_source_queue_path,
     record_research_request,
     record_source_candidate,
 )
+from discord_openclaw_bridge.traveler_evidence import default_evidence_path
+from discord_openclaw_bridge.traveler_outcomes import default_ledger_path
+from discord_openclaw_bridge.traveler_scout import default_scout_queue_path, default_scout_status_path
+from discord_openclaw_bridge.traveler_source_discovery import default_discovery_status_path
+
+
+def test_traveler_default_paths_use_hermes_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_WORKSPACE", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    for key in (
+        "JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH",
+        "JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH",
+        "JIPHYEONJEON_TRAVELER_EVIDENCE_PATH",
+        "JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH",
+        "JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH",
+        "JIPHYEONJEON_TRAVELER_OUTCOME_LEDGER_PATH",
+        "JIPHYEONJEON_TRAVELER_DISCOVERY_STATUS_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert default_source_queue_path() == Path.home() / ".hermes" / "workspace" / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"
+    assert default_research_queue_path() == Path.home() / ".hermes" / "workspace" / "review" / "jiphyeonjeon-traveler" / "research-requests.jsonl"
+    assert default_evidence_path() == Path.home() / ".hermes" / "workspace" / "review" / "jiphyeonjeon-traveler" / "evidence.jsonl"
+    assert default_scout_queue_path() == Path.home() / ".hermes" / "workspace" / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
+    assert default_scout_status_path() == Path.home() / ".hermes" / "workspace" / "state" / "traveler-scout-last-status.json"
+    assert default_ledger_path() == Path.home() / ".hermes" / "workspace" / "state" / "traveler-outcome-ledger.jsonl"
+    assert default_discovery_status_path() == Path.home() / ".hermes" / "workspace" / "state" / "traveler-source-discovery-last-status.json"
+
+
+def test_openclaw_workspace_env_remains_rollback_compatibility(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    rollback_workspace = tmp_path / "openclaw-rollback"
+    monkeypatch.delenv("HERMES_WORKSPACE", raising=False)
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(rollback_workspace))
+    monkeypatch.delenv("JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH", raising=False)
+
+    assert default_source_queue_path() == rollback_workspace / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"
+
+    hermes_workspace = tmp_path / "hermes-primary"
+    monkeypatch.setenv("HERMES_WORKSPACE", str(hermes_workspace))
+
+    assert default_source_queue_path() == hermes_workspace / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"
 
 
 def test_record_research_request_requires_deep_many_source_review(tmp_path: Path) -> None:

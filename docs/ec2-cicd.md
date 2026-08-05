@@ -1,12 +1,12 @@
 # EC2 CI/CD via GitHub Actions
 
-This repository uses `.github/workflows/ec2-deploy.yml` to validate changes and deploy the OpenClaw workspace plus Discord bridge to EC2.
+This repository uses `.github/workflows/ec2-deploy.yml` to validate changes and deploy the Hermes workspace plus Discord bridge to EC2.
 
 ## Triggers
 
 - `pull_request` to `main`: validation only.
-- `push` to `main`: validation, then workspace deploy, Discord bridge deploy, and bridge reinstall/restart when EC2 production secrets are configured.
-- `workflow_dispatch`: manual deploy with booleans for workspace, Discord bridge, and restart.
+- `push` to `main`: validation, Hermes workspace deploy, bridge source deploy, Hermes readiness/chat smoke, then primary bridge promotion.
+- `workflow_dispatch`: manual deploy with booleans for workspace, Discord bridge, and Hermes bridge promotion.
 
 ## Required GitHub environment
 
@@ -28,7 +28,7 @@ ssh-keyscan -H 52.79.96.56
 
 When the EC2 instance, public IP, or host key changes, rotate `EC2_KNOWN_HOSTS` in the same reviewed change window as the host migration.
 
-Do not commit private keys, `.env` files, Discord tokens, OpenClaw gateway tokens, or GitHub secret values.
+Do not commit private keys, `.env` files, Discord tokens, Hermes/OpenClaw gateway tokens, or GitHub secret values.
 
 ## Deploy key rotation and revocation
 
@@ -43,14 +43,14 @@ Do not commit private keys, `.env` files, Discord tokens, OpenClaw gateway token
 1. Runs prompt/runtime validators and tests.
 2. Writes the private key to `$RUNNER_TEMP/ec2_deploy_key` with `0600` permissions.
 3. Uses strict SSH host-key checking with the pinned `EC2_KNOWN_HOSTS` secret.
-4. Runs `scripts/deploy-openclaw-workspace.sh`, which syncs:
+4. Runs `scripts/deploy-hermes-workspace.sh`, which syncs:
    - `workspace/`
    - `skills/`
    - `runtime/`
    - `scripts/`
-   The optional OpenClaw identity refresh is disabled by default; set `REFRESH_OPENCLAW_IDENTITY=1` to run it with a remote timeout.
-5. Runs `scripts/deploy-discord-openclaw-bridge.sh`.
-6. Reinstalls/restarts `discord-openclaw-bridge.service` and prints sanitized `systemctl show` state only. Raw `journalctl` output is intentionally not emitted to GitHub Actions logs.
+5. Runs `scripts/deploy-discord-hermes-bridge.sh` against `~/.hermes/workspace` only.
+6. Runs Hermes readiness and authenticated chat smoke checks.
+7. Promotes `discord-hermes-bridge.service`, disables the old OpenClaw units, migrates remaining scheduled paths to Hermes, and prints sanitized `systemctl show` state only. Raw `journalctl` output is intentionally not emitted to GitHub Actions logs.
 
 ## Safety boundaries
 
@@ -62,9 +62,9 @@ Do not commit private keys, `.env` files, Discord tokens, OpenClaw gateway token
 
 ## Rollback and post-deploy checks
 
-- Roll back by reverting the deploy commit on `main` or manually running the workflow from a known-good commit.
+- Roll back by stopping `discord-hermes-bridge.service`, starting the retained OpenClaw gateway/bridge units, and reverting the deploy commit on `main`. OpenClaw state is intentionally not deleted by the Hermes promotion.
 - After deploy, verify the workflow step reports `ActiveState=active`, `SubState=running`, and `ExecMainStatus=0`.
-- If the bridge restart fails, inspect logs on EC2 directly over SSH; do not dump raw service logs into CI.
+- If Hermes promotion fails, the installer restores the previously active bridge. Inspect logs on EC2 directly over SSH; do not dump raw service logs into CI.
 
 ## Local parity checks
 

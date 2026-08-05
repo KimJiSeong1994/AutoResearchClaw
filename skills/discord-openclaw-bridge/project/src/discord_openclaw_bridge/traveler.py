@@ -204,10 +204,15 @@ def render_traveler_ack(result: TravelerRecordResult) -> str:
 
 
 def default_source_queue_path() -> Path:
+    workspace = Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    )
     return Path(
         os.environ.get(
             "JIPHYEONJEON_TRAVELER_SOURCE_QUEUE_PATH",
-            str(Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"),
+            str(workspace / "review" / "jiphyeonjeon-traveler" / "source-candidates.jsonl"),
         )
     ).expanduser()
 
@@ -226,10 +231,15 @@ class TravelerResearchRequest:
 
 
 def default_research_queue_path() -> Path:
+    workspace = Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    )
     return Path(
         os.environ.get(
             "JIPHYEONJEON_TRAVELER_RESEARCH_QUEUE_PATH",
-            str(Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "research-requests.jsonl"),
+            str(workspace / "review" / "jiphyeonjeon-traveler" / "research-requests.jsonl"),
         )
     ).expanduser()
 
