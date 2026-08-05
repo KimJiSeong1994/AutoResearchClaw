@@ -38,7 +38,10 @@ done
 
 cd "$ROOT_DIR"
 REMOTE_SKILL="$HERMES_REMOTE_WORKSPACE/skills/discord-openclaw-bridge"
-remote_skill_quoted="$(quote_remote "$REMOTE_SKILL")"
+remote_skill_relative="${REMOTE_SKILL#\~/}"
+# Expand the remote home on the remote shell instead of relying on the
+# platform-specific printf %q representation of a leading tilde.
+remote_skill_quoted="\$HOME/$(quote_remote "$remote_skill_relative")"
 "${SSH_BASE[@]}" "$REMOTE_HOST" "mkdir -p $remote_skill_quoted"
 COPYFILE_DISABLE=1 rsync -az --delete \
   --exclude '.env' \
