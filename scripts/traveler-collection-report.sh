@@ -2,5 +2,5 @@
 # Stable EC2 cron entrypoint. Delegates to the committed Traveler runner.
 set -euo pipefail
 
-WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}}"
+WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.hermes/workspace}}"
 exec "$WORKSPACE/skills/discord-openclaw-bridge/project/scripts/run-traveler-collection-report.sh" "$@"

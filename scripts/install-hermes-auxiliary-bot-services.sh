@@ -74,8 +74,15 @@ Environment=JIPHYEONJEON_TRAVELER_EVIDENCE_PATH=$workspace/review/jiphyeonjeon-t
 Environment=JIPHYEONJEON_TRAVELER_DISCOVERY_STATUS_PATH=$workspace/state/traveler-source-discovery-last-status.json
 Environment=JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH=$workspace/state/traveler-scout-last-status.json
 Environment=JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH=$workspace/state/traveler-collection-report-last-status.json
+Environment=JIPHYEONJEON_TRAVELER_SKILLOPT_STATUS_PATH=$workspace/state/traveler-skillopt-latest.json
+Environment=TRAVELER_SKILLOPT_AUTOTUNE_ENABLED=1
+Environment=JIPHYEONJEON_TRAVELER_SKILLOPT_REWARD_PATH=$workspace/state/traveler-skillopt-reward-latest.json
+Environment=JIPHYEONJEON_TRAVELER_SKILLOPT_AUTOTUNE_REPORT_PATH=$workspace/state/traveler-skillopt-autotune-latest.json
+Environment=JIPHYEONJEON_TRAVELER_SKILLOPT_LINEAGE_PATH=$workspace/state/traveler-skillopt-lineage.jsonl
+Environment=JIPHYEONJEON_TRAVELER_CALIBRATION_REPORT_PATH=$workspace/state/traveler-calibration-latest.json
 Environment=JIPHYEONJEON_MINER_INTAKE_PATH=$workspace/intake/jiphyeonjeon-miner/links.jsonl
 Environment=JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH=$workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl
+Environment=JIPHYEONJEON_MINER_DECISIONS_PATH=$workspace/review/jiphyeonjeon-claw/link-review-decisions.jsonl
 Environment=JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH=$workspace/manual_links/approved-manual-links.jsonl
 ReadWritePaths=$project $workspace $HOME/.hermes/state $extra_rw
 

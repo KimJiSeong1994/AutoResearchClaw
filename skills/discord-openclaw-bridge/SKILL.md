@@ -1,20 +1,20 @@
 ---
 name: discord_openclaw_bridge
-description: Operate the Discord bot bridge that exposes OpenClaw in a single allowlisted Discord guild/channel while keeping the OpenClaw gateway loopback-only.
+description: Operate the Discord bot bridge that exposes Hermes in a single allowlisted Discord guild/channel while keeping the Hermes gateway loopback-only. OpenClaw names remain only for package and rollback compatibility.
 ---
 
-# Discord OpenClaw Bridge
+# Discord Hermes Bridge
 
-Use this skill when the user asks to install, inspect, verify, invite, or operate OpenClaw from Discord.
+Use this skill when the user asks to install, inspect, verify, invite, or operate the Hermes-backed Discord bridge.
 
 ## Runtime shape
 
-- Project dir: `~/.openclaw/workspace/skills/discord-openclaw-bridge/project`
-- Service: `discord-openclaw-bridge.service` under the `ubuntu` systemd user
+- Project dir: `~/.hermes/workspace/skills/discord-openclaw-bridge/project`
+- Service: `discord-hermes-bridge.service` under the `ubuntu` systemd user
 - Discord access: bot token from project `.env`
-- OpenClaw access: loopback `http://127.0.0.1:18789/v1` plus token file `~/.openclaw_gateway_token`
+- Hermes access: loopback `http://127.0.0.1:28789/v1` plus token file `~/.hermes_gateway_token`
 - Default allowlist: guild `<DISCORD_GUILD_ID>`, channel `<DISCORD_ALLOWED_CHANNEL_ID>`
-- Briefing source: `DISCORD_BRIEFING_SOURCE`, defaulting to `~/.openclaw/workspace/reports/daily-trends-latest.md`
+- Briefing source: `DISCORD_BRIEFING_SOURCE`, defaulting to `~/.hermes/workspace/reports/daily-trends-latest.md`
 - Card-news source: `DISCORD_CARD_NEWS_SOURCE`, defaulting to the latest `NEWSLETTER_WIKI_ROOT/raw/newsletters/*/items.json`
 
 ## Primary commands
@@ -31,8 +31,8 @@ Run from this skill directory unless stated otherwise:
 
 ## Safety rules
 
-- Keep OpenClaw gateway loopback-only; do not expose `18789` publicly for Discord.
-- Do not print Discord bot token or OpenClaw gateway token.
+- Keep Hermes gateway loopback-only; do not expose `28789` publicly for Discord.
+- Do not print Discord bot token or Hermes gateway token.
 - Keep card-news content limited to sanitized archive fields; never add raw email bodies, OAuth tokens, Script Properties, webhook URLs, or relay tokens to Discord output.
 - Keep allowed guild/channel set unless the human explicitly widens scope.
 - Prefer slash commands and mentions; do not request `MESSAGE_CONTENT` unless needed for mention/free-text behavior.

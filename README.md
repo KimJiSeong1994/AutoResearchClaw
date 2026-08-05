@@ -2,11 +2,11 @@
 
 AI/ML 연구자를 위한 개인 맞춤형 리서치 비서. 논문 북마크·관심사를 학습해 매일 새 논문과 뉴스레터를 자동으로 골라 요약하고, 심층 리서치까지 Obsidian·Discord로 전달한다.
 
-이 저장소는 위 서비스를 EC2 OpenClaw 워크스페이스로 배포·운영하는 소스(에이전트 프롬프트, 커스텀 스킬, 런타임 매니페스트, 배포 스크립트)를 담는다.
+이 저장소는 위 서비스를 EC2 Hermes Agent 워크스페이스로 배포·운영하는 소스(에이전트 프롬프트, 커스텀 스킬, 런타임 매니페스트, 배포 스크립트)를 담는다. `openclaw`가 포함된 일부 패키지·명령 이름은 한 배포 주기 동안의 호환성 표면이며 실제 production 서비스와 경로는 Hermes를 사용한다.
 
 ## What this repo contains
 
-- OpenClaw workspace source files:
+- Hermes workspace source files:
   - `workspace/AGENTS.md`
   - `workspace/IDENTITY.md`
   - `workspace/SOUL.md`
@@ -22,18 +22,20 @@ AI/ML 연구자를 위한 개인 맞춤형 리서치 비서. 논문 북마크·�
   - `skills/researchclaw/`
   - `skills/discord-openclaw-bridge/`
 - Local helper scripts:
-  - `scripts/deploy-openclaw-workspace.sh`
-  - `scripts/openclaw-dashboard-tunnel.sh`
+  - `scripts/deploy-hermes-workspace.sh`
   - `scripts/run-researchclaw-topic.sh`
   - `scripts/sync-researchclaw-results.sh`
-  - `scripts/deploy-discord-openclaw-bridge.sh`
+  - `scripts/deploy-discord-hermes-bridge.sh`
+  - `scripts/install-hermes-primary-bridge-service.sh`
 
 ## Target runtime
 
 - EC2 host: `<EC2_PUBLIC_IP>`
 - SSH user: `ubuntu`
-- Remote OpenClaw workspace: `~/.openclaw/workspace`
-- Gateway bind: `127.0.0.1:18789`
+- Remote Hermes workspace: `~/.hermes/workspace`
+- Gateway bind: `127.0.0.1:28789`
+- Primary services: `hermes-gateway.service`, `discord-hermes-bridge.service`
+- Rollback-only state: `~/.openclaw`, `openclaw-gateway.service`, `discord-openclaw-bridge.service` (disabled, not deleted)
 
 ## Agent discipline
 
@@ -45,11 +47,11 @@ claiming completion.
 ## Deploy workspace changes
 
 ```bash
-bash scripts/deploy-openclaw-workspace.sh
+bash scripts/deploy-hermes-workspace.sh
 ```
 
 The deploy script validates prompt governance first, then maps the workspace
-control files and prompt registry into the remote OpenClaw workspace root.
+control files and prompt registry into the remote Hermes workspace root.
 
 ## Validate governance and runtime manifests
 
@@ -92,10 +94,42 @@ python3 scripts/skillopt_eval.py \
 ```
 
 The evaluation harness is the Phase 2 gate before SkillOpt bounded edits can be
-accepted. It runs deterministic held-out fixtures for `academic-technical-filter`,
-`blog-research-post`, and `jiphyeonjeon-reporter-article-post`, preserves a JSON
-acceptance record, and keeps automatic skill mutation disabled until reviewer and
-critic gates approve a proposed patch.
+accepted. It runs 17 deterministic held-out fixtures for
+`academic-technical-filter`, `blog-research-post`,
+`jiphyeonjeon-reporter-article-post`, and `jiphyeonjeon-traveler`, preserves a
+JSON acceptance record, and keeps automatic skill mutation disabled until
+reviewer and critic gates approve a proposed patch.
+
+## Evaluate Traveler operational evidence with SkillOpt
+
+```bash
+python3 scripts/skillopt_traveler_ops.py \
+  --scout ~/.hermes/workspace/state/traveler-scout-last-status.json \
+  --discovery ~/.hermes/workspace/state/traveler-source-discovery-last-status.json \
+  --report ~/.hermes/workspace/state/traveler-collection-report-last-status.json \
+  --reward ~/.hermes/workspace/state/traveler-skillopt-reward-latest.json \
+  --workspace ~/.hermes/workspace \
+  --out ~/.hermes/workspace/state/traveler-skillopt-latest.json
+```
+
+The Traveler adapter is read-only and emits `skillopt-traveler-ops.v1` with
+exit code `0` (`ok`), `1` (`degraded`), or `2` (`failed`). It rejects stale or
+future-dated evidence, legacy OpenClaw production paths, and false-green
+zero-yield runs with provider errors. The daily Traveler job also records
+exact-URL Miner handoff/approval events and scores a reward composed of 70%
+Miner approval rate plus 30% approved provider/domain/topic Shannon diversity.
+Recent unapproved handoffs are censored for seven days.
+The latest append-only Miner/Claw decision is authoritative; the approved export
+is only a fallback, and a later reject/hold revokes the positive label.
+
+The evaluator remains read-only and cannot change the report exit code. A
+separate bounded auto-tune sink activates only with at least five eligible
+samples and may change only `priority`/`max_candidates` in
+`runtime/traveler-scout-topics.json` plus the generated search-scope markers in
+`skills/jiphyeonjeon-traveler/SKILL.md`. It requires exact target allowlists,
+baseline hashes, versioned backups, post-validation, rollback, and append-only
+lineage. Unrestricted SkillOpt apply and automatic scoring/provider/queue,
+Discord, cron, systemd, or credential changes remain forbidden.
 
 ## Generate SkillOpt patch proposals
 
@@ -124,33 +158,24 @@ fingerprints, and validates accepted-lineage schemas for Phase 4. Actual skill
 mutation and live `accepted-lineage.jsonl` writes remain a separate controlled
 apply step after reviewer and critic gates.
 
-## Deploy Discord OpenClaw bridge
+## Deploy the Discord bridge through Hermes
 
 ```bash
-bash scripts/deploy-discord-openclaw-bridge.sh
+bash scripts/deploy-discord-hermes-bridge.sh
+bash scripts/check-hermes-ops.sh
+bash scripts/check-hermes-bridge-smoke.sh
+bash scripts/install-hermes-primary-bridge-service.sh
 ```
 
-On EC2, set `DISCORD_BOT_TOKEN` in `~/.openclaw/workspace/skills/discord-openclaw-bridge/project/.env`, run `bash project/scripts/install.sh`, then start `discord-openclaw-bridge.service`. The bridge is allowlisted to Discord guild `<DISCORD_GUILD_ID>` and channel `<DISCORD_ALLOWED_CHANNEL_ID>` by default.
+On EC2, the bridge environment lives at `~/.hermes/workspace/skills/discord-openclaw-bridge/project/.env` and the active unit is `discord-hermes-bridge.service`. The installer promotes Hermes only after gateway and Discord readiness checks, disables the old OpenClaw units, and retains their state for rollback.
 
 ## Check remote ops readiness
 
 ```bash
-bash scripts/check-openclaw-ops.sh
+bash scripts/check-hermes-ops.sh
 ```
 
-This read-only check verifies the remote gateway service, loopback listeners, `/v1/models` probe, Discord bridge service, ResearchClaw install surface, latest paper-recommender status, and recent OpenClaw warning/error log signal without printing gateway tokens.
-
-## Open the dashboard through SSH
-
-```bash
-bash scripts/openclaw-dashboard-tunnel.sh
-```
-
-Then open:
-
-```text
-http://127.0.0.1:18789
-```
+This read-only check verifies the remote Hermes gateway, loopback listener, `/v1/models` probe, bridge environment, and recent Hermes warning/error log signal without printing gateway tokens.
 
 ## Run AutoResearchClaw and sync results into Obsidian
 

@@ -97,4 +97,4 @@ COPYFILE_DISABLE=1 rsync -az --delete \
 
 "${SSH_BASE[@]}" "$REMOTE_HOST" "find $remote_workspace_quoted -maxdepth 2 -name '._*' -delete; find $remote_workspace_quoted/skills $remote_workspace_quoted/scripts -name '*.sh' -exec chmod +x {} +; find $remote_workspace_quoted/scripts -name '*.py' -exec chmod +x {} +"
 
-echo "Deployed Hermes canary workspace files to $REMOTE_HOST:$HERMES_REMOTE_WORKSPACE"
+echo "Deployed Hermes primary workspace files to $REMOTE_HOST:$HERMES_REMOTE_WORKSPACE"

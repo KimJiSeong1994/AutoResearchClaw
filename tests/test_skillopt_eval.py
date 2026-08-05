@@ -24,9 +24,14 @@ def test_skillopt_eval_harness_passes_heldout_fixtures() -> None:
     mod = load_eval()
     report = mod.make_report(mod.parse_args(["--root", str(ROOT), "--as-of", "2026-06-27T00:00:00+09:00"]))
     assert report["schema_version"] == "skillopt-eval.v1"
-    assert report["summary"] == {"total": 8, "passed": 8, "failed": 0, "status": "PASS"}
+    assert report["summary"] == {"total": 17, "passed": 17, "failed": 0, "status": "PASS"}
     skills = {result["skill"] for result in report["results"]}
-    assert skills == {"academic-technical-filter", "blog-research-post", "jiphyeonjeon-reporter-article-post"}
+    assert skills == {
+        "academic-technical-filter",
+        "blog-research-post",
+        "jiphyeonjeon-reporter-article-post",
+        "jiphyeonjeon-traveler",
+    }
     assert report["acceptance_policy"]["automatic_accept"] is False
     assert report["acceptance_policy"]["requires_reviewer_gate"] is True
 
@@ -93,8 +98,8 @@ def test_sanitize_process_output_redacts_full_users_path_with_s_in_username() ->
 def test_cli_writes_deterministic_report() -> None:
     out = ROOT / ".omx/reports/skillopt/skillopt-eval-latest.json"
     cmd = [sys.executable, str(SCRIPT), "--root", str(ROOT), "--as-of", "2026-06-27T00:00:00+09:00", "--out", str(out)]
-    first = subprocess.run(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    second = subprocess.run(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    first = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, check=False)
+    second = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, check=False)
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
     assert first.stdout == second.stdout
@@ -103,3 +108,20 @@ def test_cli_writes_deterministic_report() -> None:
     serialized = json.dumps(saved, ensure_ascii=False)
     assert "/Users/" not in serialized
     assert "discord.com/api/webhooks" not in serialized
+
+
+def test_traveler_skillopt_heldout_covers_operational_statuses() -> None:
+    mod = load_eval()
+    report = mod.make_report(mod.parse_args(["--root", str(ROOT), "--as-of", "2026-06-27T00:00:00+09:00"]))
+    traveler = [result for result in report["results"] if result["skill"] == "jiphyeonjeon-traveler"]
+    assert len(traveler) == 9
+    statuses = {result["case_id"]: result["details"]["actual"]["status"] for result in traveler}
+    assert statuses["accepted-arxiv"] == "ok"
+    assert statuses["semantic-scholar-429-with-fallback"] == "degraded"
+    assert statuses["stale-artifact-failure"] == "failed"
+    assert statuses["zero-accepted-with-provider-errors"] == "failed"
+    assert statuses["legacy-openclaw-path-failure"] == "failed"
+    assert all(result["passed"] for result in traveler)
+    serialized = json.dumps(traveler, ensure_ascii=False)
+    assert "/home/ubuntu/.hermes/workspace" not in serialized
+    assert ".openclaw/workspace/" not in serialized

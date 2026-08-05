@@ -3,7 +3,7 @@ set -euo pipefail
 
 KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
-REMOTE_PROJECT="${REMOTE_PROJECT:-~/.openclaw/workspace/projects/paper-recommender}"
+REMOTE_PROJECT="${REMOTE_PROJECT:-~/.hermes/workspace/projects/paper-recommender}"
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -50,18 +50,10 @@ fi
 
 mkdir -p "$PROJECT_DIR/state" "$PROJECT_DIR/artifacts" "$PROJECT_DIR/logs"
 
-if [ ! -f "$HOME/.openclaw_gateway_token" ]; then
-  python3 - <<PY
-import json
-from pathlib import Path
-p = Path.home()/".openclaw"/"openclaw.json"
-if p.exists():
-    data = json.loads(p.read_text())
-    tok = data.get("gateway", {}).get("auth", {}).get("token", "")
-    if tok:
-        (Path.home()/".openclaw_gateway_token").write_text(tok + "\n")
-PY
-fi
+[ -s "$HOME/.hermes_gateway_token" ] || {
+  echo "Hermes gateway token file is missing" >&2
+  exit 1
+}
 
 echo "phase-1 setup complete: $PROJECT_DIR"
 REMOTE
@@ -71,7 +63,7 @@ REMOTE
 # as the SSH command argument (NOT via heredoc — the pipe wins over heredoc and
 # would silently make the token become the script body).
 PHASE2_SCRIPT='set -euo pipefail
-PROJECT_DIR="$HOME/.openclaw/workspace/projects/paper-recommender"
+PROJECT_DIR="$HOME/.hermes/workspace/projects/paper-recommender"
 mkdir -p "$PROJECT_DIR"
 umask 077
 tok="$(cat)"
@@ -91,7 +83,7 @@ JIPHY_USERNAME="${JIPHYEONJEON_USERNAME:-}"
 JIPHY_PASSWORD="${JIPHYEONJEON_PASSWORD:-}"
 if [ -n "$JIPHY_USERNAME" ] && [ -n "$JIPHY_PASSWORD" ]; then
   PHASE3_SCRIPT='set -euo pipefail
-PROJECT_DIR="$HOME/.openclaw/workspace/projects/paper-recommender"
+PROJECT_DIR="$HOME/.hermes/workspace/projects/paper-recommender"
 env_file="$PROJECT_DIR/.env"
 umask 077
 read -r username

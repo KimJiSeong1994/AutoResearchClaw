@@ -8,11 +8,40 @@ from discord_openclaw_bridge.post_traveler_collection_report import (
     ReportItem,
     build_miner_collection_request_payload,
     build_report_items,
+    default_miner_approved_export_path,
+    default_miner_intake_path,
+    default_miner_review_queue_path,
+    default_report_state_path,
     format_miner_collection_request,
     format_report_body,
     should_reuse_miner_request,
     url_hash,
 )
+
+
+def test_traveler_report_cli_default_paths_use_hermes_workspace(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("HERMES_WORKSPACE", raising=False)
+    monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
+    for key in (
+        "JIPHYEONJEON_MINER_INTAKE_PATH",
+        "JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH",
+        "JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH",
+        "JIPHYEONJEON_TRAVELER_REPORT_STATUS_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert default_miner_intake_path() == Path.home() / ".hermes" / "workspace" / "intake" / "jiphyeonjeon-miner" / "links.jsonl"
+    assert default_miner_review_queue_path() == Path.home() / ".hermes" / "workspace" / "review" / "jiphyeonjeon-claw" / "link-review-queue.jsonl"
+    assert default_miner_approved_export_path() == Path.home() / ".hermes" / "workspace" / "manual_links" / "approved-manual-links.jsonl"
+    assert default_report_state_path() == Path.home() / ".hermes" / "workspace" / "state" / "traveler-collection-report-last-status.json"
+
+    rollback_workspace = tmp_path / "openclaw-rollback"
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(rollback_workspace))
+    assert default_report_state_path() == rollback_workspace / "state" / "traveler-collection-report-last-status.json"
+
+    hermes_workspace = tmp_path / "hermes-primary"
+    monkeypatch.setenv("HERMES_WORKSPACE", str(hermes_workspace))
+    assert default_report_state_path() == hermes_workspace / "state" / "traveler-collection-report-last-status.json"
 
 
 def test_traveler_collection_report_surfaces_gap_fields() -> None:

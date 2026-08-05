@@ -332,8 +332,8 @@ def test_fallback_queries_skip_soul_governance_noise() -> None:
         {"keywords": []},
     )
     joined = "\n".join(q["query"] for q in queries)
-    assert "dynamic graph representation learning" in joined
-    assert "heterogeneous temporal graph neural networks" in joined
+    assert "graph representation learning recent benchmarks" in joined
+    assert joined.count("graph representation learning recent benchmarks") == 1
     assert "Changelog" not in joined
     assert "suppress generic" not in joined
 

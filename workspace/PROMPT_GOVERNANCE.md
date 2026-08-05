@@ -9,7 +9,7 @@ assets rather than incidental strings.
 - Keep one deployable inventory of prompt surfaces.
 - Make every prompt change reviewable, testable, and rollbackable.
 - Report prompt health together with service health.
-- Preserve OpenClaw loopback, Discord, Gmail, and token privacy boundaries.
+- Preserve Hermes loopback, Discord, Gmail, and token privacy boundaries.
 
 The machine-readable registry lives at `PROMPT_REGISTRY.json` in this workspace.
 
@@ -41,7 +41,7 @@ Before deployment, a prompt change must pass:
 - evidence provenance checks for research/reporting prompts
 - no-secret checks for tokens, raw Gmail bodies, webhook URLs, OAuth values,
   gateway tokens, and private workspace links
-- a post-deploy health check when the change affects OpenClaw, Discord, Gmail,
+- a post-deploy health check when the change affects Hermes, Discord, Gmail,
   or scheduled reporting
 
 If a live EC2, Discord, Gmail, or Apps Script check needs credentials, record the
@@ -97,7 +97,7 @@ Rollback is preferred over hot-patching when a prompt causes:
 - evidence coverage below the accepted threshold
 - secret or private-data exposure
 - Discord delivery failure from prompt size or format regression
-- OpenClaw gateway safety boundary regression
+- Hermes gateway safety boundary regression
 
 Use the prompt-specific rollback notes in `PROMPT_REGISTRY.json` first, then
 re-run the change gate.

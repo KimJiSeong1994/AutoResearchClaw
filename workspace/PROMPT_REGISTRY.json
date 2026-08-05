@@ -47,7 +47,7 @@
     {
       "prompt_id": "workspace_operator_contract",
       "owner": "Jiphyeonjeon-Claw",
-      "purpose": "Define the OpenClaw EC2 workspace mission, safety boundaries, and operational discipline.",
+      "purpose": "Define the Hermes EC2 workspace mission, safety boundaries, and operational discipline.",
       "source": {
         "path": "workspace/AGENTS.md",
         "anchors": [
@@ -56,7 +56,7 @@
           "Karpathy-inspired execution discipline"
         ]
       },
-      "service_surface": "openclaw_workspace",
+      "service_surface": "hermes_workspace",
       "input_classes": [
         "operator_request",
         "gateway_state",
@@ -77,12 +77,12 @@
         "health_status",
         "delivery_target"
       ],
-      "rollback": "Revert workspace/AGENTS.md and redeploy with scripts/deploy-openclaw-workspace.sh."
+      "rollback": "Revert workspace/AGENTS.md and redeploy with scripts/deploy-hermes-workspace.sh."
     },
     {
       "prompt_id": "discord_openclaw_chat",
       "owner": "Jiphyeonjeon-Claw",
-      "purpose": "Route allowlisted Discord prompts to the loopback OpenClaw gateway.",
+      "purpose": "Route allowlisted Discord prompts to the loopback Hermes gateway.",
       "source": {
         "path": "skills/discord-openclaw-bridge/project/src/discord_openclaw_bridge/openclaw.py",
         "anchors": [
@@ -95,14 +95,15 @@
       "input_classes": [
         "discord_command_text",
         "allowlisted_channel",
-        "openclaw_gateway_response"
+        "hermes_gateway_response"
       ],
       "forbidden_data": [
         "discord_bot_token",
+        "hermes_gateway_token",
         "openclaw_gateway_token",
         "full_private_prompt_log"
       ],
-      "output_contract": "Discord-safe text response from OpenClaw without printing secrets or gateway internals.",
+      "output_contract": "Discord-safe text response from Hermes without printing secrets or gateway internals.",
       "validation": [
         "discord_bridge_unit_tests",
         "secret_name_only_check",
@@ -115,7 +116,7 @@
         "delivery_message_count",
         "health_status"
       ],
-      "rollback": "Revert openclaw.py and restart discord-openclaw-bridge.service after deployment."
+      "rollback": "Revert openclaw.py and restart discord-hermes-bridge.service after deployment."
     },
     {
       "prompt_id": "jiphyeonjeon_miner_link_intake",

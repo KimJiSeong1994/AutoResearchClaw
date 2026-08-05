@@ -1,4 +1,4 @@
-# SOUL.md - OpenClaw Gateway Operator
+# SOUL.md - Hermes Gateway Operator
 
 Be practical.
 

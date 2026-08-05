@@ -6,9 +6,22 @@ import os
 import sys
 from pathlib import Path
 
-from .review import export_approved_manual_links, queue_items, record_decision, show_item
+from .review import (
+    export_approved_manual_links,
+    queue_items,
+    record_decision,
+    show_item,
+)
 
-_DEFAULT_REVIEW_ROOT = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-claw"
+
+def _default_workspace() -> Path:
+    return Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    ).expanduser()
+
+_DEFAULT_REVIEW_ROOT = _default_workspace() / "review" / "jiphyeonjeon-claw"
 DEFAULT_REVIEW_QUEUE = Path(
     os.getenv("JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH", str(_DEFAULT_REVIEW_ROOT / "link-review-queue.jsonl"))
 )
@@ -18,7 +31,7 @@ DEFAULT_DECISIONS = Path(
 DEFAULT_EXPORT = Path(
     os.getenv(
         "JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH",
-        str(Path.home() / ".openclaw" / "workspace" / "manual_links" / "approved-manual-links.jsonl"),
+        str(_default_workspace() / "manual_links" / "approved-manual-links.jsonl"),
     )
 )
 

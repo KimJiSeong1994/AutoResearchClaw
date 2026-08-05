@@ -14,9 +14,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from discord_openclaw_bridge.traveler_tuning import apply_proposals, propose_changes, summarize_ledger
-from discord_openclaw_bridge.traveler_outcomes import url_key
+from discord_openclaw_bridge.traveler_outcomes import (
+    EVENT_HANDED_OFF,
+    EVENT_MINER_APPROVAL_REVOKED,
+    EVENT_MINER_APPROVED,
+    EVENT_OBSERVED,
+    url_key,
+)
+from discord_openclaw_bridge.traveler_tuning import (
+    apply_proposals,
+    auto_apply_bounded,
+    propose_changes,
+    summarize_ledger,
+)
 
 GOOD = "https://good.example.com/feed"
 BAD = "https://bad.example.com/feed"
@@ -186,3 +196,427 @@ def test_summary_attributes_outcomes_per_source(tmp_path: Path) -> None:
     assert summary[GOOD]["observations"] == 3
     assert summary[GOOD]["approved"] == 1 and summary[GOOD]["adopted"] == 1
     assert summary[BAD]["rejected"] == 1 and summary[BAD]["adopted"] == 0
+
+
+def write_reward_ledger(path: Path, *, count: int = 5, query_only: bool = False, one_topic: bool = False) -> None:
+    rows: list[dict[str, Any]] = []
+    for i in range(count):
+        url = f"https://approved{i}.example.com/paper"
+        key = url_key(url)
+        topic = "rag_eval" if one_topic or i < 3 else "agents"
+        query = "RAG evaluation" if topic == "rag_eval" else "agents"
+        topic_id = "" if query_only else topic
+        rows.extend(
+            [
+                {
+                    "event": EVENT_OBSERVED,
+                    "url_key": key,
+                    "url": url,
+                    "provider": "arxiv" if i % 2 == 0 else "semantic_scholar",
+                    "host": f"approved{i}.example.com",
+                    "topic_id": topic_id,
+                    "query": query,
+                    "observed_at": "2026-07-01T00:00:00Z",
+                },
+                {"event": EVENT_HANDED_OFF, "url_key": key, "url": url, "handed_off_at": "2026-07-02T00:00:00Z"},
+                {"event": EVENT_MINER_APPROVED, "url_key": key, "url": url, "approved_at": "2026-07-03T00:00:00Z"},
+            ]
+        )
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+
+def write_topics(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {"id": "rag_eval", "query": "RAG evaluation", "priority": "medium", "max_candidates": 4},
+                    {"id": "agents", "query": "agents", "priority": "medium", "max_candidates": 4},
+                    {"id": "infra", "query": "infra", "priority": "low", "max_candidates": 2},
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_skill(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """# jiphyeonjeon-traveler
+
+<!-- SKILLOPT:JIPHYEONJEON-TRAVELER:START -->
+No reward applied yet.
+<!-- SKILLOPT:JIPHYEONJEON-TRAVELER:END -->
+<!-- SKILLOPT:TRAVELER:SEARCH-SCOPE:START -->
+No search scope tuning yet.
+<!-- SKILLOPT:TRAVELER:SEARCH-SCOPE:END -->
+
+Other contract text stays unchanged.
+""",
+        encoding="utf-8",
+    )
+
+
+def repo_paths(tmp_path: Path) -> tuple[Path, Path]:
+    return tmp_path / "runtime" / "traveler-scout-topics.json", tmp_path / "skills" / "jiphyeonjeon-traveler" / "SKILL.md"
+
+
+def test_auto_apply_noops_when_eligible_sample_is_insufficient(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    lineage = tmp_path / "lineage.jsonl"
+    write_reward_ledger(ledger, count=4)
+    write_topics(topics)
+    write_skill(skill)
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=None,
+        skill_baseline_sha256=None,
+        lineage_path=lineage,
+        as_of="2026-07-10T00:00:00Z",
+    )
+
+    assert report["status"] == "no_op"
+    assert report["reason"] == "insufficient_eligible_sample"
+    assert not lineage.exists()
+
+
+def test_auto_apply_updates_only_topic_knobs_and_skill_marker_with_backups(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    lineage = tmp_path / "lineage.jsonl"
+    write_reward_ledger(ledger, count=5, query_only=True)
+    write_topics(topics)
+    write_skill(skill)
+    import hashlib
+
+    topics_hash = hashlib.sha256(topics.read_bytes()).hexdigest()
+    skill_hash = hashlib.sha256(skill.read_bytes()).hexdigest()
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=topics_hash,
+        skill_baseline_sha256=skill_hash,
+        lineage_path=lineage,
+        as_of="2026-07-10T00:00:00Z",
+    )
+
+    assert report["status"] == "applied"
+    after_topics = json.loads(topics.read_text(encoding="utf-8"))
+    ids = {row["id"]: row for row in after_topics["topics"]}
+    assert set(ids) == {"rag_eval", "agents", "infra"}, "search topics must never be deleted"
+    assert ids["rag_eval"]["priority"] == "high"
+    assert ids["rag_eval"]["max_candidates"] == 5
+    assert ids["agents"]["priority"] == "high"
+    assert ids["agents"]["max_candidates"] == 5
+    assert ids["infra"]["priority"] == "low"
+    skill_text = skill.read_text(encoding="utf-8")
+    assert "traveler-skillopt-reward.v1" in skill_text
+    assert "Primary reward is the latest Miner/Claw exact-URL approval" in skill_text
+    assert "must not edit scoring thresholds" in skill_text
+    assert "hash, backup, rollback, and append-only lineage" in skill_text
+    assert "Other contract text stays unchanged." in skill_text
+    assert Path(report["topics_backup_path"]).exists()
+    assert Path(report["skill_backup_path"]).exists()
+    assert json.loads(lineage.read_text(encoding="utf-8").strip())["status"] == "applied"
+
+
+def test_auto_apply_uses_latest_miner_label_after_approval_revocation(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    write_reward_ledger(ledger, count=5)
+    with ledger.open("a", encoding="utf-8") as fh:
+        for i in range(3):
+            url = f"https://approved{i}.example.com/paper"
+            fh.write(
+                json.dumps(
+                    {
+                        "event": EVENT_MINER_APPROVAL_REVOKED,
+                        "url_key": url_key(url),
+                        "url": url,
+                        "verdict": "reject",
+                        "revoked_at": "2026-07-04T00:00:00Z",
+                    }
+                )
+                + "\n"
+            )
+    write_topics(topics)
+    write_skill(skill)
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=None,
+        skill_baseline_sha256=None,
+        lineage_path=tmp_path / "lineage.jsonl",
+        as_of="2026-07-10T00:00:00Z",
+    )
+
+    assert report["status"] == "applied"
+    updated = {row["id"]: row for row in json.loads(topics.read_text(encoding="utf-8"))["topics"]}
+    assert updated["rag_eval"]["max_candidates"] == 3, "revoked approvals must count as unapproved outcomes"
+    assert updated["agents"]["max_candidates"] == 5
+
+
+def test_auto_apply_does_not_reapply_the_same_reward_evidence_daily(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    lineage = tmp_path / "lineage.jsonl"
+    write_reward_ledger(ledger, count=5)
+    write_topics(topics)
+    write_skill(skill)
+    import hashlib
+
+    first = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=lineage,
+        as_of="2026-07-10T00:00:00Z",
+    )
+    after_first_topics = topics.read_bytes()
+    after_first_skill = skill.read_bytes()
+
+    second = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=lineage,
+        as_of="2026-07-11T00:00:00Z",
+    )
+
+    assert first["status"] == "applied"
+    assert second["status"] == "no_op"
+    assert second["reason"] == "reward_evidence_already_applied"
+    assert topics.read_bytes() == after_first_topics
+    assert skill.read_bytes() == after_first_skill
+    assert len(lineage.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_auto_apply_blocks_stale_baseline_and_missing_marker(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    write_reward_ledger(ledger, count=5)
+    write_topics(topics)
+    write_skill(skill)
+
+    stale = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256="0" * 64,
+        skill_baseline_sha256=None,
+        lineage_path=None,
+        as_of="2026-07-10T00:00:00Z",
+    )
+    assert stale["status"] == "blocked"
+    assert stale["reason"] == "stale_topics_baseline"
+
+    import hashlib
+
+    skill.write_text("# no marker\n", encoding="utf-8")
+    missing_marker = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=None,
+        as_of="2026-07-10T00:00:00Z",
+    )
+    assert missing_marker["status"] == "blocked"
+    assert missing_marker["reason"] == "skillopt_marker_missing"
+
+
+def test_auto_apply_blocks_target_changed_during_planning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import discord_openclaw_bridge.traveler_tuning as tuning
+
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    write_reward_ledger(ledger, count=5)
+    write_topics(topics)
+    write_skill(skill)
+    original_sha256 = tuning._sha256_file
+    calls = 0
+
+    def mutate_before_prewrite(path: Path) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            payload = json.loads(topics.read_text(encoding="utf-8"))
+            payload["topics"][0]["priority"] = "operator-edit"
+            topics.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return original_sha256(path)
+
+    monkeypatch.setattr(tuning, "_sha256_file", mutate_before_prewrite)
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=None,
+        skill_baseline_sha256=None,
+        lineage_path=tmp_path / "lineage.jsonl",
+        as_of="2026-07-10T00:00:00Z",
+    )
+
+    assert report["status"] == "blocked"
+    assert report["reason"] == "topics_changed_during_planning"
+    assert not (tmp_path / "lineage.jsonl").exists()
+
+
+def test_auto_apply_requires_lineage_when_it_would_apply(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    write_reward_ledger(ledger, count=5)
+    write_topics(topics)
+    write_skill(skill)
+    import hashlib
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=None,
+        as_of="2026-07-10T00:00:00Z",
+    )
+    assert report["status"] == "blocked"
+    assert report["reason"] == "lineage_required"
+
+
+def test_auto_apply_noops_without_topic_level_action_and_does_not_touch_marker(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    write_reward_ledger(ledger, count=5)
+    topics.parent.mkdir(parents=True, exist_ok=True)
+    topics.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {"id": "rag_eval", "query": "RAG evaluation", "priority": "high", "max_candidates": 8},
+                    {"id": "agents", "query": "agents", "priority": "high", "max_candidates": 8},
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    write_skill(skill)
+    before_skill = skill.read_text(encoding="utf-8")
+    import hashlib
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=tmp_path / "lineage.jsonl",
+        as_of="2026-07-10T00:00:00Z",
+    )
+    assert report["status"] == "no_op"
+    assert report["reason"] == "no_eligible_topic_changes"
+    assert skill.read_text(encoding="utf-8") == before_skill
+
+
+def test_auto_apply_blocks_projected_diversity_regression(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    write_reward_ledger(ledger, count=5, one_topic=True)
+    topics.parent.mkdir(parents=True, exist_ok=True)
+    topics.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {"id": "rag_eval", "query": "RAG evaluation", "priority": "medium", "max_candidates": 7},
+                    {"id": "agents", "query": "agents", "priority": "medium", "max_candidates": 1},
+                    {"id": "infra", "query": "infra", "priority": "low", "max_candidates": 1},
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    write_skill(skill)
+    import hashlib
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=tmp_path / "lineage.jsonl",
+        as_of="2026-07-10T00:00:00Z",
+    )
+
+    assert report["status"] == "blocked"
+    assert report["reason"] == "projected_diversity_regression"
+
+
+def test_auto_apply_blocks_wrong_target_paths(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics = tmp_path / "wrong" / "traveler-scout-topics.json"
+    skill = tmp_path / "skills" / "jiphyeonjeon-traveler" / "SKILL.md"
+    write_reward_ledger(ledger, count=5)
+    write_topics(topics)
+    write_skill(skill)
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=None,
+        skill_baseline_sha256=None,
+        lineage_path=tmp_path / "lineage.jsonl",
+        as_of="2026-07-10T00:00:00Z",
+    )
+    assert report["status"] == "blocked"
+    assert report["reason"] == "invalid_target_path"
+
+
+def test_auto_apply_rolls_back_and_records_lineage_on_validation_failure(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    topics, skill = repo_paths(tmp_path)
+    lineage = tmp_path / "lineage.jsonl"
+    write_reward_ledger(ledger, count=5)
+    write_topics(topics)
+    write_skill(skill)
+    before_topics = topics.read_text(encoding="utf-8")
+    import hashlib
+
+    report = auto_apply_bounded(
+        ledger_path=ledger,
+        topics_path=topics,
+        skill_path=skill,
+        topics_baseline_sha256=hashlib.sha256(topics.read_bytes()).hexdigest(),
+        skill_baseline_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
+        lineage_path=lineage,
+        as_of="2026-07-10T00:00:00Z",
+        post_validate=lambda *_args: (_ for _ in ()).throw(ValueError("injected validation failure")),
+    )
+
+    assert report["status"] == "rolled_back"
+    assert report["reason"] == "injected validation failure"
+    assert topics.read_text(encoding="utf-8") == before_topics
+    assert json.loads(lineage.read_text(encoding="utf-8").splitlines()[-1])["status"] == "rolled_back"

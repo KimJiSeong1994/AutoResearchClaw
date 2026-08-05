@@ -10,7 +10,7 @@ set -euo pipefail
 
 KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
-REMOTE_PROJECT="${REMOTE_PROJECT:-~/.openclaw/workspace/projects/paper-recommender}"
+REMOTE_PROJECT="${REMOTE_PROJECT:-~/.hermes/workspace/projects/paper-recommender}"
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${LOG_DIR:-$SKILL_DIR/../../.omx/logs/paper-recommender}"
 PRIMARY_WIKI_ROOT="${WIKI_ROOT:?Set WIKI_ROOT to the local PaperWiki root}"

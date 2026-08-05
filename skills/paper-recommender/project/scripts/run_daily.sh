@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-$HOME/.openclaw/workspace/projects/paper-recommender}"
+PROJECT_DIR="${PROJECT_DIR:-$HOME/.hermes/workspace/projects/paper-recommender}"
 cd "$PROJECT_DIR"
 
-if [ -f "$HOME/.openclaw_gateway_token" ]; then
-  export OPENCLAW_GATEWAY_TOKEN="$(tr -d '\n' < "$HOME/.openclaw_gateway_token")"
+if [ -f "$HOME/.hermes_gateway_token" ]; then
+  export HERMES_GATEWAY_TOKEN="$(tr -d '\n' < "$HOME/.hermes_gateway_token")"
 fi
 
 if [ -f "$PROJECT_DIR/.env" ]; then

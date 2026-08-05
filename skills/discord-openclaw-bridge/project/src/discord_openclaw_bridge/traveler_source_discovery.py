@@ -40,7 +40,19 @@ from .traveler import (
 )
 
 LOG = logging.getLogger(__name__)
-DEFAULT_DISCOVERY_STATE_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-source-discovery-last-status.json"
+def _default_workspace() -> Path:
+    return Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    ).expanduser()
+
+
+DEFAULT_DISCOVERY_STATE_PATH = _default_workspace() / "state" / "traveler-source-discovery-last-status.json"
+
+
+def default_discovery_status_path() -> Path:
+    return _default_workspace() / "state" / "traveler-source-discovery-last-status.json"
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 REQUEST_STATUS_PENDING = "pending_deep_research"
@@ -867,7 +879,9 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     _load_dotenv(Path.cwd() / ".env")
     args = _build_parser().parse_args(argv)
-    status_path = args.status_path or Path(os.environ.get("JIPHYEONJEON_TRAVELER_DISCOVERY_STATUS_PATH", str(DEFAULT_DISCOVERY_STATE_PATH))).expanduser()
+    status_path = args.status_path or Path(
+        os.environ.get("JIPHYEONJEON_TRAVELER_DISCOVERY_STATUS_PATH", str(default_discovery_status_path()))
+    ).expanduser()
     try:
         summary = asyncio.run(
             discover_sources(

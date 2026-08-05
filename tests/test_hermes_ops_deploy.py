@@ -11,8 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_HERMES = ROOT / "scripts" / "check-hermes-ops.sh"
 SMOKE_HERMES_BRIDGE = ROOT / "scripts" / "check-hermes-bridge-smoke.sh"
 INSTALL_HERMES_BRIDGE = ROOT / "scripts" / "install-hermes-bridge-canary-service.sh"
+INSTALL_HERMES_PRIMARY_BRIDGE = ROOT / "scripts" / "install-hermes-primary-bridge-service.sh"
 INSTALL_HERMES_AUX = ROOT / "scripts" / "install-hermes-auxiliary-bot-services.sh"
 DEPLOY_HERMES = ROOT / "scripts" / "deploy-hermes-workspace.sh"
+DEPLOY_HERMES_BRIDGE = ROOT / "scripts" / "deploy-discord-hermes-bridge.sh"
 
 
 class HermesOpsDeployTest(unittest.TestCase):
@@ -20,8 +22,10 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertTrue(CHECK_HERMES.exists())
         self.assertTrue(SMOKE_HERMES_BRIDGE.exists())
         self.assertTrue(INSTALL_HERMES_BRIDGE.exists())
+        self.assertTrue(INSTALL_HERMES_PRIMARY_BRIDGE.exists())
         self.assertTrue(INSTALL_HERMES_AUX.exists())
         self.assertTrue(DEPLOY_HERMES.exists())
+        self.assertTrue(DEPLOY_HERMES_BRIDGE.exists())
         subprocess.run(
             [
                 "bash",
@@ -29,8 +33,10 @@ class HermesOpsDeployTest(unittest.TestCase):
                 str(CHECK_HERMES),
                 str(SMOKE_HERMES_BRIDGE),
                 str(INSTALL_HERMES_BRIDGE),
+                str(INSTALL_HERMES_PRIMARY_BRIDGE),
                 str(INSTALL_HERMES_AUX),
                 str(DEPLOY_HERMES),
+                str(DEPLOY_HERMES_BRIDGE),
             ],
             check=True,
             cwd=ROOT,
@@ -121,6 +127,33 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertNotIn("cat $token_file", text)
         self.assertNotIn("rm -rf", text)
 
+    def test_hermes_primary_bridge_installer_is_reversible_and_disables_openclaw(self) -> None:
+        text = INSTALL_HERMES_PRIMARY_BRIDGE.read_text(encoding="utf-8")
+
+        self.assertIn('HERMES_BRIDGE_SERVICE="${HERMES_BRIDGE_SERVICE:-discord-hermes-bridge.service}"', text)
+        self.assertIn('HERMES_MODEL="${HERMES_MODEL:-hermes-agent}"', text)
+        self.assertIn("Description=Discord bridge for Hermes gateway", text)
+        self.assertIn("ExecStart=$python_bin -m discord_openclaw_bridge.bot", text)
+        self.assertIn('old_openclaw="discord-openclaw-bridge.service"', text)
+        self.assertIn('old_canary="discord-hermes-bridge-canary.service"', text)
+        self.assertIn("rollback()", text)
+        self.assertIn('systemctl --user start "$old_canary"', text)
+        self.assertIn("systemctl --user disable --now openclaw-gateway.service", text)
+        self.assertIn("/home/ubuntu/.hermes/workspace/scripts/miner-seeds.sh", text)
+        self.assertNotIn("ConditionPathExists=", text)
+        self.assertNotIn("cat $token_file", text)
+        self.assertNotIn("rm -rf", text)
+
+    def test_hermes_bridge_deploy_targets_only_hermes_workspace(self) -> None:
+        text = DEPLOY_HERMES_BRIDGE.read_text(encoding="utf-8")
+
+        self.assertIn('HERMES_REMOTE_WORKSPACE="${HERMES_REMOTE_WORKSPACE:-~/.hermes/workspace}"', text)
+        self.assertIn("HERMES_REMOTE_WORKSPACE must stay under ~/.hermes", text)
+        self.assertIn("HERMES_REMOTE_WORKSPACE must not contain parent-directory traversal", text)
+        self.assertIn("skills/discord-openclaw-bridge/", text)
+        self.assertIn("--exclude '.env'", text)
+        self.assertNotIn("~/.openclaw/workspace ~/.hermes/workspace", text)
+
 
     def test_hermes_auxiliary_bot_installer_is_guarded_and_reversible(self) -> None:
         text = INSTALL_HERMES_AUX.read_text(encoding="utf-8")
@@ -140,31 +173,34 @@ class HermesOpsDeployTest(unittest.TestCase):
         self.assertNotIn('cat $token_file', text)
         self.assertNotIn('rm -rf', text)
 
-    def test_runtime_manifests_declare_hermes_canary_without_removing_openclaw(self) -> None:
+    def test_runtime_manifests_declare_hermes_primary_with_openclaw_rollback(self) -> None:
         agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
         jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
 
         self.assertIn("id: hermes-ec2-ops", agents)
-        self.assertIn("profile: hermes-canary", agents)
+        self.assertIn("profile: hermes-primary", agents)
         self.assertIn("workspace: ~/.hermes/workspace", agents)
         self.assertIn("gateway_endpoint: http://127.0.0.1:28789/v1", agents)
         self.assertIn("service: hermes-gateway.service", agents)
         self.assertIn("hermes-workspace-deploy", agents)
         self.assertIn("hermes-ops-readiness-check", agents)
-        self.assertIn("do not restart production services or mutate OpenClaw state", agents)
+        self.assertIn("bridge_service: discord-hermes-bridge.service", agents)
+        self.assertIn("do not delete OpenClaw state", agents)
         self.assertIn("id: hermes-workspace-deploy", jobs)
         self.assertIn("id: hermes-ops-readiness-check", jobs)
         self.assertIn("id: hermes-bridge-smoke-check", jobs)
         self.assertIn("id: hermes-bridge-canary-service-install", jobs)
+        self.assertIn("id: hermes-primary-bridge-service-install", jobs)
         self.assertIn("id: hermes-auxiliary-bot-service-install", jobs)
         self.assertIn("bash scripts/deploy-hermes-workspace.sh", jobs)
         self.assertIn("bash scripts/check-hermes-ops.sh", jobs)
         self.assertIn("bash scripts/check-hermes-bridge-smoke.sh", jobs)
         self.assertIn("bash scripts/install-hermes-bridge-canary-service.sh", jobs)
+        self.assertIn("bash scripts/install-hermes-primary-bridge-service.sh", jobs)
         self.assertIn("bash scripts/install-hermes-auxiliary-bot-services.sh", jobs)
-        self.assertIn("manual canary only", jobs)
-        self.assertIn("read-only remote canary inspection", jobs)
-        self.assertIn("canary OpenAI-compatible chat smoke", jobs)
+        self.assertIn("main branch production deploy", jobs)
+        self.assertIn("read-only remote Hermes inspection", jobs)
+        self.assertIn("OpenAI-compatible chat smoke", jobs)
         self.assertIn("guarded disabled service unit", jobs)
         self.assertIn("guarded auxiliary bot service units", jobs)
         self.assertIn("id: openclaw-workspace-deploy", jobs)
@@ -356,7 +392,10 @@ class HermesOpsDeployTest(unittest.TestCase):
             subprocess.run(["bash", str(CHECK_HERMES)], cwd=ROOT, env=env, check=True)
             captured = capture.read_text(encoding="utf-8")
 
-        self.assertIn("HERMES_TOKEN_FILE=~/.hermes_gateway_token", captured)
+        # Bash 3.2 emits a bare leading tilde for ``printf %q`` while newer
+        # Bash versions escape it as ``\~``. Both decode to the same literal
+        # remote value and are expanded by the readiness script itself.
+        self.assertRegex(captured, r"HERMES_TOKEN_FILE=\\?~/\.hermes_gateway_token")
         self.assertNotIn(f"HERMES_TOKEN_FILE={Path.home()}/.hermes_gateway_token", captured)
         self.assertNotIn("; touch /tmp/pwned", captured)
 

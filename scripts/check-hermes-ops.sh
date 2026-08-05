@@ -51,7 +51,7 @@ quote_remote() {
   printf '%q' "$1"
 }
 
-echo "== remote Hermes canary readiness =="
+echo "== remote Hermes primary readiness =="
 echo "host: $REMOTE_HOST"
 echo
 
@@ -136,12 +136,12 @@ else
   mark_warn "curl or Hermes gateway token file missing; /v1 probe skipped"
 fi
 
-section "discord bridge canary env"
+section "discord bridge env"
 bridge_env="$workspace/skills/discord-openclaw-bridge/project/.env"
 if [ -f "$bridge_env" ]; then
   grep -q '^HERMES_BASE_URL=.' "$bridge_env" \
     && echo "HERMES_BASE_URL: set" \
-    || mark_warn "HERMES_BASE_URL not set in canary bridge .env"
+    || mark_warn "HERMES_BASE_URL not set in bridge .env"
   if grep -q '^HERMES_GATEWAY_TOKEN=.' "$bridge_env"; then
     echo "HERMES_GATEWAY_TOKEN: set"
   elif grep -q '^HERMES_GATEWAY_TOKEN_FILE=.' "$bridge_env"; then
@@ -150,7 +150,7 @@ if [ -f "$bridge_env" ]; then
     mark_warn "Hermes gateway token env is not set in canary bridge .env"
   fi
 else
-  mark_warn "canary bridge .env missing; Hermes env aliases cannot be checked"
+  mark_warn "bridge .env missing; Hermes env aliases cannot be checked"
 fi
 
 section "recent hermes log signal"

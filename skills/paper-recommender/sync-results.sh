@@ -3,9 +3,9 @@ set -euo pipefail
 
 KEY_FILE="${KEY_FILE:?Set KEY_FILE to your SSH private key path}"
 REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST, for example ubuntu@example.com}"
-REMOTE_ARTIFACTS="${REMOTE_ARTIFACTS:-~/.openclaw/workspace/projects/paper-recommender/artifacts/}"
+REMOTE_ARTIFACTS="${REMOTE_ARTIFACTS:-~/.hermes/workspace/projects/paper-recommender/artifacts/}"
 REMOTE_WEEKLY_ARTIFACTS="${REMOTE_WEEKLY_ARTIFACTS:-${REMOTE_ARTIFACTS%/}/weekly/}"
-REMOTE_FEEDBACK_INBOX="${REMOTE_FEEDBACK_INBOX:-~/.openclaw/workspace/projects/paper-recommender/state/feedback_inbox/}"
+REMOTE_FEEDBACK_INBOX="${REMOTE_FEEDBACK_INBOX:-~/.hermes/workspace/projects/paper-recommender/state/feedback_inbox/}"
 
 # Merged into the existing PaperWiki vault — flat-with-prefix style on pages/
 # and date-folder rsync mirror under the top-level raw/.
@@ -102,7 +102,7 @@ fi
 # never abort the pipeline. An empty snippet (cold start / no active interest
 # notes) is skipped so the briefing never posts an empty block. The KST date
 # marker lets the EC2 side reject a stale snippet from a failed earlier push.
-REMOTE_KG_RECOMMEND_PATH="${REMOTE_KG_RECOMMEND_PATH:-~/.openclaw/workspace/reports/kg-interest-recommend.md}"
+REMOTE_KG_RECOMMEND_PATH="${REMOTE_KG_RECOMMEND_PATH:-~/.hermes/workspace/reports/kg-interest-recommend.md}"
 if [ -f "$KG_SCRIPT" ]; then
   KG_RUN_DATE="$(TZ=Asia/Seoul date +%F)"
   KG_SNIPPET="$(mktemp)"

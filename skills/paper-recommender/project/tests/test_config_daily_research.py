@@ -124,7 +124,7 @@ def test_parse_uses_documented_defaults_when_subsections_missing() -> None:
 
     # cluster defaults
     assert s.cluster.max_clusters == 3
-    assert s.cluster.embedding_model == "openclaw/clawbridge"
+    assert s.cluster.embedding_model == "hermes-agent"
     assert s.cluster.embedding_endpoint == "/v1/embeddings"
 
     # deep defaults

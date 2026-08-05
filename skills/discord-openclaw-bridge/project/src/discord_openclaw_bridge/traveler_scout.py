@@ -19,8 +19,16 @@ from .config import _load_dotenv
 from .miner import clean_text
 from .traveler import TravelerResearchRequest, default_research_queue_path, record_research_request
 
-DEFAULT_SCOUT_QUEUE_PATH = Path.home() / ".openclaw" / "workspace" / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
-DEFAULT_SCOUT_STATUS_PATH = Path.home() / ".openclaw" / "workspace" / "state" / "traveler-scout-last-status.json"
+def _default_workspace() -> Path:
+    return Path(
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or str(Path.home() / ".hermes" / "workspace")
+    ).expanduser()
+
+
+DEFAULT_SCOUT_QUEUE_PATH = _default_workspace() / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
+DEFAULT_SCOUT_STATUS_PATH = _default_workspace() / "state" / "traveler-scout-last-status.json"
 DEFAULT_TOPICS = (
     {
         "id": "llm_agents",
@@ -70,11 +78,13 @@ class ScoutTopic:
 
 
 def default_scout_queue_path() -> Path:
-    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", str(DEFAULT_SCOUT_QUEUE_PATH))).expanduser()
+    fallback = _default_workspace() / "review" / "jiphyeonjeon-traveler" / "scout-candidates.jsonl"
+    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_QUEUE_PATH", str(fallback))).expanduser()
 
 
 def default_scout_status_path() -> Path:
-    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH", str(DEFAULT_SCOUT_STATUS_PATH))).expanduser()
+    fallback = _default_workspace() / "state" / "traveler-scout-last-status.json"
+    return Path(os.environ.get("JIPHYEONJEON_TRAVELER_SCOUT_STATUS_PATH", str(fallback))).expanduser()
 
 
 

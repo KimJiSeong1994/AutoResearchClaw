@@ -1,5 +1,13 @@
 # Test spec: OpenClaw to Hermes Agent migration
 
+## Production verification (2026-08-05)
+
+- Authenticated Hermes `/v1/models` returned `hermes-agent-canary` before the final production label rename.
+- Hermes `/health` returned `ok` with OpenClaw stopped.
+- `scripts/check-hermes-bridge-smoke.sh` completed with `bridge chat smoke: ok` after reducing the Hermes turn/reasoning budget.
+- `discord-hermes-bridge.service` reached Discord ready state; the OpenClaw bridge and gateway were then disabled.
+- All installed scheduled paths were verified under `~/.hermes/workspace`.
+
 ## Scope
 
 This spec covers the first safe implementation slice: configuration-level Hermes compatibility for existing OpenAI-compatible gateway calls.

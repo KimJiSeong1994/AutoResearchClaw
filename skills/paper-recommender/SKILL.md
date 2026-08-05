@@ -15,12 +15,12 @@ Use this skill when the user asks to:
 
 ## Remote layout
 
-- Project dir: `~/.openclaw/workspace/projects/paper-recommender`
-- Config: `~/.openclaw/workspace/projects/paper-recommender/config.yaml`
+- Project dir: `~/.hermes/workspace/projects/paper-recommender`
+- Config: `~/.hermes/workspace/projects/paper-recommender/config.yaml`
 - Entry: `.venv/bin/paper-recommender`
-- Gateway endpoint: `http://127.0.0.1:18789/v1`
-- Gateway model target: `openclaw/clawbridge`
-- Output: `~/.openclaw/workspace/projects/paper-recommender/artifacts/YYYY-MM-DD/`
+- Gateway endpoint: `http://127.0.0.1:28789/v1`
+- Gateway model target: `hermes-agent`
+- Output: `~/.hermes/workspace/projects/paper-recommender/artifacts/YYYY-MM-DD/`
 
 ## Local flows
 
@@ -38,7 +38,7 @@ Run these helpers from the skill directory:
 ## Operating rules
 
 - Keep the OpenClaw gateway on loopback only.
-- `JIPHYEONJEON_TOKEN` must be present on EC2 as a bearer JWT. The bootstrap stores it in `~/.openclaw/workspace/projects/paper-recommender/.env`; rotate it before the JWT expires.
+- `JIPHYEONJEON_TOKEN` must be present on EC2 as a bearer JWT. The bootstrap stores it in `~/.hermes/workspace/projects/paper-recommender/.env`; rotate it before the JWT expires.
 - Before the first real run after config changes, run `doctor.sh`.
 - A future "profile management page" will overwrite `profile.seed_topics` and short-circuit the LLM profile builder. Until then the profile is derived from 집현전 bookmarks.
 - The daily cron runs the pipeline on EC2. Syncing to Obsidian is a separate step (`sync-results.sh`), intentionally decoupled from the cron.

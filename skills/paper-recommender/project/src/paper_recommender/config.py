@@ -174,7 +174,7 @@ class SourceSettings:
 @dataclass
 class ClusterSettings:
     max_clusters: int = 3
-    embedding_model: str = "openclaw/clawbridge"
+    embedding_model: str = "hermes-agent"
     embedding_endpoint: str = "/v1/embeddings"
 
 
@@ -194,8 +194,8 @@ class DeepBridgeSettings:
     # Verified path on EC2 (2026-05-02): script lives directly under workspace/skills,
     # NOT under projects/AutoResearchClaw/skills. The script itself cd's into the
     # AutoResearchClaw project dir before invoking researchclaw.
-    run_topic_script: str = "~/.openclaw/workspace/skills/researchclaw/run-topic.sh"
-    artifacts_root: str = "~/.openclaw/workspace/projects/AutoResearchClaw/artifacts"
+    run_topic_script: str = "~/.hermes/workspace/skills/researchclaw/run-topic.sh"
+    artifacts_root: str = "~/.hermes/workspace/projects/AutoResearchClaw/artifacts"
 
 
 @dataclass
@@ -256,7 +256,7 @@ def _parse_daily_research(raw: dict[str, Any] | None) -> DailyResearchSettings |
     )
     cluster = ClusterSettings(
         max_clusters=int(cluster_raw.get("max_clusters", 3)),
-        embedding_model=str(cluster_raw.get("embedding_model", "openclaw/clawbridge")),
+        embedding_model=str(cluster_raw.get("embedding_model", "hermes-agent")),
         embedding_endpoint=str(cluster_raw.get("embedding_endpoint", "/v1/embeddings")),
     )
     deep_default = DeepBridgeSettings()

@@ -1,10 +1,11 @@
 # MEMORY.md
 
-## OpenClaw EC2 baseline
+## Hermes EC2 baseline
 
 - Host: Ubuntu 22.04 on EC2 `t2.micro`
-- OpenClaw installed globally under `~/.npm-global`
-- Gateway is configured in local mode with token auth and loopback bind
+- Hermes is installed under `~/.hermes/hermes-agent`
+- Gateway is configured with token auth and loopback bind on `127.0.0.1:28789`
+- OpenClaw services and `~/.openclaw` are disabled rollback surfaces, not production paths
 - systemd user service is installed and linger is enabled for `ubuntu`
 
 ## Recovery lesson

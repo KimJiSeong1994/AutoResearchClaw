@@ -1,0 +1,51 @@
+{
+  "discovery": {
+    "accepted_count": 1,
+    "candidate_queue_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl",
+    "duplicate_count": 0,
+    "error_count": 0,
+    "evidence_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/evidence.jsonl",
+    "provider_results": [
+      {
+        "candidate_count": 1,
+        "provider": "arxiv",
+        "rejected_count": 2,
+        "reviewed_count": 8
+      },
+      {
+        "candidate_count": 0,
+        "provider": "semantic_scholar",
+        "rejected_count": 1,
+        "reviewed_count": 4
+      }
+    ],
+    "providers_used": [
+      "arxiv",
+      "semantic_scholar",
+      "static"
+    ],
+    "rejected_count": 3,
+    "requests_processed": 1,
+    "reviewed_count": 12,
+    "run_at": "2026-08-05T00:02:00Z"
+  },
+  "expected": {
+    "anomaly_expected": true,
+    "reason": "legacy_openclaw_production_path",
+    "status": "failed"
+  },
+  "id": "legacy-openclaw-path-failure",
+  "report": {
+    "item_count": 1,
+    "miner_request_state": "sent",
+    "run_at": "2026-08-05T00:04:00Z"
+  },
+  "scout": {
+    "requests_created": 1,
+    "research_queue_path": "~/.openclaw/workspace/review/jiphyeonjeon-traveler/research-requests.jsonl",
+    "run_at": "2026-08-05T00:00:00Z",
+    "scout_queue_path": "/home/ubuntu/.hermes/workspace/review/jiphyeonjeon-traveler/source-candidates.jsonl",
+    "stale_pending_topics": []
+  },
+  "workspace": "/home/ubuntu/.hermes/workspace"
+}

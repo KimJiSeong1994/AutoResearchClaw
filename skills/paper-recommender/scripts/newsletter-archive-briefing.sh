@@ -4,24 +4,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}}"
+WORKSPACE="${HERMES_WORKSPACE:-${OPENCLAW_WORKSPACE:-$HOME/.hermes/workspace}}"
 if [[ -f "$WORKSPACE/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
   . "$WORKSPACE/.env"
   set +a
 fi
-if [[ -n "${HERMES_WORKSPACE:-}" && -f "$HOME/.openclaw/workspace/.env" ]]; then
+if [[ -n "${HERMES_WORKSPACE:-}" && -f "$HOME/.hermes/workspace/.env" ]]; then
   # Reuse legacy relay/API source configuration during Hermes cutover, but
   # force all generated artifacts back under the active Hermes workspace below.
   set -a
   # shellcheck disable=SC1091
-  . "$HOME/.openclaw/workspace/.env"
+  . "$HOME/.hermes/workspace/.env"
   set +a
-elif [[ -z "${HERMES_WORKSPACE:-}" && -f "$HOME/.openclaw/workspace/.env" ]]; then
+elif [[ -z "${HERMES_WORKSPACE:-}" && -f "$HOME/.hermes/workspace/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
-  . "$HOME/.openclaw/workspace/.env"
+  . "$HOME/.hermes/workspace/.env"
   set +a
 fi
 
@@ -43,15 +43,15 @@ if [[ -n "${HERMES_WORKSPACE:-}" ]]; then
   JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="$WORKSPACE/review/jiphyeonjeon-claw/link-review-queue.jsonl"
   JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="$WORKSPACE/manual_links/approved-manual-links.jsonl"
 else
-  JIPHYEONJEON_MINER_INTAKE_PATH="${JIPHYEONJEON_MINER_INTAKE_PATH:-$HOME/.openclaw/workspace/intake/jiphyeonjeon-miner/links.jsonl}"
-  JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH:-$HOME/.openclaw/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl}"
-  JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-$HOME/.openclaw/workspace/manual_links/approved-manual-links.jsonl}"
+  JIPHYEONJEON_MINER_INTAKE_PATH="${JIPHYEONJEON_MINER_INTAKE_PATH:-$HOME/.hermes/workspace/intake/jiphyeonjeon-miner/links.jsonl}"
+  JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH="${JIPHYEONJEON_MINER_REVIEW_QUEUE_PATH:-$HOME/.hermes/workspace/review/jiphyeonjeon-claw/link-review-queue.jsonl}"
+  JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH="${JIPHYEONJEON_MINER_APPROVED_EXPORT_PATH:-$HOME/.hermes/workspace/manual_links/approved-manual-links.jsonl}"
 fi
 
 mkdir -p "$(dirname "$NEWSLETTER_REPORT_PATH")"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-if [[ -x "$HOME/.openclaw/workspace/projects/paper-recommender/.venv/bin/python" ]]; then
-  PYTHON_BIN="$HOME/.openclaw/workspace/projects/paper-recommender/.venv/bin/python"
+if [[ -x "$HOME/.hermes/workspace/projects/paper-recommender/.venv/bin/python" ]]; then
+  PYTHON_BIN="$HOME/.hermes/workspace/projects/paper-recommender/.venv/bin/python"
 fi
 
 if [[ "$NEWSLETTER_SOURCE_MODE" == "apps_script_pull" ]]; then

@@ -8,15 +8,15 @@ on:
   workflow_dispatch:
     inputs:
       deploy_workspace:
-        description: Deploy OpenClaw workspace/runtime/scripts
+        description: Deploy Hermes workspace/runtime/scripts
         type: boolean
         default: true
       deploy_discord_bridge:
-        description: Deploy Discord OpenClaw bridge skill
+        description: Deploy Discord bridge source to Hermes
         type: boolean
         default: true
-      restart_discord_bridge:
-        description: Reinstall and restart discord-openclaw-bridge.service after bridge deploy
+      promote_hermes_bridge:
+        description: Verify and promote discord-hermes-bridge.service
         type: boolean
         default: true
 
@@ -53,7 +53,7 @@ jobs:
 
       - name: Run repository unit tests
         run: |
-          python3 -m unittest tests/test_jiphyeonjeon_trust_agents.py tests/test_runtime_manifests.py tests/test_prompt_governance.py tests/test_github_actions_ec2_deploy.py
+          python3 -m unittest tests/test_jiphyeonjeon_trust_agents.py tests/test_runtime_manifests.py tests/test_prompt_governance.py tests/test_github_actions_ec2_deploy.py tests/test_hermes_ops_deploy.py
 
       - name: Run Discord bridge tests
         working-directory: skills/discord-openclaw-bridge/project
@@ -104,39 +104,36 @@ jobs:
           printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ec2_deploy_key"
           chmod 600 "$RUNNER_TEMP/ec2_deploy_key"
 
-      - name: Deploy OpenClaw workspace
+      - name: Deploy Hermes workspace
         if: ${{ steps.deploy_secrets.outputs.configured == 'true' && (github.event_name == 'push' || inputs.deploy_workspace == true) }}
         env:
           REMOTE_HOST: ${{ env.EC2_REMOTE_HOST }}
           KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
           SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
-        run: bash scripts/deploy-openclaw-workspace.sh
+        run: bash scripts/deploy-hermes-workspace.sh
 
-      - name: Deploy Discord OpenClaw bridge
+      - name: Deploy Discord bridge to Hermes
         if: ${{ steps.deploy_secrets.outputs.configured == 'true' && (github.event_name == 'push' || inputs.deploy_discord_bridge == true) }}
         env:
           REMOTE_HOST: ${{ env.EC2_REMOTE_HOST }}
           KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
           SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
-        run: bash scripts/deploy-discord-openclaw-bridge.sh
+        run: bash scripts/deploy-discord-hermes-bridge.sh
 
-      - name: Reinstall and restart Discord bridge
-        if: ${{ steps.deploy_secrets.outputs.configured == 'true' && (github.event_name == 'push' || inputs.restart_discord_bridge == true) }}
+      - name: Verify Hermes gateway and bridge
+        if: ${{ steps.deploy_secrets.outputs.configured == 'true' && (github.event_name == 'push' || inputs.promote_hermes_bridge == true) }}
         env:
           REMOTE_HOST: ${{ env.EC2_REMOTE_HOST }}
           KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
+          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
         run: |
-          test -n "$REMOTE_HOST"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i "$KEY_FILE" "$REMOTE_HOST" '
-            set -euo pipefail
-            cd ~/.openclaw/workspace/skills/discord-openclaw-bridge
-            bash project/scripts/install.sh
-            bash project/scripts/restart.sh
-            systemctl --user is-active discord-openclaw-bridge.service
-            systemctl --user show discord-openclaw-bridge.service \
-              -p ActiveState \
-              -p SubState \
-              -p ExecMainStatus \
-              -p NRestarts \
-              --no-pager
-          '
+          bash scripts/check-hermes-ops.sh
+          HERMES_SMOKE_TIMEOUT_SEC=180 bash scripts/check-hermes-bridge-smoke.sh
+
+      - name: Promote Hermes primary bridge
+        if: ${{ steps.deploy_secrets.outputs.configured == 'true' && (github.event_name == 'push' || inputs.promote_hermes_bridge == true) }}
+        env:
+          REMOTE_HOST: ${{ env.EC2_REMOTE_HOST }}
+          KEY_FILE: ${{ runner.temp }}/ec2_deploy_key
+          SSH_OPTIONS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
+        run: bash scripts/install-hermes-primary-bridge-service.sh

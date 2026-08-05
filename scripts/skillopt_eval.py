@@ -12,16 +12,18 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 try:
     from skillopt_common import read_json
+    from skillopt_traveler_ops import classify_operation
 except ModuleNotFoundError:  # pragma: no cover - direct path fallback in tests
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from skillopt_common import read_json
+    from skillopt_traveler_ops import classify_operation
 
 SCHEMA_VERSION = "skillopt-eval.v1"
 
@@ -119,10 +121,13 @@ def eval_academic(root: Path, fixture_dir: Path) -> list[CaseResult]:
         serialized = json.dumps(actual, ensure_ascii=False)
         if has_secret(serialized):
             errors.append("classification output contains private/secret-like evidence")
-        if expected.get("forbid_private_evidence") and has_secret(json.dumps(case["input"], ensure_ascii=False)):
+        if (
+            expected.get("forbid_private_evidence")
+            and has_secret(json.dumps(case["input"], ensure_ascii=False))
+            and has_secret(serialized)
+        ):
             # Input may contain private bait, but actual evidence must stay clean.
-            if has_secret(serialized):
-                errors.append("private bait leaked into evidence")
+            errors.append("private bait leaked into evidence")
         results.append(CaseResult("academic-technical-filter", case.get("id", path.stem), not errors, errors, {"actual": actual}))
     return results
 
@@ -159,7 +164,7 @@ def eval_reporter(root: Path, fixture_dir: Path) -> list[CaseResult]:
         cmd = [sys.executable, str(validator), "--draft", str(draft)]
         if appendix is not None:
             cmd.extend(["--appendix", str(appendix)])
-        proc = subprocess.run(cmd, cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        proc = subprocess.run(cmd, cwd=root, text=True, capture_output=True, check=False)
         errors: list[str] = []
         expected_pass = bool(case.get("expected_pass", True))
         if expected_pass and proc.returncode != 0:
@@ -176,6 +181,41 @@ def eval_reporter(root: Path, fixture_dir: Path) -> list[CaseResult]:
                 not errors,
                 errors,
                 {"returncode": proc.returncode, "stdout": sanitize_process_output(proc.stdout, root).strip()},
+            )
+        )
+    return results
+
+
+def eval_traveler(root: Path, fixture_dir: Path) -> list[CaseResult]:
+    results: list[CaseResult] = []
+    for path in sorted(fixture_dir.glob("*.json")):
+        case = read_json(path)
+        expected = case["expected"]
+        actual = classify_operation(
+            scout=case["scout"],
+            discovery=case["discovery"],
+            report=case["report"],
+            workspace=str(case["workspace"]),
+            as_of="2026-08-05T00:00:00Z",
+        )
+        errors: list[str] = []
+        if actual.get("status") != expected.get("status"):
+            errors.append(f"status: expected {expected.get('status')!r}, got {actual.get('status')!r}")
+        expected_reason = expected.get("reason")
+        if expected_reason and expected_reason not in actual.get("reasons", []):
+            errors.append(f"missing expected reason: {expected_reason!r}")
+        if actual.get("automatic_apply") is not False:
+            errors.append("traveler ops evaluator must never set automatic_apply=true")
+        serialized = json.dumps(actual, ensure_ascii=False, sort_keys=True)
+        if has_secret(serialized) or "/home/ubuntu/.hermes/workspace" in serialized or ".openclaw/workspace/" in serialized:
+            errors.append("traveler ops output contains private or unsanitized workspace details")
+        results.append(
+            CaseResult(
+                "jiphyeonjeon-traveler",
+                case.get("id", path.stem),
+                not errors,
+                errors,
+                {"actual": actual, "fixture": rel(path, root)},
             )
         )
     return results
@@ -200,6 +240,7 @@ def make_report(args: argparse.Namespace) -> dict[str, Any]:
     results.extend(eval_academic(root, fixture_root / "academic-technical-filter/heldout"))
     results.extend(eval_blog(root, fixture_root / "blog-research-post/heldout"))
     results.extend(eval_reporter(root, fixture_root / "jiphyeonjeon-reporter-article-post/heldout"))
+    results.extend(eval_traveler(root, fixture_root / "jiphyeonjeon-traveler/heldout"))
     passed = sum(1 for result in results if result.passed)
     failed = len(results) - passed
     return {
