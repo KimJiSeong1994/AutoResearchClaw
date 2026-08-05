@@ -392,7 +392,10 @@ class HermesOpsDeployTest(unittest.TestCase):
             subprocess.run(["bash", str(CHECK_HERMES)], cwd=ROOT, env=env, check=True)
             captured = capture.read_text(encoding="utf-8")
 
-        self.assertIn("HERMES_TOKEN_FILE=~/.hermes_gateway_token", captured)
+        # Bash 3.2 emits a bare leading tilde for ``printf %q`` while newer
+        # Bash versions escape it as ``\~``. Both decode to the same literal
+        # remote value and are expanded by the readiness script itself.
+        self.assertRegex(captured, r"HERMES_TOKEN_FILE=\\?~/\.hermes_gateway_token")
         self.assertNotIn(f"HERMES_TOKEN_FILE={Path.home()}/.hermes_gateway_token", captured)
         self.assertNotIn("; touch /tmp/pwned", captured)
 
