@@ -259,6 +259,18 @@ def parse_youtube_channel_url(url: str) -> YouTubeChannelIdentity | None:
     if len(path_parts) >= 2 and path_parts[0] == "user":
         username = path_parts[1][:80]
         return YouTubeChannelIdentity(username=username, canonical_url=f"https://www.youtube.com/user/{username}", original_url=f"https://www.youtube.com/user/{username}")
+    if len(path_parts) == 2 and path_parts[0] == "feeds" and path_parts[1] == "videos.xml":
+        # Traveler discovers channels as their public Atom feed URL, which is
+        # the same channel identity as /channel/UC... and must resolve here so
+        # every caller (is_youtube_channel_url, Miner intake, channel
+        # expansion) accepts it without a per-caller special case.
+        channel_id = ((parse_qs(parsed.query).get("channel_id") or [""])[0] or "")[:80]
+        if channel_id.startswith("UC"):
+            return YouTubeChannelIdentity(
+                channel_id=channel_id,
+                canonical_url=f"https://www.youtube.com/channel/{channel_id}",
+                original_url=f"https://www.youtube.com/channel/{channel_id}",
+            )
     return None
 
 

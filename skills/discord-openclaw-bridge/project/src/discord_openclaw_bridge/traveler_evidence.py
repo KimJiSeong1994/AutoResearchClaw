@@ -345,7 +345,11 @@ DEFAULT_SCORING: dict[str, Any] = {
     },
     "curated_static_override": {
         "confidence_score": 0.55,
-        "source_types": ["research_lab_blog", "article_hub", "conference_feed", "archive_page"],
+        # rss covers curated YouTube channel feeds. _extract_feed judges a feed
+        # on its title plus 3 recent entry descriptions, so an official channel
+        # can match no topic keyword on a given day and would otherwise drop
+        # out of review entirely.
+        "source_types": ["research_lab_blog", "article_hub", "conference_feed", "archive_page", "rss"],
     },
 }
 

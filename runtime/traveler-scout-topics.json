@@ -26,8 +26,16 @@
     },
     {
       "id": "knowledge_graph",
-      "query": "knowledge graph LLM retrieval agents research",
-      "scope": "public research and engineering sources for knowledge graphs, retrieval, and agents",
+      "query": "GraphRAG knowledge graph LLM retrieval agents research",
+      "scope": "public research and engineering sources for GraphRAG, knowledge graphs, retrieval, and agents",
+      "min_sources_to_review": 10,
+      "max_candidates": 3,
+      "priority": "medium"
+    },
+    {
+      "id": "gnn_graph_learning",
+      "query": "graph neural network graph representation learning research",
+      "scope": "public research and engineering sources for graph neural networks, message passing, and graph representation learning",
       "min_sources_to_review": 10,
       "max_candidates": 3,
       "priority": "medium"

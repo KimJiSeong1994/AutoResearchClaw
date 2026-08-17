@@ -77,6 +77,18 @@ MIN_NETWORK_FAILURE_FALLBACK_REVIEWED = 10
 
 
 DEFAULT_STATIC_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+    # Curated YouTube channel Atom feeds lead the portfolio: a curated row is
+    # seeded into review once and then matches as a persistent queue duplicate
+    # that costs no budget, so ordering them first only displaces paper
+    # candidates on the days a channel is actually new.
+    ("Neo4j YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCvze3hU6OZBkB1vkhH2lH9Q", "rss", "Public YouTube channel Atom feed for knowledge graph, GraphRAG, and graph agent memory engineering talks."),
+    ("Discover AI YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCfOvNb3xj28SNqPQ_JIbumg", "rss", "Public YouTube channel Atom feed for LLM agent, agentic harness, and multi-agent research paper walkthroughs."),
+    ("LangChain YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCC-lyoTfSrcJzA1ab3APAgw", "rss", "Official public YouTube channel Atom feed for LLM agent framework, agentic retrieval, and agent evaluation engineering."),
+    ("LlamaIndex YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCeRjipR4_SsCddq9VZ2AeKg", "rss", "Official public YouTube channel Atom feed for retrieval augmented generation, agentic RAG, and agent document workflows."),
+    ("TigerGraph YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCnSOlBNWim68MYzcKbEswCA", "rss", "Public YouTube channel Atom feed for graph neural network, knowledge graph, and graph agent analytics engineering."),
+    ("Memgraph YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCZ3HOJvHGxtQ_JHxOselBYg", "rss", "Public YouTube channel Atom feed for knowledge graph modeling, GraphRAG, and graph retrieval engineering."),
+    ("Machine Learning Street Talk YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCMLtBahI5DMrt0NPvDSoIRQ", "rss", "Public YouTube channel Atom feed for long-form LLM agent and machine learning research interviews."),
+    ("Learning on Graphs Conference YouTube channel", "https://www.youtube.com/feeds/videos.xml?channel_id=UCEYYskCDER_C63RAZuG2pIQ", "rss", "Public YouTube channel Atom feed for graph neural network and graph learning conference talks; uploads are annual, so the 15-entry feed only carries that year's sessions near the December conference."),
     ("arXiv cs.AI recent submissions", "https://arxiv.org/list/cs.AI/recent", "conference_feed", "arXiv official recent list for AI papers."),
     ("arXiv cs.CL recent submissions", "https://arxiv.org/list/cs.CL/recent", "conference_feed", "arXiv official recent list for computational linguistics papers."),
     ("OpenAI Research", "https://openai.com/research/", "research_lab_blog", "Official public research announcements and papers."),
@@ -912,7 +924,15 @@ def default_providers() -> list[DiscoveryProvider]:
         name.strip()
         for name in os.environ.get(
             "JIPHYEONJEON_TRAVELER_DISCOVERY_PROVIDERS",
-            "arxiv,alphaxiv_hot,semantic_scholar,static",
+            # static runs before alphaxiv_hot on purpose. The per-request
+            # max_candidates budget is consumed in this order, and alphaXiv
+            # yields fresh accepted papers every single day, so a curated
+            # source appended to traveler-scoring.json was never reached and
+            # never entered review. Curated rows are seeded once and then
+            # match as persistent queue duplicates, which cost no budget, so
+            # running them first costs alphaXiv only the days a new source is
+            # actually added.
+            "arxiv,static,alphaxiv_hot,semantic_scholar",
         ).split(",")
     ]
     providers: list[DiscoveryProvider] = []

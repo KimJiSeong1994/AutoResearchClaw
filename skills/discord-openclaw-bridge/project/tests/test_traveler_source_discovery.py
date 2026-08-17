@@ -1511,11 +1511,14 @@ def test_alphaxiv_hot_provider_fetches_hot_100_in_one_request(monkeypatch) -> No
 def test_default_providers_include_alphaxiv_hot(monkeypatch) -> None:
     monkeypatch.delenv("JIPHYEONJEON_TRAVELER_DISCOVERY_PROVIDERS", raising=False)
 
+    # static precedes alphaxiv-hot: the per-request budget is spent in provider
+    # order and alphaXiv accepts fresh papers daily, so curated static rows were
+    # measured never to be recorded when they ran last.
     assert [provider.name for provider in default_providers()] == [
         "arxiv-api",
+        "static-technical-sources",
         "alphaxiv-hot",
         "semantic-scholar-graph",
-        "static-technical-sources",
     ]
 
 
