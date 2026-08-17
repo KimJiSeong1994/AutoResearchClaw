@@ -8,6 +8,7 @@ from discord_openclaw_bridge.youtube_video import (
     build_official_caption_gate_analysis,
     build_unavailable_report,
     fetch_youtube_channel_video_urls,
+    is_youtube_channel_url,
     parse_youtube_channel_url,
     parse_youtube_url,
     sanitize_content_analysis,
@@ -42,6 +43,27 @@ def test_parse_preserves_start_seconds_and_playlist_outside_canonical() -> None:
 
 def test_channel_url_is_not_a_video_identity() -> None:
     assert parse_youtube_url("https://www.youtube.com/@dsba2979") is None
+
+
+def test_channel_atom_feed_url_resolves_to_channel_identity() -> None:
+    feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCvze3hU6OZBkB1vkhH2lH9Q"
+    identity = parse_youtube_channel_url(feed)
+
+    assert identity is not None
+    assert identity.channel_id == "UCvze3hU6OZBkB1vkhH2lH9Q"
+    assert identity.canonical_url == "https://www.youtube.com/channel/UCvze3hU6OZBkB1vkhH2lH9Q"
+    # Traveler hands the feed URL to Miner intake, which gates on this helper.
+    assert is_youtube_channel_url(feed) is True
+    assert parse_youtube_url(feed) is None
+
+
+def test_channel_atom_feed_url_rejects_non_channel_ids() -> None:
+    for bad in (
+        "https://www.youtube.com/feeds/videos.xml?playlist_id=PLabc123",
+        "https://www.youtube.com/feeds/videos.xml",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=../etc/passwd",
+    ):
+        assert parse_youtube_channel_url(bad) is None, bad
 
 
 def test_sanitize_media_omits_raw_provider_payload() -> None:

@@ -119,6 +119,14 @@ def test_empty_topic_skips_the_relevance_gate() -> None:
 # Frozen portfolio. Adding or removing a source changes what the traveler
 # discovers when arXiv and Semantic Scholar rate-limit and static is the fallback.
 EXPECTED_SOURCE_URLS = frozenset({
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCvze3hU6OZBkB1vkhH2lH9Q",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCfOvNb3xj28SNqPQ_JIbumg",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCC-lyoTfSrcJzA1ab3APAgw",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCeRjipR4_SsCddq9VZ2AeKg",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCnSOlBNWim68MYzcKbEswCA",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCZ3HOJvHGxtQ_JHxOselBYg",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCMLtBahI5DMrt0NPvDSoIRQ",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UCEYYskCDER_C63RAZuG2pIQ",
     "https://arxiv.org/list/cs.AI/recent",
     "https://arxiv.org/list/cs.CL/recent",
     "https://openai.com/research/",
@@ -136,13 +144,24 @@ EXPECTED_SOURCE_URLS = frozenset({
     "https://arxiv.org/abs/2511.18194",
 })
 
-EXPECTED_TYPE_COUNTS = {"research_lab_blog": 5, "paper_page": 5, "conference_feed": 3, "article_hub": 2}
+EXPECTED_TYPE_COUNTS = {"research_lab_blog": 5, "paper_page": 5, "conference_feed": 3, "article_hub": 2, "rss": 8}
 
 
 def test_static_portfolio_urls_are_frozen() -> None:
     urls = {row[1] for row in StaticTechnicalSourceProvider._SOURCES}
     assert urls == EXPECTED_SOURCE_URLS
-    assert len(StaticTechnicalSourceProvider._SOURCES) == 15
+    assert len(StaticTechnicalSourceProvider._SOURCES) == 23
+
+
+def test_curated_youtube_feeds_lead_the_portfolio() -> None:
+    """Ordering is the whole reason these rows reach review.
+
+    static runs after arxiv and the per-request max_candidates budget is spent
+    in candidate order, so a curated row placed after the paper entries was
+    measured to never be recorded at all.
+    """
+    leading = [row[2] for row in StaticTechnicalSourceProvider._SOURCES[:8]]
+    assert leading == ["rss"] * 8
 
 
 def test_static_portfolio_type_mix_is_frozen() -> None:
