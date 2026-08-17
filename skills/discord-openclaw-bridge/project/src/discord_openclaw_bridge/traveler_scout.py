@@ -10,14 +10,19 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ._shared import _read_jsonl_rows
 from .config import _load_dotenv
 from .miner import clean_text
-from .traveler import TravelerResearchRequest, default_research_queue_path, record_research_request
+from .traveler import (
+    TravelerResearchRequest,
+    default_research_queue_path,
+    record_research_request,
+)
+
 
 def _default_workspace() -> Path:
     return Path(
@@ -137,7 +142,7 @@ def load_scout_topics(path: Path | None = None) -> list[ScoutTopic]:
         else:
             rows = payload
     if not isinstance(rows, list):
-        raise ValueError("scout topics config must contain a list")
+        raise TypeError("scout topics config must contain a list")
     topics = [_topic_from_row(row) for row in rows if isinstance(row, dict)]
     if not topics:
         raise ValueError("at least one scout topic is required")
@@ -185,19 +190,19 @@ def _created_at_utc(row: dict[str, Any]) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _pending_scout_topic_ids(path: Path, *, now: datetime | None = None) -> tuple[set[str], set[str]]:
     topic_ids: set[str] = set()
     stale_topic_ids: set[str] = set()
     stale_after_hours = _stale_pending_hours()
-    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     for row in _read_jsonl_rows(path):
         if _is_test_research_request(row):
             continue
@@ -255,6 +260,12 @@ def _topics_status_metadata() -> dict[str, Any]:
     return metadata
 
 
+def _topic_selection_key(topic: ScoutTopic) -> tuple[int, int]:
+    kg_rank = 0 if topic.source in {"interest-note", "paperwiki-kg"} or topic.paperwiki_interest_slug else 1
+    priority_rank = {"high": 0, "medium": 1, "low": 2}.get(topic.priority, 1)
+    return (kg_rank, priority_rank)
+
+
 def create_scout_requests(
     *,
     topics: list[ScoutTopic],
@@ -269,6 +280,7 @@ def create_scout_requests(
     research_queue = (research_queue_path or default_research_queue_path()).expanduser()
     scout_queue = (scout_queue_path or default_scout_queue_path()).expanduser()
     selected = [topic for topic in topics if not topic_filter or topic.topic_id == topic_filter or topic.query == topic_filter]
+    selected = sorted(selected, key=_topic_selection_key)
     if max_topics is not None:
         selected = selected[: max(0, max_topics)]
     created: list[dict[str, Any]] = []
@@ -279,7 +291,7 @@ def create_scout_requests(
         stale_pending = sorted(stale_pending_topic_ids)
     else:
         pending_topic_ids = set()
-    planned_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    planned_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for topic in selected:
         if topic.topic_id in pending_topic_ids:
             skipped_existing.append(topic.topic_id)

@@ -122,6 +122,13 @@ Recent unapproved handoffs are censored for seven days.
 The latest append-only Miner/Claw decision is authoritative; the approved export
 is only a fallback, and a later reject/hold revokes the positive label.
 
+Traveler also reads 100 papers from alphaXiv's public Hot feed API in one
+request, caches that pool, and ranks it locally against the public
+query/scope fields exported from PaperWiki KG interests. The robots-allowed root
+`Trending Papers` JSON-LD remains a 20-paper fallback. Private KG note bodies
+are never transmitted, `/?sort=Hot` is never crawled, and every recommended
+paper still passes evidence collection plus Claw/Miner review.
+
 The evaluator remains read-only and cannot change the report exit code. A
 separate bounded auto-tune sink activates only with at least five eligible
 samples and may change only `priority`/`max_candidates` in

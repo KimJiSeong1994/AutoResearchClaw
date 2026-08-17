@@ -244,12 +244,14 @@ agents:
       - propose source URLs and newsletter/article feeds for Miner seed expansion or Claw review
       - record evidence-backed source recommendations without deciding newsletter inclusion
       - optionally use PaperWiki KG active interests to prioritize autonomous scout topics
+      - rank a cached alphaXiv public Hot 100-paper pool locally against the public KG-exported topic query and scope
     boundaries:
       - does not scrape private, paywalled, login-only, or terms-hostile sources
       - does not approve newsletter inclusion or mutate approved manual links
       - stores source-level metadata and public evidence only, never raw private content
       - hands collection candidates to 집현전-광부 and review decisions to 집현전-클로
       - treats PaperWiki KG as advisory only and never bypasses public-source evidence collection or Claw review
+      - fetches 100 papers from alphaXiv's public Hot feed API in one request per run, with the robots-allowed root JSON-LD as fallback; never crawls /?sort=Hot or treats popularity as approval
 
   - id: jiphyeonjeon-guard
     name: 집현전-경비원 operations issue guard

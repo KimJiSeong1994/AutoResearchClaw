@@ -454,14 +454,18 @@ jobs:
       - explicit PaperWiki KG enable flag JIPHYEONJEON_TRAVELER_ENABLE_PAPERWIKI_KG=1
       - bounded daily scout topic cap JIPHYEONJEON_TRAVELER_SCOUT_MAX_TOPICS
       - committed fallback runtime/traveler-scout-topics.json
+      - optional synced state/traveler-scout-topics.paperwiki.json containing only explicitly public KG interest query/scope fields
+      - alphaXiv public Hot feed API page 0 with pageSize=100, cached and ranked locally; root Trending Papers JSON-LD is fallback and /?sort=Hot is forbidden
     outputs:
       - deep-research request queue requiring many-source comparison
       - source candidate queue with reliability, cadence, feasibility, rejected-source evidence, and next-action fields
       - recommended Miner seed additions for operator review
+      - KG-relevance-ranked alphaXiv Hot 100 paper-page candidates with public rank/view/like provenance
     safety:
       side_effects: source recommendations only; no automatic scraping, approval, or Discord posting
       secrets: public source metadata only; do not store private newsletters, login content, or tokens
       paperwiki_boundary: PaperWiki KG is advisory, opt-in, and optional; only public traveler_scout/export_scope interests can influence scout topics; missing or unhealthy KG falls back to committed scout topics and never bypasses evidence collection or Claw review
+      alphaxiv_boundary: alphaXiv Hot popularity is discovery evidence only; candidates still require public evidence and Claw/Miner approval, and query-string crawling is forbidden
 
   - id: jiphyeonjeon-traveler-daily-collection-report
     name: Daily Traveler additional-collection report

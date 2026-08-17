@@ -215,7 +215,7 @@ def test_latest_miner_rejection_revokes_approval_and_stale_export_cannot_restore
         miner_review_queue_path=queue,
         miner_decisions_path=decisions,
     )
-    reward = skillopt_reward_report(ledger, as_of="2026-08-20T00:00:00Z")
+    reward = skillopt_reward_report(ledger, as_of="2026-09-20T00:00:00Z")
 
     decisions.unlink()
     fallback_only_summary = record_outcomes(
@@ -228,7 +228,7 @@ def test_latest_miner_rejection_revokes_approval_and_stale_export_cannot_restore
         miner_review_queue_path=queue,
         miner_decisions_path=decisions,
     )
-    fallback_only_reward = skillopt_reward_report(ledger, as_of="2026-08-20T00:00:00Z")
+    fallback_only_reward = skillopt_reward_report(ledger, as_of="2026-09-20T00:00:00Z")
 
     assert summary["new_miner_approval_revocations"] == 1
     assert [row["event"] for row in ledger_rows(ledger)].count(EVENT_MINER_APPROVED) == 1

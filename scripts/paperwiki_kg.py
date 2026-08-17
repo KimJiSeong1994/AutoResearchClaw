@@ -524,6 +524,7 @@ def read_health(con: sqlite3.Connection) -> dict[str, Any]:
 def validate_db(db: Path, vault: Path | None = None) -> tuple[int, dict[str, Any]]:
     if not db.exists():
         return EXIT_MISSING, {"ok": False, "fresh": False, "error": "missing_db", "recommended_action": "build"}
+    con: sqlite3.Connection | None = None
     try:
         con = connect(db)
         init_schema(con)
@@ -574,6 +575,9 @@ def validate_db(db: Path, vault: Path | None = None) -> tuple[int, dict[str, Any
         return 0, {"ok": True, "fresh": True, "recommended_action": "none", "health": health}
     except sqlite3.Error as e:
         return EXIT_INVALID, {"ok": False, "fresh": False, "error": "sqlite_error", "message": str(e), "recommended_action": "repair"}
+    finally:
+        if con is not None:
+            con.close()
 
 
 def cmd_build(args: argparse.Namespace) -> int:
@@ -1264,18 +1268,25 @@ def cmd_scout_topics(args: argparse.Namespace) -> int:
     if db.exists():
         try:
             vault = None
+            health_con: sqlite3.Connection | None = None
             try:
-                hv = read_health(connect(db)).get("vault")
+                health_con = connect(db)
+                hv = read_health(health_con).get("vault")
                 if hv:
                     vault = Path(hv).expanduser().resolve()
             except sqlite3.Error:
                 vault = None
+            finally:
+                if health_con is not None:
+                    health_con.close()
             code, status = validate_db(db, vault)
             if code == 0:
                 paperwiki_status = "healthy"
                 con = connect(db)
-                init_schema(con)
-                interests = [interest for interest in load_active_interests(con, only_slug=None) if _interest_exportable_to_traveler(interest)]
+                try:
+                    interests = [interest for interest in load_active_interests(con, only_slug=None) if _interest_exportable_to_traveler(interest)]
+                finally:
+                    con.close()
             else:
                 paperwiki_status = "unhealthy"
                 diagnostics.append({"code": "paperwiki_kg_unhealthy", "status": status})
