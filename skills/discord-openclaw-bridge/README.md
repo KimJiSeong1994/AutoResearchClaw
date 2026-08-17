@@ -199,6 +199,12 @@ Traveler-to-Miner handoff contract:
 - Each research request enforces `minimum_sources_to_review` (clamped to at
   least 10) and requires rejected-source evidence; no source can be fast-tracked
   from a single URL.
+- The default provider set includes alphaXiv Hot discovery. It fetches 100
+  papers from the public Hot feed API in one request, with the
+  robots-allowed `https://www.alphaxiv.org/` `Trending Papers` JSON-LD as a
+  20-paper fallback. Stable `/abs/` paper pages are ranked locally against the
+  public query/scope exported from PaperWiki KG. It never requests the
+  robots-disallowed `/?sort=Hot` URL or sends private KG note bodies.
 - Each candidate record should include source URL, source type, update cadence
   evidence, reliability rationale, topic fit, collection method hint
   (`rss`, `archive_page`, `newsletter_landing`, `manual_watch`, or `reject`),

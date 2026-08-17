@@ -33,6 +33,13 @@ Optional context may include public `runtime/traveler-scout-topics.json`,
 raw Discord messages, private mailbox bodies, local vault paths, API keys, bot
 tokens, or webhook URLs as inputs.
 
+The alphaXiv provider may read 100 papers from the public Hot feed API in one
+request and cache that pool for the run. The robots-allowed public root
+`Trending Papers` JSON-LD is a 20-paper fallback. It ranks the pool locally
+against only the public PaperWiki KG query/scope fields already exported into
+Traveler scout topics. It must not send private KG notes to alphaXiv, request
+the robots-disallowed `/?sort=Hot` path, or treat popularity as approval.
+
 ## Output Contract
 
 <!-- SKILLOPT:TRAVELER:SEARCH-SCOPE:START -->
@@ -93,6 +100,8 @@ Read-only evaluator:
    - zero accepted after processing: at least `degraded`
    - zero accepted plus provider errors: `failed`
    - duplicates-only or stale-pending blocked: `degraded`
+   - alphaXiv Hot candidates: require KG/topic keyword overlap, stable
+     `/abs/` paper URLs, public evidence collection, and normal Claw review
 6. Save reports only under `.omx/reports/skillopt/` or an approved temporary
    path. In this evaluator step, do not mutate Traveler queues, scoring config,
    cron, systemd, Discord, PaperWiki, skill files, or topic files.

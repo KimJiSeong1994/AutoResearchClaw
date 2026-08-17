@@ -103,6 +103,8 @@ fi
 # notes) is skipped so the briefing never posts an empty block. The KST date
 # marker lets the EC2 side reject a stale snippet from a failed earlier push.
 REMOTE_KG_RECOMMEND_PATH="${REMOTE_KG_RECOMMEND_PATH:-~/.hermes/workspace/reports/kg-interest-recommend.md}"
+REMOTE_PAPERWIKI_SCOUT_TOPICS_PATH="${REMOTE_PAPERWIKI_SCOUT_TOPICS_PATH:-~/.hermes/workspace/state/traveler-scout-topics.paperwiki.json}"
+PAPERWIKI_SCOUT_BASE_TOPICS="${PAPERWIKI_SCOUT_BASE_TOPICS:-$KG_REPO_ROOT/runtime/traveler-scout-topics.json}"
 if [ -f "$KG_SCRIPT" ]; then
   KG_RUN_DATE="$(TZ=Asia/Seoul date +%F)"
   KG_SNIPPET="$(mktemp)"
@@ -118,6 +120,39 @@ if [ -f "$KG_SCRIPT" ]; then
     echo "KG recommend snippet empty (cold start / no active interests) — skipping push"
   fi
   rm -f "$KG_SNIPPET"
+
+  # Export only explicitly public Traveler query fields. The full PaperWiki KG
+  # and private note bodies remain local; EC2 receives a bounded topic file.
+  KG_SCOUT_TOPICS="$(mktemp)"
+  if [ -f "$PAPERWIKI_SCOUT_BASE_TOPICS" ] \
+     && python3 "$KG_SCRIPT" scout-topics --base "$PAPERWIKI_SCOUT_BASE_TOPICS" \
+          --db "$KG_DB" >"$KG_SCOUT_TOPICS" 2>/dev/null \
+     && python3 - "$KG_SCOUT_TOPICS" <<'PY_SCOUT_VALIDATE'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if payload.get("paperwiki_status") != "healthy":
+    raise SystemExit(1)
+if int(payload.get("paperwiki_interests_used", 0) or 0) <= 0:
+    raise SystemExit(1)
+topics = payload.get("topics")
+if not isinstance(topics, list) or not topics:
+    raise SystemExit(1)
+PY_SCOUT_VALIDATE
+  then
+    if ssh -i "$KEY_FILE" "$REMOTE_HOST" \
+         "mkdir -p \"\$(dirname $REMOTE_PAPERWIKI_SCOUT_TOPICS_PATH)\" && cat > $REMOTE_PAPERWIKI_SCOUT_TOPICS_PATH" \
+         <"$KG_SCOUT_TOPICS"; then
+      echo "pushed sanitized PaperWiki Traveler topics to EC2: $REMOTE_PAPERWIKI_SCOUT_TOPICS_PATH"
+    else
+      echo "warn: PaperWiki Traveler topic push failed (continuing)" >&2
+    fi
+  else
+    echo "warn: PaperWiki Traveler topic export unavailable or unhealthy (continuing)" >&2
+  fi
+  rm -f "$KG_SCOUT_TOPICS"
 fi
 
 # 2. Pull weekly trend reports EC2 -> Obsidian PaperReview vault (unchanged).

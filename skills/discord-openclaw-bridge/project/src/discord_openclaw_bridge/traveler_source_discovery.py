@@ -17,19 +17,19 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Callable, Iterable, Protocol
-from urllib.parse import quote_plus, urlsplit
+from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
-from .config import _load_dotenv
-from .miner import clean_text, read_jsonl, sanitize_url
 from ._shared import _read_jsonl_rows
-from .traveler_evidence import append_evidence, collect_evidence_for_url, default_evidence_path, load_scoring, read_scoring_config
-
+from .config import _load_dotenv
+from .miner import clean_text, sanitize_url
 from .traveler import (
     TravelerRecordResult,
     TravelerSourceInput,
@@ -37,6 +37,13 @@ from .traveler import (
     default_research_queue_path,
     default_source_queue_path,
     record_source_candidate,
+)
+from .traveler_evidence import (
+    append_evidence,
+    collect_evidence_for_url,
+    default_evidence_path,
+    load_scoring,
+    read_scoring_config,
 )
 
 LOG = logging.getLogger(__name__)
@@ -55,6 +62,12 @@ def default_discovery_status_path() -> Path:
     return _default_workspace() / "state" / "traveler-source-discovery-last-status.json"
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+# alphaXiv's root page is the public Hot feed and exposes a schema.org
+# ``Trending Papers`` ItemList. robots.txt disallows query-string crawling, so
+# the provider deliberately does not request ``/?sort=Hot``.
+ALPHAXIV_HOT_URL = "https://www.alphaxiv.org/"
+ALPHAXIV_HOT_FEED_URL = "https://api.alphaxiv.org/papers/v3/feed"
+ALPHAXIV_HOT_DEFAULT_POOL_SIZE = 100
 REQUEST_STATUS_PENDING = "pending_deep_research"
 REQUEST_STATUS_COMPLETED = "completed_source_discovery"
 REQUEST_STATUS_COMPLETED_EMPTY = "completed_no_candidates"
@@ -160,6 +173,17 @@ class DiscoveryRunSummary:
     deep_research_enabled: bool = False
 
 
+@dataclass(frozen=True)
+class AlphaXivHotPaper:
+    position: int
+    url: str
+    title: str
+    description: str
+    published_at: str = ""
+    views: int = 0
+    likes: int = 0
+
+
 class DiscoveryProvider(Protocol):
     name: str
 
@@ -262,7 +286,7 @@ def _mark_processed_requests(path: Path, updates: dict[str, dict[str, Any]]) -> 
         return
     rows = _read_jsonl_rows(path)
     changed = False
-    completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    completed_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for row in rows:
         request_id = clean_text(row.get("request_id"), limit=120)
         update = updates.get(request_id)
@@ -317,6 +341,201 @@ def _topic_fit(topic: str, title: str) -> str:
     return f"요청 주제 `{clean_text(topic, limit=120)}`의 후보 출처로 추가 샘플 검토가 필요합니다."
 
 
+class _JsonLdScriptParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capturing = False
+        self._buffer: list[str] = []
+        self.payloads: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "script" and dict(attrs).get("type", "").lower() == "application/ld+json":
+            self._capturing = True
+            self._buffer = []
+
+    def handle_data(self, data: str) -> None:
+        if self._capturing:
+            self._buffer.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "script" and self._capturing:
+            self.payloads.append("".join(self._buffer))
+            self._capturing = False
+            self._buffer = []
+
+
+def parse_alphaxiv_hot_papers(html: str) -> list[AlphaXivHotPaper]:
+    """Extract alphaXiv's public Hot feed from schema.org JSON-LD."""
+    parser = _JsonLdScriptParser()
+    parser.feed(html)
+    papers: list[AlphaXivHotPaper] = []
+    seen: set[str] = set()
+    for raw in parser.payloads:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        graph = payload.get("@graph", []) if isinstance(payload, dict) else []
+        if not isinstance(graph, list):
+            continue
+        for node in graph:
+            if not isinstance(node, dict) or node.get("@type") != "ItemList":
+                continue
+            if str(node.get("name") or "").strip().lower() not in {"trending papers", "hot papers"}:
+                continue
+            elements = node.get("itemListElement", [])
+            if not isinstance(elements, list):
+                continue
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                item = element.get("item") if isinstance(element.get("item"), dict) else {}
+                safe_url = sanitize_url(str(item.get("url") or ""))
+                try:
+                    parts = urlsplit(safe_url)
+                except ValueError:
+                    continue
+                if parts.netloc.lower() not in {"alphaxiv.org", "www.alphaxiv.org"} or not parts.path.startswith("/abs/"):
+                    continue
+                title = clean_text(item.get("headline"), limit=240)
+                if not title or safe_url in seen:
+                    continue
+                seen.add(safe_url)
+                interactions = item.get("interactionStatistic", [])
+                views = 0
+                likes = 0
+                if isinstance(interactions, list):
+                    for interaction in interactions:
+                        if not isinstance(interaction, dict):
+                            continue
+                        interaction_type = interaction.get("interactionType")
+                        kind = str(interaction_type.get("@type") or "") if isinstance(interaction_type, dict) else ""
+                        try:
+                            count = max(0, int(interaction.get("userInteractionCount") or 0))
+                        except (TypeError, ValueError):
+                            count = 0
+                        if kind == "ViewAction":
+                            views = count
+                        elif kind == "LikeAction":
+                            likes = count
+                try:
+                    position = max(1, int(element.get("position") or len(papers) + 1))
+                except (TypeError, ValueError):
+                    position = len(papers) + 1
+                papers.append(
+                    AlphaXivHotPaper(
+                        position=position,
+                        url=safe_url,
+                        title=title,
+                        description=clean_text(item.get("description"), limit=2400),
+                        published_at=clean_text(item.get("datePublished"), limit=80),
+                        views=views,
+                        likes=likes,
+                    )
+                )
+    return sorted(papers, key=lambda paper: paper.position)
+
+
+def parse_alphaxiv_hot_feed(payload: Any, *, page_num: int = 0, page_size: int = ALPHAXIV_HOT_DEFAULT_POOL_SIZE) -> list[AlphaXivHotPaper]:
+    """Normalize one public alphaXiv Hot feed API page."""
+    rows = payload.get("papers", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return []
+    papers: list[AlphaXivHotPaper] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        paper_id = clean_text(row.get("universal_paper_id"), limit=120)
+        if not paper_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", paper_id) or ".." in paper_id:
+            continue
+        safe_url = sanitize_url(f"https://www.alphaxiv.org/abs/{paper_id}")
+        title = clean_text(row.get("title"), limit=240)
+        if not safe_url or not title:
+            continue
+        summary = row.get("paper_summary") if isinstance(row.get("paper_summary"), dict) else {}
+        metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+        visits = metrics.get("visits_count") if isinstance(metrics.get("visits_count"), dict) else {}
+        try:
+            views = max(0, int(visits.get("last_7_days") or visits.get("all") or 0))
+        except (TypeError, ValueError):
+            views = 0
+        try:
+            likes = max(0, int(metrics.get("public_total_votes") or metrics.get("total_votes") or 0))
+        except (TypeError, ValueError):
+            likes = 0
+        papers.append(
+            AlphaXivHotPaper(
+                position=(max(0, page_num) * max(1, page_size)) + index + 1,
+                url=safe_url,
+                title=title,
+                description=clean_text(row.get("abstract") or summary.get("summary"), limit=2400),
+                published_at=clean_text(row.get("publication_date") or row.get("first_publication_date"), limit=80),
+                views=views,
+                likes=likes,
+            )
+        )
+    return papers
+
+
+_ALPHAXIV_INTEREST_STOPWORDS = {
+    "public",
+    "research",
+    "engineering",
+    "source",
+    "sources",
+    "paper",
+    "papers",
+    "technical",
+    "high",
+    "multi",
+    "trust",
+    "recurring",
+}
+
+
+def _alphaxiv_interest_tokens(request: ResearchRequest) -> list[str]:
+    tokens: list[str] = []
+    for raw in _keywords(f"{request.topic} {request.scope}", limit=32):
+        token = raw[:-1] if raw.endswith("s") and len(raw) > 5 else raw
+        if token in _ALPHAXIV_INTEREST_STOPWORDS or token in tokens:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def _alphaxiv_text_tokens(value: str) -> set[str]:
+    return {token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+-]{1,}|[가-힣]{2,}", value)}
+
+
+def _alphaxiv_token_matches(token: str, words: set[str]) -> bool:
+    if token in words:
+        return True
+    stem = token[:-1] if token.endswith("s") and len(token) > 5 else token
+    return len(stem) >= 5 and any(word.startswith(stem) for word in words)
+
+
+def _rank_alphaxiv_hot_papers(request: ResearchRequest, papers: list[AlphaXivHotPaper]) -> list[tuple[AlphaXivHotPaper, list[str], float]]:
+    interest_tokens = _alphaxiv_interest_tokens(request)
+    ranked: list[tuple[AlphaXivHotPaper, list[str], float]] = []
+    for paper in papers:
+        title_tokens = _alphaxiv_text_tokens(paper.title)
+        description_tokens = _alphaxiv_text_tokens(paper.description)
+        title_matches = [token for token in interest_tokens if _alphaxiv_token_matches(token, title_tokens)]
+        description_matches = [
+            token
+            for token in interest_tokens
+            if token not in title_matches and _alphaxiv_token_matches(token, description_tokens)
+        ]
+        matched = title_matches + description_matches
+        if not matched:
+            continue
+        coverage = len(matched) / max(1, len(interest_tokens))
+        hot_tiebreaker = 1.0 / max(1, paper.position)
+        score = (4.0 * len(title_matches)) + (1.5 * len(description_matches)) + coverage + (0.1 * hot_tiebreaker)
+        ranked.append((paper, matched, score))
+    return sorted(ranked, key=lambda row: (-row[2], row[0].position, row[0].url))
+
+
 def _dedupe_candidates(candidates: Iterable[DiscoveryCandidate]) -> list[DiscoveryCandidate]:
     """Drop duplicates and search surfaces.
 
@@ -345,13 +564,17 @@ async def _get_with_backoff(
     params: dict[str, str],
     provider: str,
     attempts: int | None = None,
+    timeout: float | None = None,
 ) -> httpx.Response:
     max_attempts = attempts if attempts is not None else int(os.environ.get("JIPHYEONJEON_TRAVELER_PROVIDER_RETRY_ATTEMPTS", "2"))
     max_attempts = max(1, min(max_attempts, 4))
     last_exc: httpx.HTTPError | None = None
     for attempt in range(max_attempts):
         try:
-            response = await client.get(url, params=params)
+            request_kwargs: dict[str, Any] = {"params": params}
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            response = await client.get(url, **request_kwargs)
             response.raise_for_status()
             return response
         except httpx.HTTPStatusError as exc:
@@ -435,6 +658,130 @@ class ArxivDiscoveryProvider:
                 )
             )
         return DiscoveryProviderResult(provider=self.name, reviewed_count=reviewed, candidates=_dedupe_candidates(candidates), rejected=rejected)
+
+
+class AlphaXivHotDiscoveryProvider:
+    """Recommend alphaXiv Hot papers against the request's KG-exported scope."""
+
+    name = "alphaxiv-hot"
+
+    def __init__(self) -> None:
+        self._papers: list[AlphaXivHotPaper] | None = None
+        self._load_error: tuple[str, str] | None = None
+        self._load_warning: str | None = None
+
+    async def _load(self, client: httpx.AsyncClient) -> list[AlphaXivHotPaper]:
+        if self._papers is not None:
+            return self._papers
+        if self._load_error is not None:
+            return []
+        try:
+            raw_timeout = float(os.environ.get("JIPHYEONJEON_TRAVELER_ALPHAXIV_TIMEOUT_SEC", "30"))
+        except ValueError:
+            raw_timeout = 30.0
+        timeout = max(5.0, min(raw_timeout, 60.0))
+        try:
+            raw_pool_size = int(
+                os.environ.get(
+                    "JIPHYEONJEON_TRAVELER_ALPHAXIV_HOT_POOL_SIZE",
+                    str(ALPHAXIV_HOT_DEFAULT_POOL_SIZE),
+                )
+            )
+        except ValueError:
+            raw_pool_size = ALPHAXIV_HOT_DEFAULT_POOL_SIZE
+        pool_size = max(20, min(raw_pool_size, ALPHAXIV_HOT_DEFAULT_POOL_SIZE))
+        papers: list[AlphaXivHotPaper] = []
+        params = {
+            "pageNum": "0",
+            "sort": "Hot",
+            "pageSize": str(pool_size),
+            "interval": "7 Days",
+            "topics": "[]",
+        }
+        try:
+            response = await _get_with_backoff(
+                client,
+                ALPHAXIV_HOT_FEED_URL,
+                params=params,
+                provider=self.name,
+                timeout=timeout,
+            )
+            page_payload = response.json()
+            papers = parse_alphaxiv_hot_feed(page_payload, page_size=pool_size)
+        except (httpx.HTTPError, ValueError) as exc:
+            self._load_warning = f"alphaXiv Hot 100 feed request failed: {exc}"
+        if not papers:
+            # The public root JSON-LD remains a robots-safe 20-paper fallback
+            # when the feed API is temporarily unavailable.
+            try:
+                response = await _get_with_backoff(
+                    client,
+                    ALPHAXIV_HOT_URL,
+                    params={},
+                    provider=self.name,
+                    timeout=timeout,
+                )
+            except httpx.HTTPError as exc:
+                self._load_error = (_provider_error_kind(exc), str(exc))
+                return []
+            papers = parse_alphaxiv_hot_papers(response.text)
+        if not papers:
+            self._load_error = ("parse", "alphaXiv Hot feed and Trending Papers JSON-LD were empty")
+            return []
+        deduped = {paper.url: paper for paper in papers}
+        self._papers = sorted(deduped.values(), key=lambda paper: paper.position)[:pool_size]
+        if len(self._papers) < pool_size and self._load_warning is None:
+            self._load_warning = f"alphaXiv Hot pool returned {len(self._papers)} of requested {pool_size} papers"
+        return self._papers
+
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:
+        papers = await self._load(client)
+        if self._load_error is not None:
+            error_kind, error = self._load_error
+            return DiscoveryProviderResult(
+                provider=self.name,
+                reviewed_count=0,
+                error=error,
+                error_kind=error_kind,
+                rejected=["alphaXiv Hot feed request failed" if error_kind != "parse" else "alphaXiv Hot feed parse failed"],
+            )
+        ranked = _rank_alphaxiv_hot_papers(request, papers)
+        try:
+            configured_limit = int(os.environ.get("JIPHYEONJEON_TRAVELER_ALPHAXIV_MAX_CANDIDATES", "6"))
+        except ValueError:
+            configured_limit = 6
+        limit = max(1, min(configured_limit, 12))
+        candidates: list[DiscoveryCandidate] = []
+        kg_basis = request.topic_source in {"interest-note", "paperwiki-kg"} or bool(request.paperwiki_interest_slug)
+        basis_label = "PaperWiki KG 공개 관심도" if kg_basis else "Traveler 관심 주제"
+        for paper, matched, _score in ranked[:limit]:
+            candidates.append(
+                DiscoveryCandidate(
+                    url=paper.url,
+                    title=paper.title,
+                    source_type="paper_page",
+                    reliability_note=(
+                        f"alphaXiv 공개 Hot 목록 {paper.position}위 논문입니다. 인기 신호는 품질 승인이 아니며 Claw 검토가 필요합니다"
+                        f" (views={paper.views}, likes={paper.likes})."
+                    ),
+                    cadence_note="alphaXiv 루트의 공개 Trending Papers JSON-LD에서 실행당 한 번 수집한 Hot 후보입니다.",
+                    topic_fit=f"{basis_label}와 겹치는 키워드: {', '.join(matched[:8])}.",
+                    collection_hint="review_alphaxiv_hot_paper",
+                    access_constraints="public_json_ld_metadata",
+                    next_action="review_hot_paper_for_miner_collection",
+                    provider=self.name,
+                )
+            )
+        matched_urls = {paper.url for paper, _matched, _score in ranked}
+        rejected = [f"{paper.title}: no KG/topic keyword overlap" for paper in papers if paper.url not in matched_urls]
+        return DiscoveryProviderResult(
+            provider=self.name,
+            reviewed_count=len(papers),
+            candidates=_dedupe_candidates(candidates),
+            rejected=rejected,
+            error=self._load_warning,
+            error_kind="partial_hot_feed" if self._load_warning else None,
+        )
 
 
 class SemanticScholarDiscoveryProvider:
@@ -531,15 +878,14 @@ class StaticTechnicalSourceProvider:
             has_topic_match = any(key in title_lower or key in reliability_lower for key in keys)
             if source_type == "paper_page" and (not keys or not has_topic_match):
                 continue
-            if keys and not has_topic_match:
-                # Keep broad academic/infrastructure hubs for sparse prompts,
-                # but do not flood unrelated lab blogs or paper pages.
-                if source_type == "research_lab_blog" and len(candidates) >= 2:
-                    continue
+            # Keep broad academic/infrastructure hubs for sparse prompts, but
+            # do not flood unrelated lab blogs or paper pages.
+            if keys and not has_topic_match and source_type == "research_lab_blog" and len(candidates) >= 2:
+                continue
             candidates.append((title, url, source_type, reliability))
         return candidates
 
-    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:
         candidates: list[DiscoveryCandidate] = []
         rows = self._candidate_rows(request)
         for title, url, source_type, reliability in rows:
@@ -562,11 +908,19 @@ class StaticTechnicalSourceProvider:
 
 
 def default_providers() -> list[DiscoveryProvider]:
-    provider_names = [name.strip() for name in os.environ.get("JIPHYEONJEON_TRAVELER_DISCOVERY_PROVIDERS", "arxiv,semantic_scholar,static").split(",")]
+    provider_names = [
+        name.strip()
+        for name in os.environ.get(
+            "JIPHYEONJEON_TRAVELER_DISCOVERY_PROVIDERS",
+            "arxiv,alphaxiv_hot,semantic_scholar,static",
+        ).split(",")
+    ]
     providers: list[DiscoveryProvider] = []
     for name in provider_names:
         if name in {"arxiv", "arxiv-api"}:
             providers.append(ArxivDiscoveryProvider())
+        elif name in {"alphaxiv", "alphaxiv_hot", "alphaxiv-hot"}:
+            providers.append(AlphaXivHotDiscoveryProvider())
         elif name in {"semantic_scholar", "semantic-scholar", "semantic-scholar-graph"}:
             providers.append(SemanticScholarDiscoveryProvider())
         elif name in {"static", "static-technical-sources"}:
@@ -576,7 +930,7 @@ def default_providers() -> list[DiscoveryProvider]:
 
 def _status_payload(summary: DiscoveryRunSummary, *, provider_results: list[DiscoveryProviderResult]) -> dict[str, Any]:
     return {
-        "run_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "run_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "requests_seen": summary.requests_seen,
         "requests_processed": summary.requests_processed,
         "providers_used": summary.providers_used,
@@ -659,7 +1013,7 @@ async def discover_sources(
             for provider in selected_providers:
                 try:
                     result = await provider.discover(request, client=client)
-                except Exception as exc:  # provider failures must not block status emission
+                except Exception as exc:  # noqa: BLE001 - provider failures must not block status emission.
                     result = DiscoveryProviderResult(
                         provider=provider.name,
                         reviewed_count=0,
@@ -800,11 +1154,12 @@ async def discover_sources(
                     continue
                 if dry_run:
                     accepted += 1
+                    request_recorded += 1
                 elif record is not None and record.duplicate:
                     duplicate += 1
                 else:
                     accepted += 1
-                request_recorded += 1
+                    request_recorded += 1
             request_accepted = accepted - request_accepted_before
             request_duplicate = duplicate - request_duplicate_before
             request_errors = errors - request_errors_before

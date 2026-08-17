@@ -6,23 +6,30 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from discord_openclaw_bridge.traveler import (
     TravelerResearchRequest,
     TravelerSourceInput,
     record_research_request,
     record_source_candidate,
 )
+from discord_openclaw_bridge.traveler_scout import (
+    create_scout_requests,
+    load_scout_topics,
+)
 from discord_openclaw_bridge.traveler_source_discovery import (
+    ALPHAXIV_HOT_FEED_URL,
+    AlphaXivHotDiscoveryProvider,
     DiscoveryCandidate,
     DiscoveryProviderResult,
     ResearchRequest,
     StaticTechnicalSourceProvider,
+    _get_with_backoff,
+    default_providers,
     discover_sources,
     load_pending_requests,
-    _get_with_backoff,
+    parse_alphaxiv_hot_feed,
+    parse_alphaxiv_hot_papers,
 )
-from discord_openclaw_bridge.traveler_scout import create_scout_requests, load_scout_topics
 
 
 class FakeProvider:
@@ -53,21 +60,21 @@ class LowReviewProvider(FakeProvider):
 class ErrorProvider:
     name = "error-provider"
 
-    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:
         return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error="rate limited", error_kind="rate_limited", rejected=["provider rate limited"])
 
 
 class ParseErrorProvider:
     name = "parse-error-provider"
 
-    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:
         return DiscoveryProviderResult(provider=self.name, reviewed_count=0, error="JSON parse failed", error_kind="parse", rejected=["provider parse failed"])
 
 
 class RequestAwareProvider:
     name = "request-aware-provider"
 
-    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:  # noqa: ARG002
+    async def discover(self, request: ResearchRequest, *, client: httpx.AsyncClient) -> DiscoveryProviderResult:
         return DiscoveryProviderResult(
             provider=self.name,
             reviewed_count=request.min_sources_to_review,
@@ -1222,7 +1229,10 @@ def test_is_search_surface_keeps_real_sources() -> None:
 
 
 def test_dedupe_drops_search_surfaces_from_every_provider() -> None:
-    from discord_openclaw_bridge.traveler_source_discovery import DiscoveryCandidate, _dedupe_candidates
+    from discord_openclaw_bridge.traveler_source_discovery import (
+        DiscoveryCandidate,
+        _dedupe_candidates,
+    )
 
     def candidate(url: str) -> DiscoveryCandidate:
         return DiscoveryCandidate(
@@ -1302,3 +1312,268 @@ def test_semantic_scholar_provider_proposes_paper_pages_not_searches() -> None:
     assert not any(is_search_surface(u) for u in urls), f"provider proposed a search surface: {urls}"
     assert all(c.source_type == "paper_page" for c in result.candidates)
     assert any("no stable public paper identifier" in r for r in result.rejected)
+
+
+def _alphaxiv_hot_html() -> str:
+    payload = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "ItemList",
+                "name": "Trending Papers",
+                "numberOfItems": 3,
+                "itemListElement": [
+                    {
+                        "@type": "ListItem",
+                        "position": 1,
+                        "item": {
+                            "@type": "Article",
+                            "headline": "Protein Folding at Scale",
+                            "url": "https://www.alphaxiv.org/abs/2608.00001",
+                            "description": "A new protein structure model.",
+                            "interactionStatistic": [],
+                        },
+                    },
+                    {
+                        "@type": "ListItem",
+                        "position": 2,
+                        "item": {
+                            "@type": "Article",
+                            "headline": "Agentic Retrieval over Knowledge Graphs",
+                            "url": "https://www.alphaxiv.org/abs/2608.00002",
+                            "description": "LLM agents use graph retrieval for grounded reasoning.",
+                            "datePublished": "2026-08-16T00:00:00Z",
+                            "interactionStatistic": [
+                                {
+                                    "@type": "InteractionCounter",
+                                    "interactionType": {"@type": "ViewAction"},
+                                    "userInteractionCount": 900,
+                                },
+                                {
+                                    "@type": "InteractionCounter",
+                                    "interactionType": {"@type": "LikeAction"},
+                                    "userInteractionCount": 80,
+                                },
+                            ],
+                        },
+                    },
+                    {
+                        "@type": "ListItem",
+                        "position": 3,
+                        "item": {
+                            "@type": "Article",
+                            "headline": "Evaluation of Language Models",
+                            "url": "https://www.alphaxiv.org/abs/2608.00003",
+                            "description": "A benchmark for retrieval augmented generation and agents.",
+                            "interactionStatistic": [],
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    return f'<html><script type="application/ld+json">{json.dumps(payload)}</script></html>'
+
+
+def _alphaxiv_hot_feed_payload(page_num: int, *, count: int = 20) -> dict[str, Any]:
+    papers: list[dict[str, Any]] = []
+    for index in range(count):
+        rank = page_num * 20 + index + 1
+        title = f"Agent Evaluation Hot Paper {rank}"
+        abstract = "LLM agents and retrieval evaluation over knowledge graphs."
+        if rank == 1:
+            title = "Protein Folding at Scale"
+            abstract = "A new protein structure model."
+        papers.append(
+            {
+                "universal_paper_id": f"2608.{rank:05d}",
+                "title": title,
+                "abstract": abstract,
+                "publication_date": "2026-08-16T00:00:00Z",
+                "metrics": {
+                    "visits_count": {"last_7_days": 1000 - rank},
+                    "public_total_votes": 100 - min(rank, 99),
+                },
+            }
+        )
+    return {"papers": papers, "page": page_num}
+
+
+def test_parse_alphaxiv_hot_papers_uses_public_trending_json_ld() -> None:
+    papers = parse_alphaxiv_hot_papers(_alphaxiv_hot_html())
+
+    assert [paper.position for paper in papers] == [1, 2, 3]
+    assert papers[1].url == "https://www.alphaxiv.org/abs/2608.00002"
+    assert papers[1].views == 900
+    assert papers[1].likes == 80
+
+
+def test_parse_alphaxiv_hot_feed_builds_global_positions() -> None:
+    papers = parse_alphaxiv_hot_feed(_alphaxiv_hot_feed_payload(2), page_num=2, page_size=20)
+
+    assert len(papers) == 20
+    assert papers[0].position == 41
+    assert papers[-1].position == 60
+    assert papers[0].url == "https://www.alphaxiv.org/abs/2608.00041"
+
+
+def test_alphaxiv_hot_provider_ranks_against_kg_exported_topic_and_caches_pool(monkeypatch) -> None:
+    calls: list[httpx.Request] = []
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_ALPHAXIV_HOT_POOL_SIZE", "20")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_alphaxiv_hot_feed_payload(0))
+
+    async def run() -> tuple[DiscoveryProviderResult, DiscoveryProviderResult]:
+        provider = AlphaXivHotDiscoveryProvider()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            kg_result = await provider.discover(
+                ResearchRequest(
+                    request_id="kg",
+                    topic="knowledge graph LLM retrieval agents",
+                    scope="public graph retrieval and agent evaluation",
+                    min_sources_to_review=3,
+                    max_candidates=2,
+                    candidate_queue_path=Path("/tmp/unused.jsonl"),
+                    topic_source="interest-note",
+                    paperwiki_interest_slug="paperwiki_interest_safe_digest",
+                ),
+                client=client,
+            )
+            rag_result = await provider.discover(
+                ResearchRequest(
+                    request_id="rag",
+                    topic="RAG evaluation benchmark",
+                    scope="retrieval augmented generation",
+                    min_sources_to_review=3,
+                    max_candidates=1,
+                    candidate_queue_path=Path("/tmp/unused.jsonl"),
+                ),
+                client=client,
+            )
+        return kg_result, rag_result
+
+    kg_result, rag_result = asyncio.run(run())
+
+    assert len(calls) == 1, "the 20-paper pool must be fetched once and ranked locally for every KG topic"
+    assert calls[0].url.copy_with(query=None) == httpx.URL(ALPHAXIV_HOT_FEED_URL)
+    assert calls[0].url.params["pageNum"] == "0"
+    assert calls[0].url.params["sort"] == "Hot"
+    assert calls[0].url.params["pageSize"] == "20"
+    assert [candidate.url for candidate in kg_result.candidates[:2]] == [
+        "https://www.alphaxiv.org/abs/2608.00002",
+        "https://www.alphaxiv.org/abs/2608.00003",
+    ]
+    assert "PaperWiki KG 공개 관심도" in kg_result.candidates[0].topic_fit
+    assert rag_result.candidates[0].url == "https://www.alphaxiv.org/abs/2608.00002"
+    assert all(candidate.provider == "alphaxiv-hot" for candidate in kg_result.candidates)
+    assert any("Protein Folding" in reason for reason in kg_result.rejected)
+
+
+def test_alphaxiv_hot_provider_fetches_hot_100_in_one_request(monkeypatch) -> None:
+    calls: list[httpx.Request] = []
+    monkeypatch.setenv("JIPHYEONJEON_TRAVELER_ALPHAXIV_HOT_POOL_SIZE", "100")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        page_num = int(request.url.params["pageNum"])
+        count = int(request.url.params["pageSize"])
+        return httpx.Response(200, json=_alphaxiv_hot_feed_payload(page_num, count=count))
+
+    async def run() -> DiscoveryProviderResult:
+        provider = AlphaXivHotDiscoveryProvider()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await provider.discover(
+                ResearchRequest(
+                    request_id="hot-100",
+                    topic="LLM agents evaluation",
+                    scope="knowledge graph retrieval",
+                    min_sources_to_review=10,
+                    candidate_queue_path=Path("/tmp/unused.jsonl"),
+                    topic_source="interest-note",
+                ),
+                client=client,
+            )
+
+    result = asyncio.run(run())
+
+    assert len(calls) == 1
+    assert calls[0].url.params["pageNum"] == "0"
+    assert calls[0].url.params["pageSize"] == "100"
+    assert result.reviewed_count == 100
+    assert result.error is None
+    assert result.error_kind is None
+    assert result.candidates[0].url == "https://www.alphaxiv.org/abs/2608.00002"
+
+
+def test_default_providers_include_alphaxiv_hot(monkeypatch) -> None:
+    monkeypatch.delenv("JIPHYEONJEON_TRAVELER_DISCOVERY_PROVIDERS", raising=False)
+
+    assert [provider.name for provider in default_providers()] == [
+        "arxiv-api",
+        "alphaxiv-hot",
+        "semantic-scholar-graph",
+        "static-technical-sources",
+    ]
+
+
+def test_duplicate_candidate_does_not_consume_new_candidate_limit(tmp_path: Path) -> None:
+    research = tmp_path / "research.jsonl"
+    candidates = tmp_path / "candidates.jsonl"
+    existing = TravelerSourceInput(
+        url="https://www.alphaxiv.org/abs/2608.00001",
+        title="Existing Hot paper",
+        source_type="paper_page",
+        reliability_note="public",
+        cadence_note="hot",
+        topic_fit="agents",
+        collection_hint="review",
+    )
+    record_source_candidate(existing, queue_path=candidates)
+    record_research_request(
+        TravelerResearchRequest(topic="agents", min_sources_to_review=2, max_candidates=1),
+        queue_path=research,
+        candidate_queue_path=candidates,
+    )
+    provider = FakeProvider(
+        [
+            DiscoveryCandidate(
+                url=existing.url,
+                title=existing.title,
+                source_type="paper_page",
+                reliability_note="public",
+                cadence_note="hot",
+                topic_fit="agents",
+                collection_hint="review",
+                provider="alphaxiv-hot",
+            ),
+            DiscoveryCandidate(
+                url="https://www.alphaxiv.org/abs/2608.00002",
+                title="New Hot paper",
+                source_type="paper_page",
+                reliability_note="public",
+                cadence_note="hot",
+                topic_fit="agents",
+                collection_hint="review",
+                provider="alphaxiv-hot",
+            ),
+        ]
+    )
+
+    summary = asyncio.run(
+        discover_sources(
+            research_queue_path=research,
+            default_candidate_queue_path=candidates,
+            providers=[provider],
+            deep_research=False,
+        )
+    )
+
+    assert summary.duplicate_count == 1
+    assert summary.accepted_count == 1
+    assert {row["url"] for row in _jsonl(candidates)} == {
+        "https://www.alphaxiv.org/abs/2608.00001",
+        "https://www.alphaxiv.org/abs/2608.00002",
+    }

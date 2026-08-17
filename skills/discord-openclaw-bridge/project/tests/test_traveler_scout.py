@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from discord_openclaw_bridge.traveler_scout import create_scout_requests, default_scout_queue_path, load_scout_topics
+from discord_openclaw_bridge.traveler_scout import (
+    create_scout_requests,
+    default_scout_queue_path,
+    load_scout_topics,
+)
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
@@ -138,6 +142,45 @@ def test_scout_records_paperwiki_topic_provenance(tmp_path: Path) -> None:
     assert rows[0]["paperwiki_interest_slug"] == "llm-agents"
     assert "source=interest-note" in rows[0]["requester_note"]
     assert json.loads(status.read_text(encoding="utf-8"))["topic_sources"] == {"llm_agents": "interest-note"}
+
+
+def test_scout_prioritizes_public_kg_interests_within_daily_topic_cap(tmp_path: Path) -> None:
+    config = tmp_path / "topics.json"
+    config.write_text(
+        json.dumps(
+            {
+                "topics": [
+                    {"id": "baseline", "query": "baseline agents", "priority": "high"},
+                    {
+                        "id": "kg_medium",
+                        "query": "regional economic vitality",
+                        "priority": "medium",
+                        "source": "interest-note",
+                        "paperwiki_interest_slug": "paperwiki_interest_medium",
+                    },
+                    {
+                        "id": "kg_high",
+                        "query": "research automation infrastructure",
+                        "priority": "high",
+                        "source": "interest-note",
+                        "paperwiki_interest_slug": "paperwiki_interest_high",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = create_scout_requests(
+        topics=load_scout_topics(config),
+        research_queue_path=tmp_path / "research.jsonl",
+        scout_queue_path=tmp_path / "candidates.jsonl",
+        max_topics=2,
+        dry_run=True,
+    )
+
+    assert result["status"]["topics"] == ["kg_high", "kg_medium"]
+    assert [row["topic_source"] for row in result["requests"]] == ["interest-note", "interest-note"]
 
 
 def test_scout_status_records_topics_manifest_provenance(tmp_path: Path, monkeypatch: Any) -> None:
@@ -286,7 +329,7 @@ def test_fully_blocked_scout_run_is_distinguishable_from_having_no_work(tmp_path
     assert len(topics) == 3, "fixture needs at least three configured topics"
     research = tmp_path / "research.jsonl"
     scout = tmp_path / "source-candidates.jsonl"
-    fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    fresh = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     research.write_text(
         "".join(_pending_row(topic.topic_id, topic.query, scout, created_at=fresh) for topic in topics),
         encoding="utf-8",
@@ -310,7 +353,7 @@ def test_stale_pending_threshold_boundary_releases_only_older_rows(tmp_path: Pat
     assert len(topics) == 2
     research = tmp_path / "research.jsonl"
     scout = tmp_path / "source-candidates.jsonl"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     just_under = (now - timedelta(hours=9)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     just_over = (now - timedelta(hours=11)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     research.write_text(

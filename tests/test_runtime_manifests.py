@@ -297,6 +297,10 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("HERMES_WORKSPACE", wrapper_text)
         self.assertIn("$HOME/.hermes/workspace", wrapper_text)
         self.assertNotIn("$HOME/.openclaw/workspace", wrapper_text)
+        self.assertIn("traveler-scout-topics.paperwiki.json", wrapper_text)
+        self.assertIn("JIPHYEONJEON_TRAVELER_SCOUT_TOPICS_PATH", wrapper_text)
+        self.assertIn("set -a", wrapper_text)
+        self.assertIn("set +a", wrapper_text)
         self.assertIn("runtime/traveler-scout-topics.json", installer.read_text(encoding="utf-8"))
         self.assertTrue(stable_entrypoint.exists())
         self.assertIn("run-traveler-collection-report.sh", wrapper_text)
@@ -312,6 +316,41 @@ class RuntimeManifestTest(unittest.TestCase):
         self.assertIn("traveler-skillopt-autotune-latest.json", hermes_aux_text)
         self.assertIn("traveler-skillopt-lineage.jsonl", hermes_aux_text)
         self.assertIn("Environment=JIPHYEONJEON_MINER_DECISIONS_PATH=", hermes_aux_text)
+
+    def test_traveler_alphaxiv_hot_provider_is_kg_ranked_and_robots_safe(self) -> None:
+        source = (
+            ROOT
+            / "skills"
+            / "discord-openclaw-bridge"
+            / "project"
+            / "src"
+            / "discord_openclaw_bridge"
+            / "traveler_source_discovery.py"
+        ).read_text(encoding="utf-8")
+        jobs = (ROOT / "runtime" / "jobs.yaml").read_text(encoding="utf-8")
+        agents = (ROOT / "runtime" / "agents.yaml").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "jiphyeonjeon-traveler" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn('ALPHAXIV_HOT_URL = "https://www.alphaxiv.org/"', source)
+        self.assertIn('ALPHAXIV_HOT_FEED_URL = "https://api.alphaxiv.org/papers/v3/feed"', source)
+        self.assertIn("ALPHAXIV_HOT_DEFAULT_POOL_SIZE = 100", source)
+        self.assertIn("Trending Papers", source)
+        self.assertIn("paperwiki_interest_slug", source)
+        self.assertIn("alphaxiv_hot", source)
+        self.assertNotIn('ALPHAXIV_HOT_URL = "https://www.alphaxiv.org/?sort=Hot"', source)
+        for text in (jobs, agents, skill):
+            self.assertIn("alphaXiv", text)
+            self.assertIn("/?sort=Hot", text)
+        self.assertIn("public KG-exported topic query and scope", agents)
+        self.assertIn("Hot 100-paper pool", agents)
+
+    def test_paperwiki_agent_sync_launcher_has_no_user_specific_absolute_paths(self) -> None:
+        launcher = (ROOT / "scripts" / "run-paperwiki-agent-sync.sh").read_text(encoding="utf-8")
+
+        self.assertIn("$HOME/.ssh/jiphyeonjeon.pem", launcher)
+        self.assertIn("$HOME/Library/Mobile Documents", launcher)
+        self.assertIn("$REPO_ROOT/skills/paper-recommender/sync-results.sh", launcher)
+        self.assertNotIn("/Users/", launcher)
 
     def test_traveler_skill_has_single_bounded_generated_scope_contract(self) -> None:
         skill = (ROOT / "skills" / "jiphyeonjeon-traveler" / "SKILL.md").read_text(encoding="utf-8")
